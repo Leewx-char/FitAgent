@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment variables (contains secrets!)
+.env
+.env.*
+
+# Database
+chroma_db/
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Storage (old JSON session data)
+storage/
+
+# Data files (large PDFs and texts - too big for git)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
