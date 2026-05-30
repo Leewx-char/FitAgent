@@ -19,6 +19,7 @@ from server.routers.chat import router as chat_router
 from server.routers.auth import router as auth_router
 from server.routers.sessions import router as sessions_router
 from server.routers.messages import router as messages_router
+from server.routers.profile import router as profile_router
 import os
 
 @asynccontextmanager
@@ -32,6 +33,7 @@ app.include_router(chat_router)
 app.include_router(auth_router)
 app.include_router(sessions_router)
 app.include_router(messages_router)
+app.include_router(profile_router)
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8501").split(",")
 

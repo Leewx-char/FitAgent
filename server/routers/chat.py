@@ -106,7 +106,7 @@ async def chat(
         .all()
     )
     messages = [{"role": m.role, "content": m.content} for m in history_messages]
-    # 用这个 messages 来提取城市
+    # 从对话中提取城市等上下文信息，设置到 ContextVar 供 Agent 工具使用
     session_facts = ReactAgent._extract_session_facts(messages)
     _user_context.set({"user_id": current_user.id, "city": session_facts.get("city", "") or ""})
     # 4. 流式响应

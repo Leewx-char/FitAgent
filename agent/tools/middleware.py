@@ -23,8 +23,7 @@ def monitor_tool(
     try:
         result = handler(request)
         logger.info(f"[tool monitor]工具{tool_name}调用成功")
-
-        if tool_name == "fill_context_for_report":
+        if tool_name == "trigger_report":
             request.runtime.context['report'] = True
         return result
     except Exception as e:
@@ -57,7 +56,7 @@ def report_prompt_switch(request: ModelRequest): # 动态切换提示词
             "\n\n已知会话事实：\n" + "\n".join(fact_lines) +
             "\n请优先使用这些历史事实回答，不要忽略用户之前已经明确提到的信息。"
         )
-        
+
     if is_report:  # 是报告生成场景，返回报告生成提示词内容
         return load_report_prompts() + facts_prompt
 

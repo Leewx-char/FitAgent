@@ -27,11 +27,12 @@
 | `server/routers/messages.py` | 消息查询（分页） |
 | `server/routers/chat.py` | 聊天 SSE 流式响应（认证、DB 读写、ContextVar、自动建会话、标题更新） |
 | `server/main.py` | 路由注册、CORS 配置化 |
-| `server/models.py` | User/Session/Message 三表 ORM 模型 |
-| `server/schemas.py` | Pydantic 请求/响应模型 |
+| `server/models.py` | User/Session/Message/UserProfile 四表 ORM 模型 |
+| `server/schemas.py` | Pydantic 请求/响应模型（含 ProfileCreate/Update/Response + field_validator） |
 | `server/database.py` | MySQL 连接池配置 |
 | `server/deps.py` | get_db 和 get_agent 依赖注入 |
-| `agent/tools/agent_tools.py` | _user_context ContextVar，get_user_id/get_user_location |
+| `server/routers/profile.py` | GET/POST/PUT /api/profile 画像接口 |
+| `agent/tools/agent_tools.py` | 7个工具，含 get_user_profile（SessionLocal 手动会话）、trigger_report |
 
 ### 关键技术决策
 
@@ -41,6 +42,11 @@
 - 用户上下文传递：ContextVar + run_in_executor 自动复制
 - SSE 流式：哨兵值（_SENTINEL）替代 StopIteration
 - 数据隔离：所有查询加 user_id 条件
+- 注册与问卷分离：注册只管账号密码，问卷用 POST /api/profile
+- UserProfile：核心字段用数据库列，动态字段用 JSON（Text 列存 JSON 字符串）
+- ProfileResponse：field_validator 做 json.loads 反序列化
+- ProfileUpdate：model_dump(exclude_unset=True) 只更新传了的字段
+- User/UserProfile 原子性：db.flush() 获取 user.id 后再创建 profile
 
 ---
 
@@ -66,11 +72,12 @@ class UserProfile(Base):
     user_id         # 外键 → users.id, unique
 
     # 核心字段（需要查询/计算的）→ 数据库列
+    gender          # 性别（必填）
     age             # 年龄
     height          # 身高(cm)
     weight          # 体重(kg)
-    goal            # 目标: cut/bulk/recomp/endurance/health
-    experience      # 经验: beginner/intermediate/advanced
+    goal            # 目标: 减脂/增肌/塑形/耐力/健康（中文直传）
+    experience      # 经验: 新手/中级/高级（中文直传，默认"新手"）
 
     # 动态字段（经常变化的）→ JSON
     injuries        # 伤病史 ["膝盖", "腰椎"]
@@ -85,6 +92,7 @@ class UserProfile(Base):
 - 核心字段用列：支持计算（BMI、TDEE）和索引查询
 - 动态字段用 JSON：灵活扩展，不用频繁做数据库迁移
 - 面试展示时两者兼顾，证明既懂数据库设计又考虑了扩展性
+- goal/experience 存中文直传，不用英文 map，简化前端交互
 
 ---
 
@@ -95,7 +103,7 @@ class UserProfile(Base):
      │
      ▼
 前端分步问卷（5-8题，30秒）
-  · 性别
+  · 性别（必填）
   · 年龄
   · 身高/体重
   · 健身目标
@@ -120,15 +128,16 @@ class UserProfile(Base):
 
 ## 七、技术架构变更
 
-| 组件 | 智扫通（现有） | 智体（目标） |
+| 组件 | 智扫通（原有） | FitAgent（当前） |
 |------|--------------|-------------|
-| Agent | 单 ReactAgent | 多 Agent（训练/营养/防护/调度） |
-| 知识库 | 扫地机器人文档 RAG | 运动科学 + 营养学 + 损伤预防 RAG |
+| Agent | 单 ReactAgent | 单 ReactAgent + 7工具（多Agent待开发） |
+| 知识库 | 扫地机器人文档 RAG | 运动科学5个知识库（415问） |
 | Prompt | 客服话术 | 运动教练系统提示词 |
 | 数据模型 | User + Session + Message | + UserProfile |
 | 用户上下文 | 城市 + 用户ID | 完整画像（目标/体能/伤病史/偏好） |
-| 工具调用 | get_weather, search_knowledge | + BMI计算, TDEE计算, 食物热量查询 |
-| 前端 | Streamlit / Swagger | Vue3 |
+| 工具调用 | get_weather, search_knowledge | search_knowledge, get_user_profile, trigger_report, calculate_bmi, calculate_tdee, get_exercise_plan, get_nutrition_advice |
+| 同义词/归一化 | 扫地机器人5组 | 运动科学19组同义词 + 14组归一化替换 |
+| 前端 | Streamlit / Swagger | Vue3（待开发） |
 
 ---
 
@@ -140,7 +149,7 @@ class UserProfile(Base):
 |--------|-------------|---------|------|
 | 路由组织 | APIRouter + prefix + tags | ✅ 已做到 | 无 |
 | 依赖注入 | 所有共享逻辑用 Depends() | ✅ 已做到 | 无 |
-| Schema 分层 | Create / Update / Response 分离 | ⚠️ 只有 Response | 中等 |
+| Schema 分层 | Create / Update / Response 分离 | ✅ 已做到 | 无 |
 | 配置管理 | pydantic-settings BaseSettings | ⚠️ 用 os.getenv | 较大 |
 | 业务逻辑 | Service 层抽离 | ❌ chat.py 逻辑重 | 较大 |
 | 类型注解 | Annotated 类型别名 | ⚠️ 没用 Annotated | 小 |
@@ -170,27 +179,56 @@ app/
 
 ---
 
-## 九、开发优先级
+## 九、开发优先级与进度
 
-```
-阶段1 (当前优先):
-  1. 新增 UserProfile 模型 + Schema + API
-  2. 改造注册流程（加问卷数据）
-  3. 改造 Agent 系统提示词（客服 → 运动教练）
-  4. 替换知识库数据（运动科学内容）
-  5. 前端分步问卷页面（Vue3）
+### 阶段1：基础改造（✅ 已完成）
 
-阶段2 (后续):
-  6. 多 Agent 协作架构（训练Agent/营养Agent/防护Agent）
-  7. 对话中提取用户画像更新
-  8. 工具调用（BMI、TDEE、食物热量）
-  9. Agentic RAG（Agent 自主决定检索策略）
+| 编号 | 任务 | 状态 |
+|------|------|------|
+| 1 | UserProfile 模型 + Schema + API | ✅ 完成 |
+| 2 | 注册流程改造（注册与问卷分离） | ✅ 完成 |
+| 3 | Agent 系统提示词改造（客服 → 运动教练） | ✅ 完成 |
+| 4 | 知识库数据替换（5个txt，415问答） | ✅ 完成 |
+| 5 | RAG 同义词/归一化/停用词改造 | ✅ 完成 |
 
-阶段3 (锦上添花):
-  10. 知识图谱（运动-肌肉-损伤关联）
-  11. Strava/USDA API 对接
-  12. 训练记录表 + 前端历史展示
-```
+### 知识库文件详情
+
+| 文件 | 问答数 | 覆盖内容 |
+|------|--------|---------|
+| `data/健身基础知识.txt` | 35 | 基础概念、训练方法、常见误区、身体指标 |
+| `data/运动损伤预防.txt` | 80 | 热身拉伸、膝/腰/肩/踝/肘腕损伤、安全、恢复、体态等 |
+| `data/营养学知识.txt` | 100 | 宏量营养素、饮食计划、补剂、减脂/增肌饮食、微量营养素等 |
+| `data/训练计划指南.txt` | 100 | 新手入门、计划设计、减脂/增肌/力量训练、周期化等 |
+| `data/动作指南大全.txt` | 100 | 复合动作、各肌群训练、柔韧性、常见错误、进阶技术等 |
+
+### 清理工作（✅ 已完成）
+
+- 删除扫地机器人旧知识库文件（故障排除.txt、100问pdf/txt、维护保养.txt、选购指南.txt、records.csv）
+- 清空 chroma_db/ 目录（首次启动自动重建索引）
+- synonym_map 改为运动科学19组（含 BMR 等缩写）
+- _normalize_query 替换词改为运动科学14组
+- stopwords 移除"机器人"相关词，新增"吧"
+
+### 阶段2：多Agent与智能功能（⏳ 待开发）
+
+| 编号 | 任务 | 状态 |
+|------|------|------|
+| 6 | 多 Agent 协作架构（训练/营养/防护/调度） | ⏳ |
+| 7 | 对话中提取用户画像更新 | ⏳ |
+| 8 | 工具调用（BMI、TDEE、食物热量） | ⏳ |
+| 9 | Agentic RAG（Agent 自主决定检索策略） | ⏳ |
+
+### 阶段3：高级功能（⏳ 待开发）
+
+| 编号 | 任务 | 状态 |
+|------|------|------|
+| 10 | 知识图谱（运动-肌肉-损伤关联） | ⏳ |
+| 11 | Strava/USDA API 对接 | ⏳ |
+| 12 | 训练记录表 + 前端历史展示 | ⏳ |
+
+### 前端（⏳ 待开发）
+
+- Vue3：登录注册 + 分步问卷 + 聊天页 + 画像页
 
 ---
 
@@ -211,5 +249,13 @@ app/
 - **ContextVar**: 在 run_in_executor 中自动复制到子线程
 - **OAuth2PasswordRequestForm**: 登录接口用表单格式，不是 JSON
 - **哨兵值**: SSE 流式生成器用 _SENTINEL 替代 StopIteration
-- **User.city**: 字段目前默认空字符串，城市信息回退到环境变量
+- **get_user_profile 工具**: 用 SessionLocal() 手动创建 DB 会话，不能用 Depends
+- **UserProfile JSON 字段**: Text 列存 JSON 字符串，ProfileResponse 用 field_validator 做 json.loads
+- **ProfileUpdate**: model_dump(exclude_unset=True) 只更新传了的字段
+- **db.flush()**: 获取 user.id 但不提交，确保 User/Profile 原子性
+- **goal/experience**: 存中文直传（减脂/增肌/新手），不用英文 map
+- **gender/age/height/weight**: 必填字段
+- **experience 默认值**: "新手"（中文）
+- **BMR/BMI**: 保留原词不做归一化替换，同义词映射中 BMR 归入"基础代谢"组
+- **chroma_db**: 已清空，首次启动需重建索引
 - **SessionModel**: ORM 模型与 SQLAlchemy Session 同名，用 SessionModel 别名区分

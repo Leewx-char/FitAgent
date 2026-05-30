@@ -1,22 +1,18 @@
-import os.path
-import csv
 from datetime import datetime
 import json
-from typing import Dict
+import os
 from urllib.parse import urlencode
 from urllib.request import urlopen
 from urllib.error import URLError
 from contextvars import ContextVar
 from langchain_core.tools import tool
 from rag.rag_service import RagSummarizeService
-from utils.config_handler import agent_conf
 from utils.logger_handler import logger
-from utils.path_tool import get_abs_path
-
+from server.database import SessionLocal
+from server.models import UserProfile
 
 rag = RagSummarizeService()
 
-external_data: Dict[str, Dict[str, Dict]] = {}
 _user_context: ContextVar[dict] = ContextVar("user_context", default={})
 
 def _request_json(base_url: str, params: dict) -> dict:
@@ -24,15 +20,7 @@ def _request_json(base_url: str, params: dict) -> dict:
     with urlopen(url, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
 
-def _format_record(user_id: str, month: str, record:dict) -> str:
-    parts = [f"用户ID：{user_id}", f"月份：{month}"]
-    for key in ("特征", "效率", "耗材", "对比"):
-        value = (record.get(key) or "").strip()
-        if value:
-            parts.append(f"{key}：{value}")
-    return "\n".join(parts)
-
-@tool(description="从本地知识库中检索与扫地机器人相关的参考资料并总结返回。出参说明它包含参考来源")
+@tool(description="从知识库中检索运动科学、训练方法、营养学、损伤预防、动作要领等相关参考资料并总结返回。出参包含参考来源")
 def rag_summarize(query: str) -> str:
     return rag.rag_summarize(query)
 
@@ -112,94 +100,48 @@ def get_user_id():
     ctx = _user_context.get()
     if ctx.get("user_id"):
         return str(ctx["user_id"])
-    generate_external_data()
-    user_id = os.getenv("AGENT_USER_ID", "").strip()
-    if user_id and user_id in external_data:
-        return user_id
     return "当前会话未绑定用户ID，请让用户明确提供用户ID。"
 
 @tool(description="获取当前月份，格式为 YYYY-MM。")
 def get_current_month():
     return datetime.now().strftime("%Y-%m")
 
-def generate_external_data():
-    if external_data:
-        return
+@tool(description="获取当前用户的完整健身画像，包括性别、年龄、身高、体重、健身目标、训练经验、伤病史、饮食限制等信息。每位用户首次提问时建议主动调用一次。")
+def get_user_profile():
+    ctx = _user_context.get()
+    user_id = ctx.get("user_id")
+    if not user_id:
+        return "未获取到用户信息，请让用户先登录。"
 
-    external_data_path = get_abs_path(agent_conf["external_data_path"])
-    if not os.path.exists(external_data_path):
-        raise FileNotFoundError(f"外部数据文件{external_data_path}不存在")
-
-    with open(external_data_path, "r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            user_id = (row.get("用户ID") or "").strip()
-            month = (row.get("时间") or "").strip()
-            if not user_id or not month:
-                continue
-            if user_id not in external_data:
-                external_data[user_id] = {}
-            external_data[user_id][month] = {
-                "特征": (row.get("特征") or "").strip(),
-                "效率": (row.get("效率") or "").strip(),
-                "耗材": (row.get("耗材") or "").strip(),
-                "对比": (row.get("对比") or "").strip(),
-            }
-
-
-@tool(description="获取指定用户在指定月份的使用记录。")
-def fetch_external_data(user_id: str, month:str):
-    generate_external_data()
-    if user_id not in external_data:
-        return "未检索到该用户的使用数据。"
+    db = SessionLocal()
     try:
-        return _format_record(user_id, month, external_data[user_id][month])
-    except KeyError:
-        available_months = sorted(external_data[user_id].keys())
-        if available_months:
-            latest_month = available_months[-1]
-            return (
-                f"未检索到 {month} 数据，以下为最近月份 {latest_month} 的数据：\n"
-                f"{_format_record(user_id, latest_month, external_data[user_id][latest_month])}"
-            )
+        profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if not profile:
+            return "用户尚未填写健身画像，请引导用户完善个人健身信息（年龄、身高、体重、目标等）。"
 
-        return "该用户暂无可用使用数据。"
+        injuries = json.loads(profile.injuries) if isinstance(profile.injuries, str) else profile.injuries
+        diet_restrict = json.loads(profile.diet_restrict) if isinstance(profile.diet_restrict, str) else profile.diet_restrict
+        preferences = json.loads(profile.preferences) if isinstance(profile.preferences, str) else profile.preferences
 
-@tool(description="列出指定用户有哪些可查询的报告月份。")
-def list_report_months(user_id: str):
-    generate_external_data()
-    months = sorted(external_data.get(user_id, {}).keys())
-    if not months:
-        return f"未找到用户 {user_id} 的可用报告月份。"
-    return f"用户 {user_id} 可查询月份：{', '.join(months)}"
+        return (
+            f"用户画像：\n"
+            f"- 性别：{profile.gender or '未填写'}\n"
+            f"- 年龄：{profile.age or '未填写'}\n"
+            f"- 身高：{profile.height or '未填写'} cm\n"
+            f"- 体重：{profile.weight or '未填写'} kg\n"
+            f"- 健身目标：{profile.goal or '未填写'}\n"
+            f"- 每周训练天数：{profile.weekly_days} 天\n"
+            f"- 运动经验：{profile.experience or '未填写'}\n"
+            f"- 伤病史：{', '.join(injuries) if injuries else '无'}\n"
+            f"- 饮食限制：{', '.join(diet_restrict) if diet_restrict else '无'}\n"
+            f"- 偏好：{preferences or '未填写'}"
+        )
+    finally:
+        db.close()
 
-@tool(description="获取指定用户最近一个月的使用记录。")
-def fetch_latest_external_data(user_id: str):
-    generate_external_data()
-    if user_id not in external_data:
-        return f"未找到用户 {user_id} 的使用数据"
-    latest_month = sorted(external_data.get(user_id, {}).keys())[-1]
-    return _format_record(user_id, latest_month, external_data[user_id][latest_month])
-
-@tool(description="获取指定用户的基础画像和最近记录摘要。")
-def get_user_profile(user_id: str):
-    generate_external_data()
-    user_records = external_data.get(user_id)
-    if not user_records:
-        return f"未找到用户 {user_id} 的画像信息。"
-    months = sorted(user_records.keys())
-    latest_month = months[-1]
-    latest_record = user_records[latest_month]
-    feature = latest_record.get("特征") or "未知"
-    return (
-        f"用户 {user_id} 的基础画像：{feature}。\n"
-        f"可查询月份：{', '.join(months)}。\n"
-        f"最近一期记录摘要：\n{_format_record(user_id, latest_month, latest_record)}"
-    )
-
-@tool(description="无入参，无返回值，调用后触发中间件自动为报告生成的场景动态注入上下文信息，为后续提示词切换提供上下文")
-def fill_context_for_report():
-    return "fill_context_for_report已调用"
+@tool(description="无入参，当识别到用户想生成近期运动总结报告时调用，触发报告模式切换。仅在用户明确要求生成报告/总结时调用。")
+def trigger_report():
+    return "trigger_report已调用"
 
 if __name__ == '__main__':
-    print(fetch_external_data.invoke({"user_id": "1001", "month": "2025-06"}))
+    print(rag_summarize.invoke({"query": "深蹲标准动作"}))

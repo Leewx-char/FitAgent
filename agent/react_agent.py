@@ -4,9 +4,8 @@ from langchain.agents import create_agent
 from model.factory import get_chat_model
 from utils.prompt_loader import load_system_prompts
 from agent.tools.agent_tools import (rag_summarize,
-get_weather, get_user_location, get_user_id,
-get_current_month, list_report_months, fetch_external_data,
-get_user_profile, fetch_latest_external_data, fill_context_for_report)
+get_weather, get_user_location, get_user_id, trigger_report,
+get_current_month, get_user_profile)
 from agent.tools.middleware import monitor_tool, log_before_model, report_prompt_switch
 
 class ReactAgent:
@@ -23,9 +22,7 @@ class ReactAgent:
             model=get_chat_model(),
             system_prompt=load_system_prompts(),
             tools=[rag_summarize, get_weather, get_user_location,get_user_id,
-                   get_current_month, list_report_months, get_user_profile,
-                   fetch_latest_external_data,fetch_external_data,
-                   fill_context_for_report
+                   get_current_month, get_user_profile, trigger_report
             ],
             middleware=[monitor_tool, log_before_model, report_prompt_switch]
         )
@@ -65,11 +62,6 @@ class ReactAgent:
                 candidate_city = city_match.group(1)
                 if candidate_city not in cls.INVALID_CITY_VALUES:
                     facts["city"] = candidate_city
-
-            user_id_match = re.search(r"(?:用户ID|ID|id)[：:\s]*([0-9]{3,})", content)
-            if user_id_match:
-                facts["user_id"] = user_id_match.group(1)
-
         return facts
 
     def execute_stream(self, messages: list[dict]):
@@ -92,6 +84,6 @@ class ReactAgent:
 
 if __name__ == '__main__':
     agent = ReactAgent()
-    res = agent.execute_stream([{"role": "user", "content": "扫地机器人在我所在地区的气温下如何保养"}])
+    res = agent.execute_stream([{"role": "user", "content": "我想减脂，应该怎么练？"}])
     for chunk in res:
         print(chunk, end="", flush=True)

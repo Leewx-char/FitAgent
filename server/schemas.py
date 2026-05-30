@@ -12,9 +12,8 @@
   - 表结构变化不影响 API 返回格式 —— 解耦
 """
 from datetime import datetime
-
+from pydantic import field_validator
 from pydantic import BaseModel, Field
-from pypika.clickhouse import dates_and_times
 
 
 class UserRegister(BaseModel):
@@ -77,3 +76,62 @@ class MessageResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     session_id: str | None = None
+
+# ==================== 用户画像 ====================
+class ProfileCreate(BaseModel):
+    gender: str = Field(..., max_length=10)
+    age: int = Field(..., ge=1, le=150)              # 必填，1-150
+    height: int = Field(..., ge=50, le=300)          # 必填，50-300 cm
+    weight: float = Field(..., gt=0, le=500)        # 必填，0-500 kg
+    goal: str = Field("", max_length=20)  # 减脂/增肌/塑形/耐力提升/健康维护
+    weekly_days: int = Field(3, ge=1, le=7)
+    experience: str = Field("新手", max_length=20)   # 新手/有基础/资深
+    injuries: list[str] = Field(default_factory=list)
+    diet_restrict: list[str] = Field(default_factory=list)
+    preferences: dict = Field(default_factory=dict)
+
+class ProfileUpdate(BaseModel):
+    gender: str | None = None
+    age: int | None = None
+    height: int | None = None
+    weight: float | None = None
+    goal: str | None = None
+    weekly_days: int | None = None
+    experience: str | None = None
+    injuries: list[str] | None = None
+    diet_restrict: list[str] | None = None
+    preferences: dict | None = None
+
+class ProfileResponse(BaseModel):
+    id: int
+    user_id: int
+    gender: str
+    age: int | None
+    height: int | None
+    weight: float | None
+    goal: str
+    weekly_days: int
+    experience: str
+    injuries: list[str]
+    diet_restrict: list[str]
+    preferences: dict
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("injuries", "diet_restrict", mode="before")
+    @classmethod
+    def parse_json_list(cls, v):
+        if isinstance(v, str):
+            import json
+            return json.loads(v)
+        return v
+
+    @field_validator("preferences", mode="before")
+    @classmethod
+    def parse_json_dict(cls, v):
+        if isinstance(v, str):
+            import json
+            return json.loads(v)
+        return v
