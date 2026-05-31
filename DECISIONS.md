@@ -226,13 +226,106 @@ app/
 | 11 | Strava/USDA API 对接 | ⏳ |
 | 12 | 训练记录表 + 前端历史展示 | ⏳ |
 
-### 前端（⏳ 待开发）
+### 前端（🔧 框架已搭建，逐步学习中）
 
-- Vue3：登录注册 + 分步问卷 + 聊天页 + 画像页
+- Vue3 + Vite + Pinia + Axios + Naive UI
+- 配色：主色 #42A5F5，浅变体 #c6e4fc，风格清新极简
+- 已搭建完成，待逐步理解和学习
 
 ---
 
-## 十、保留不变的部分
+## 十、前端项目详情
+
+### 技术选型
+
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| Vue3 | 3.5.34 | 前端框架 |
+| Vite | 8.0.x | 构建工具 + 开发服务器 |
+| Pinia | 3.0.4 | 状态管理 |
+| Axios | 1.16.1 | HTTP 请求 |
+| Vue Router | 4.6.4 | 路由 |
+| Naive UI | 2.44.1 | UI 组件库 |
+
+### 配色方案（清新极简风）
+
+| 用途 | 色值 | 说明 |
+|------|------|------|
+| 主色 Primary | `#42A5F5` | 按钮、链接、高亮 |
+| 浅变体 | `#c6e4fc` | 背景、标签底色、hover |
+| 深变体 | `#1E88E5` | hover 状态、强调 |
+| 页面背景 | `#F8FBFF` | 极浅蓝白 |
+| 卡片背景 | `#FFFFFF` | 白底 + 微阴影 |
+| 文字主色 | `#2C3E50` | 深灰蓝 |
+| 文字辅色 | `#8E99A4` | 灰色 |
+
+### 目录结构
+
+```
+frontend/
+├── vite.config.js           # Vite 配置 + 代理 + @别名
+├── index.html               # 入口 HTML
+├── package.json
+└── src/
+    ├── main.js               # 应用入口：Pinia + Router + Naive UI
+    ├── App.vue               # 根组件：主题配置
+    ├── api/
+    │   ├── index.js          # Axios 实例 + JWT 拦截器
+    │   ├── auth.js            # 注册/登录/获取当前用户
+    │   ├── chat.js            # 会话 CRUD/消息/聊天
+    │   └── profile.js        # 画像 GET/POST/PUT
+    ├── stores/
+    │   ├── auth.js            # 认证状态（token/user/login/logout）
+    │   ├── profile.js         # 画像状态（profile/hasProfile/fetchProfile/saveProfile）
+    │   └── chat.js            # 聊天状态（sessions/messages）
+    ├── router/
+    │   └── index.js           # 5 个路由 + 登录守卫
+    ├── views/
+    │   ├── Login.vue          # 登录页
+    │   ├── Register.vue       # 注册页
+    │   ├── Onboarding.vue     # 分步问卷（5 步）
+    │   ├── Chat.vue           # 聊天页（SSE 流式 + 会话侧边栏）
+    │   └── Profile.vue        # 画像查看/编辑页
+    └── composables/           # （预留）
+```
+
+### 页面路由
+
+| 路径 | 页面 | 需要登录 |
+|------|------|---------|
+| `/login` | 登录 | 否 |
+| `/register` | 注册 | 否 |
+| `/onboarding` | 分步问卷 | 是 |
+| `/` | 聊天主页 | 是 |
+| `/profile` | 画像查看/编辑 | 是 |
+
+### 已验证的 API 接口（12个全部通过）
+
+| # | 接口 | 方法 | 说明 |
+|---|------|------|------|
+| 1 | `/api/health` | GET | 健康检查 |
+| 2 | `/api/auth/register` | POST | 注册 |
+| 3 | `/api/auth/login` | POST | 登录（返回JWT） |
+| 4 | `/api/auth/me` | GET | 获取当前用户 |
+| 5 | `/api/profile` | POST | 创建画像 |
+| 6 | `/api/profile` | GET | 查询画像 |
+| 7 | `/api/profile` | PUT | 更新画像 |
+| 8 | `/api/sessions` | POST | 创建会话 |
+| 9 | `/api/sessions` | GET | 会话列表 |
+| 10 | `/api/sessions/:id/messages` | GET | 会话消息 |
+| 11 | `/api/chat` | POST | SSE 流式聊天（含画像+RAG） |
+| 12 | `/api/sessions/:id` | DELETE | 删除会话 |
+
+### Bug fix（本轮修复）
+
+- **问题**：`get_user_profile` 工具在 LangGraph 内执行时获取不到 ContextVar
+- **原因**：LangGraph 工具调用上下文隔离，Python ContextVar 无法穿透
+- **修复**：通过 `runtime.context` 传递 `user_id`/`city`，在 `monitor_tool` 中桥接回 ContextVar
+- **涉及文件**：`agent/react_agent.py`、`agent/tools/middleware.py`、`server/routers/chat.py`
+
+---
+
+## 十一、保留不变的部分
 
 - FastAPI 后端架构（auth, routers, database, deps）
 - JWT 认证体系
@@ -242,11 +335,12 @@ app/
 
 ---
 
-## 十一、关键知识点
+## 十二、关键知识点
 
 - **bcrypt**: 必须是 4.0.1 版本，5.0+ 与 passlib 不兼容
 - **哈希不可逆**: verify_password 是用同样明文重新哈希比对，不是解密
-- **ContextVar**: 在 run_in_executor 中自动复制到子线程
+- **ContextVar**: 在 run_in_executor 中自动复制到子线程，但 LangGraph 工具调用上下文隔离
+- **LangGraph context 传递**: user_id/city 通过 agent.stream(context={...}) 传入，在 monitor_tool 中从 runtime.context 取出并桥接到 _user_context
 - **OAuth2PasswordRequestForm**: 登录接口用表单格式，不是 JSON
 - **哨兵值**: SSE 流式生成器用 _SENTINEL 替代 StopIteration
 - **get_user_profile 工具**: 用 SessionLocal() 手动创建 DB 会话，不能用 Depends
@@ -257,5 +351,8 @@ app/
 - **gender/age/height/weight**: 必填字段
 - **experience 默认值**: "新手"（中文）
 - **BMR/BMI**: 保留原词不做归一化替换，同义词映射中 BMR 归入"基础代谢"组
-- **chroma_db**: 已清空，首次启动需重建索引
+- **chroma_db**: 已清空，首次启动需重建索引（516个文档切片）
 - **SessionModel**: ORM 模型与 SQLAlchemy Session 同名，用 SessionModel 别名区分
+- **SSE 流式前端**: POST /api/chat 返回 SSE，前端用 fetch + ReadableStream 逐行解析 data: 前缀
+- **Vite 代理**: 开发时 /api 请求代理到 localhost:8000，避免 CORS
+- **Pinia 状态持久化**: token 和 user 存 localStorage，页面刷新自动恢复

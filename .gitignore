@@ -23,6 +23,7 @@ env/
 # Environment variables (contains secrets!)
 .env
 .env.*
+!.env.example
 
 # Database
 chroma_db/
