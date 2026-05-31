@@ -64,14 +64,20 @@ class ReactAgent:
                     facts["city"] = candidate_city
         return facts
 
-    def execute_stream(self, messages: list[dict]):
+    def execute_stream(self, messages: list[dict], user_id: int | None = None, city: str = ""):
         normalized_messages = self._normalize_messages(messages)
         session_facts = self._extract_session_facts(normalized_messages)
         input_dict = {"messages": normalized_messages}
 
+        run_context = {"report": False, "session_facts": session_facts}
+        if user_id:
+            run_context["user_id"] = user_id
+        if city:
+            run_context["city"] = city
+
         for chunk in self.agent.stream(input_dict,
            stream_mode="values",
-           context={"report": False, "session_facts": session_facts}
+           context=run_context
         ):
             latest_message = chunk["messages"][-1]
 

@@ -6,15 +6,20 @@ from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Command
+from agent.tools.agent_tools import _user_context
 from utils.logger_handler import logger
 
 @wrap_tool_call
 def monitor_tool(
-        # 请求的数据封装
         request: ToolCallRequest,
-        # 执行的函数本身
         handler: Callable[[ToolCallRequest], ToolMessage | Command]
-) -> ToolMessage | Command: # 工具执行的监控
+) -> ToolMessage | Command:
+    runtime_ctx = request.runtime.context or {}
+    user_id = runtime_ctx.get("user_id")
+    city = runtime_ctx.get("city", "")
+    if user_id:
+        _user_context.set({"user_id": user_id, "city": city})
+
     tool_name = request.tool_call.get("name", "unknown_tool")
     tool_args = request.tool_call.get("args", {})
     logger.info(f"[tool monitor]执行工具：{tool_name}")

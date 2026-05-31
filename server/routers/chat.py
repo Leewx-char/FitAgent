@@ -40,8 +40,11 @@ async def sse_generator(
             return next(gen)
         except StopIteration:
             return _SENTINEL
-    # 把 agent.execute_stream(messages) 变成迭代器
-    gen = iter(agent.execute_stream(messages))
+    # 把 gen 创建为能传递 user_id/city 的闭包
+    session_facts = ReactAgent._extract_session_facts(messages)
+    user_id = current_user.id
+    city = session_facts.get("city", "") or ""
+    gen = iter(agent.execute_stream(messages, user_id=user_id, city=city))
     while True:
         # 在线程池里执行 _next_chunk(gen)，因为 agent.execute_stream 是同步的，不能阻塞主线程，服务其他用户
         chunk = await loop.run_in_executor(None, _next_chunk, gen)
@@ -106,7 +109,7 @@ async def chat(
         .all()
     )
     messages = [{"role": m.role, "content": m.content} for m in history_messages]
-    # 从对话中提取城市等上下文信息，设置到 ContextVar 供 Agent 工具使用
+    # 从对话中提取城市等上下文信息
     session_facts = ReactAgent._extract_session_facts(messages)
     _user_context.set({"user_id": current_user.id, "city": session_facts.get("city", "") or ""})
     # 4. 流式响应
