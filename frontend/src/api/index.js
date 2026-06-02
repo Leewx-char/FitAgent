@@ -21,6 +21,8 @@ api.interceptors.response.use(
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       window.location.href = '/login'
+    } else if (!error.response) {
+      console.error('网络错误：无法连接到服务器')
     }
     return Promise.reject(error)
   },

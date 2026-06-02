@@ -1,22 +1,15 @@
 <template>
   <div class="chat-layout">
     <aside class="sidebar">
-      <div class="sidebar-header">
-        <h2 class="logo">FitAgent</h2>
-      </div>
-
-      <div class="sidebar-profile" v-if="profileStore.profile">
-        <div class="profile-brief">
-          <div class="profile-name">{{ authStore.user?.username || '用户' }}</div>
-          <div class="profile-tags">
-            <n-tag size="small" type="primary">{{ profileStore.profile.goal }}</n-tag>
-            <n-tag size="small" type="info">{{ profileStore.profile.experience }}</n-tag>
-          </div>
+      <div class="sidebar-top">
+        <div class="sidebar-brand">
+          <div class="brand-icon">F</div>
+          <span class="brand-name">FitAgent</span>
         </div>
-        <n-button text size="tiny" @click="$router.push('/profile')">查看画像</n-button>
+        <n-button type="primary" ghost block size="small" @click="newSession">
+          + 新建对话
+        </n-button>
       </div>
-
-      <n-divider style="margin: 12px 0" />
 
       <div class="session-list">
         <div
@@ -26,16 +19,39 @@
           :class="{ active: session.id === chatStore.currentSessionId }"
           @click="switchSession(session.id)"
         >
+          <span class="session-dot">●</span>
           <span class="session-title">{{ session.title || '新对话' }}</span>
-          <n-button text size="tiny" @click.stop="handleDeleteSession(session.id)">
-            ✕
-          </n-button>
+          <span class="session-delete" @click.stop="handleDeleteSession(session.id)">×</span>
+        </div>
+        <div v-if="chatStore.sessions.length === 0" class="session-empty">
+          暂无对话
         </div>
       </div>
 
       <div class="sidebar-bottom">
-        <n-button block @click="newSession">新建对话</n-button>
-        <n-button block type="error" ghost style="margin-top: 8px" @click="handleLogout">退出登录</n-button>
+        <div class="sidebar-profile" v-if="profileStore.profile" @click="showUserMenu = !showUserMenu">
+          <div class="profile-avatar">{{ (authStore.user?.username || '用')[0] }}</div>
+          <div class="profile-info">
+            <div class="profile-name">{{ authStore.user?.username || '用户' }}</div>
+            <div class="profile-meta">{{ profileStore.profile.goal }} · {{ profileStore.profile.experience }}</div>
+          </div>
+          <span class="profile-arrow">›</span>
+        </div>
+        <div v-else class="sidebar-profile" @click="$router.push('/onboarding')">
+          <div class="profile-avatar">?</div>
+          <div class="profile-info">
+            <div class="profile-name">完善档案</div>
+            <div class="profile-meta">点击填写</div>
+          </div>
+          <span class="profile-arrow">›</span>
+        </div>
+        <transition name="fade">
+          <div v-if="showUserMenu" class="user-menu">
+            <div class="menu-item" @click="showUserMenu = false; $router.push('/profile')">查看画像</div>
+            <div class="menu-item" @click="showUserMenu = false; $router.push('/onboarding')">更新档案</div>
+            <div class="menu-item menu-danger" @click="handleLogout">退出登录</div>
+          </div>
+        </transition>
       </div>
     </aside>
 
@@ -63,18 +79,21 @@
           class="message-row"
           :class="msg.role"
         >
-          <div class="message-avatar">
-            {{ msg.role === 'user' ? '👤' : '🤖' }}
-          </div>
           <div class="message-bubble" :class="msg.role">
             <div v-html="renderMarkdown(msg.content)" />
           </div>
         </div>
 
         <div v-if="streaming" class="message-row assistant">
-          <div class="message-avatar">🤖</div>
-          <div class="message-bubble assistant typing">
-            <span class="typing-dot" /><span class="typing-dot" /><span class="typing-dot" />
+          <div class="message-bubble assistant">
+            <div v-if="toolSteps.length" class="tool-steps">
+              <div v-for="(step, idx) in toolSteps" :key="idx" class="tool-step">
+                <span class="tool-icon">🔍</span> {{ step }}...
+              </div>
+            </div>
+            <div v-else class="typing">
+              <span class="typing-dot" /><span class="typing-dot" /><span class="typing-dot" />
+            </div>
           </div>
         </div>
       </div>
@@ -102,7 +121,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
@@ -119,6 +138,8 @@ const chatStore = useChatStore()
 const messagesRef = ref(null)
 const inputText = ref('')
 const streaming = ref(false)
+const toolSteps = ref([])
+const showUserMenu = ref(false)
 
 const messages = computed(() => chatStore.messages)
 
@@ -130,7 +151,8 @@ const quickActions = [
 ]
 
 function renderMarkdown(text) {
-  let html = text || ''
+  if (!text) return ''
+  let html = text
   html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
   html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>')
@@ -138,8 +160,9 @@ function renderMarkdown(text) {
   html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>')
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>')
+  html = html.replace(/^(\d+)\. (.+)$/gm, '<li class="ol-item">$2</li>')
   html = html.replace(/^\- (.+)$/gm, '<li>$1</li>')
-  html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+  html = html.replace(/((?:<li[^>]*>.*<\/li>\s*)+)/g, '<ul>$1</ul>')
   html = html.replace(/\n/g, '<br>')
   return html
 }
@@ -213,6 +236,7 @@ function sendMessage(text) {
   chatStore.addMessage({ role: 'user', content: text })
   chatStore.currentSessionId = chatStore.currentSessionId || null
   streaming.value = true
+  toolSteps.value = []
   scrollToBottom()
 
   const token = localStorage.getItem('token')
@@ -230,16 +254,33 @@ function sendMessage(text) {
     }),
   })
     .then((response) => {
+      if (response.status === 401) {
+        streaming.value = false
+        toolSteps.value = []
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        router.push('/login')
+        message.error('登录已过期，请重新登录')
+        return null
+      }
+      if (!response.ok) {
+        streaming.value = false
+        toolSteps.value = []
+        message.error(`请求失败 (${response.status})`)
+        return null
+      }
       const sid = response.headers.get('X-Session-Id')
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let assistantMsg = ''
       let msgAdded = false
+      let sseBuffer = ''
 
       function read() {
         return reader.read().then(({ done, value }) => {
           if (done) {
             streaming.value = false
+            toolSteps.value = []
             if (sid && !chatStore.currentSessionId) {
               chatStore.currentSessionId = sid
             }
@@ -251,32 +292,72 @@ function sendMessage(text) {
           }
 
           const chunk = decoder.decode(value, { stream: true })
-          const lines = chunk.split('\n')
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6)
-              if (data === '[DONE]') {
+          sseBuffer += chunk
+          const parts = sseBuffer.split('\n\n')
+          sseBuffer = parts.pop()
+          for (const part of parts) {
+            const lines = part.split('\n')
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue
+              const raw = line.slice(6)
+              if (raw === '[DONE]') {
                 streaming.value = false
+                toolSteps.value = []
                 loadSessions()
                 return
               }
-              if (!msgAdded) {
-                chatStore.addMessage({ role: 'assistant', content: '' })
-                msgAdded = true
+              let event
+              try {
+                event = JSON.parse(raw)
+              } catch {
+                event = { type: 'text', content: raw }
               }
-              assistantMsg += data
-              chatStore.messages[chatStore.messages.length - 1].content = assistantMsg
-              scrollToBottom()
+
+              if (event.type === 'tool') {
+                toolSteps.value.push(event.name)
+                scrollToBottom()
+                continue
+              }
+
+              if (event.type === 'error') {
+                streaming.value = false
+                toolSteps.value = []
+                const errMsg = event.content || '服务异常，请稍后重试'
+                chatStore.addMessage({ role: 'assistant', content: errMsg })
+                message.error(errMsg)
+                continue
+              }
+
+              if (event.type === 'text') {
+                if (!msgAdded) {
+                  chatStore.addMessage({ role: 'assistant', content: '' })
+                  toolSteps.value = []
+                  msgAdded = true
+                }
+                assistantMsg += event.content
+                chatStore.messages[chatStore.messages.length - 1].content = assistantMsg
+                scrollToBottom()
+              }
             }
           }
           read()
+        }).catch(() => {
+          streaming.value = false
+          toolSteps.value = []
+          if (!msgAdded && assistantMsg) {
+            chatStore.addMessage({ role: 'assistant', content: assistantMsg })
+          } else if (!assistantMsg) {
+            chatStore.addMessage({ role: 'assistant', content: '连接中断，请重试' })
+          }
+          message.error('连接中断，请重试')
         })
       }
       read()
     })
     .catch(() => {
       streaming.value = false
-      message.error('发送失败')
+      toolSteps.value = []
+      message.error('网络连接失败，请检查网络后重试')
     })
 }
 
@@ -298,70 +379,88 @@ onMounted(async () => {
   overflow: hidden;
 }
 
+/* ===== 侧边栏（豆包风格） ===== */
 .sidebar {
   width: 260px;
-  background: white;
-  border-right: 1px solid #eee;
+  background: #f7f8fa;
   display: flex;
   flex-direction: column;
-  padding: 16px;
+  border-right: 1px solid #e8e8e8;
 }
 
-.sidebar-header {
-  margin-bottom: 16px;
+.sidebar-top {
+  padding: 16px 16px 12px;
 }
 
-.logo {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--primary);
-}
-
-.sidebar-profile {
-  background: var(--primary-light);
-  border-radius: 10px;
-  padding: 12px;
-}
-
-.profile-brief {
+.sidebar-brand {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
-.profile-name {
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.profile-tags {
+.brand-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+  color: white;
+  font-weight: 700;
+  font-size: 16px;
   display: flex;
-  gap: 4px;
+  align-items: center;
+  justify-content: center;
+}
+
+.brand-name {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .session-list {
   flex: 1;
   overflow-y: auto;
+  padding: 0 8px;
+}
+
+.session-empty {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 24px 0;
 }
 
 .session-item {
-  padding: 8px 12px;
+  padding: 10px 12px;
   border-radius: 8px;
   cursor: pointer;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 4px;
-  transition: background 0.2s;
+  gap: 8px;
+  margin-bottom: 2px;
+  transition: background 0.15s;
   font-size: 13px;
+  color: var(--text-primary);
+  position: relative;
 }
 
 .session-item:hover {
-  background: #f0f5ff;
+  background: #eef2f7;
 }
 
 .session-item.active {
-  background: var(--primary-light);
+  background: #e3edf7;
+}
+
+.session-dot {
+  font-size: 8px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.session-item.active .session-dot {
+  color: var(--primary);
 }
 
 .session-title {
@@ -371,11 +470,125 @@ onMounted(async () => {
   flex: 1;
 }
 
-.sidebar-bottom {
-  margin-top: auto;
-  padding-top: 12px;
+.session-delete {
+  opacity: 0;
+  font-size: 16px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+  line-height: 1;
+  transition: opacity 0.15s;
 }
 
+.session-item:hover .session-delete {
+  opacity: 1;
+}
+
+.session-delete:hover {
+  color: var(--danger);
+}
+
+/* 底部用户区 */
+.sidebar-bottom {
+  border-top: 1px solid #e8e8e8;
+  padding: 10px 12px;
+  position: relative;
+}
+
+.sidebar-profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.sidebar-profile:hover {
+  background: #eef2f7;
+}
+
+.profile-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--primary-light);
+  color: var(--primary-dark);
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.profile-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.profile-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 1px;
+}
+
+.profile-arrow {
+  font-size: 16px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.user-menu {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.menu-item {
+  padding: 10px 16px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.menu-item:hover {
+  background: #f0f5ff;
+}
+
+.menu-danger {
+  color: var(--danger);
+}
+
+.menu-danger:hover {
+  background: #fff0f0;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.15s;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* ===== 聊天区 ===== */
 .chat-main {
   flex: 1;
   display: flex;
@@ -386,7 +599,7 @@ onMounted(async () => {
 .messages-container {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 24px 48px;
 }
 
 .empty-chat {
@@ -420,64 +633,56 @@ onMounted(async () => {
   cursor: pointer;
 }
 
+/* 消息样式（无头像） */
 .message-row {
+  margin-bottom: 20px;
   display: flex;
-  margin-bottom: 16px;
-  align-items: flex-start;
 }
 
 .message-row.user {
-  flex-direction: row-reverse;
+  justify-content: flex-end;
 }
 
-.message-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  flex-shrink: 0;
-}
-
-.message-row.user .message-avatar {
-  margin-left: 8px;
-}
-
-.message-row.assistant .message-avatar {
-  margin-right: 8px;
+.message-row.assistant {
+  justify-content: flex-start;
 }
 
 .message-bubble {
-  max-width: 70%;
-  padding: 12px 16px;
-  border-radius: 12px;
+  max-width: 75%;
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 .message-bubble.user {
   background: var(--primary);
   color: white;
-  border-bottom-right-radius: 4px;
+  padding: 10px 16px;
+  border-radius: 16px 16px 4px 16px;
 }
 
 .message-bubble.assistant {
-  background: white;
+  background: #f0f1f3;
   color: var(--text-primary);
-  border-bottom-left-radius: 4px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  padding: 10px 16px;
+  border-radius: 4px 16px 16px 16px;
+}
+
+.message-bubble.assistant :deep(h2) {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 12px 0 6px;
 }
 
 .message-bubble.assistant :deep(h3) {
   font-size: 15px;
-  margin: 8px 0 4px;
+  font-weight: 600;
+  margin: 10px 0 4px;
 }
 
 .message-bubble.assistant :deep(h4) {
   font-size: 14px;
-  margin: 6px 0 4px;
+  font-weight: 600;
+  margin: 8px 0 4px;
 }
 
 .message-bubble.assistant :deep(ul) {
@@ -509,10 +714,7 @@ onMounted(async () => {
 }
 
 .typing {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  padding: 16px;
+  padding: 12px 0;
 }
 
 .typing-dot {
@@ -520,6 +722,7 @@ onMounted(async () => {
   height: 8px;
   border-radius: 50%;
   background: var(--text-secondary);
+  display: inline-block;
   animation: bounce 1.4s ease-in-out infinite;
 }
 
@@ -531,6 +734,22 @@ onMounted(async () => {
   animation-delay: 0.4s;
 }
 
+.tool-steps {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.8;
+}
+
+.tool-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-icon {
+  font-size: 12px;
+}
+
 @keyframes bounce {
   0%, 80%, 100% { transform: scale(0); }
   40% { transform: scale(1); }
@@ -538,9 +757,8 @@ onMounted(async () => {
 
 .input-area {
   display: flex;
-  padding: 16px 24px;
-  background: white;
-  border-top: 1px solid #eee;
+  padding: 16px 48px 20px;
+  background: var(--bg-page);
   align-items: flex-end;
 }
 </style>

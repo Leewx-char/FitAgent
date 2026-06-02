@@ -6,13 +6,15 @@
         <p>让我们更好地了解你，为你提供个性化建议</p>
       </div>
 
-      <n-steps :current="currentStep" :status="stepStatus" size="small" style="margin-bottom: 32px">
-        <n-step title="基本信息" />
-        <n-step title="身体数据" />
-        <n-step title="健身目标" />
-        <n-step title="训练经验" />
-        <n-step title="特殊情况" />
-      </n-steps>
+      <div class="steps-wrapper" ref="stepsRef">
+        <n-steps :current="currentStep" :status="stepStatus" size="small">
+          <n-step title="基本信息" />
+          <n-step title="身体数据" />
+          <n-step title="健身目标" />
+          <n-step title="训练经验" />
+          <n-step title="特殊情况" />
+        </n-steps>
+      </div>
 
       <!-- Step 1: 基本信息 -->
       <div v-show="currentStep === 1" class="step-content">
@@ -121,7 +123,7 @@
         </n-checkbox-group>
 
         <h3 style="margin-top: 28px">训练偏好（可选）</h3>
-        <n-space>
+        <div class="pref-tags">
           <n-tag
             v-for="pref in preferenceOptions"
             :key="pref"
@@ -132,7 +134,7 @@
           >
             {{ pref }}
           </n-tag>
-        </n-space>
+        </div>
       </div>
 
       <div class="step-actions">
@@ -159,7 +161,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { useProfileStore } from '@/stores/profile'
@@ -171,6 +173,18 @@ const profileStore = useProfileStore()
 const currentStep = ref(1)
 const stepStatus = ref('process')
 const submitting = ref(false)
+const stepsRef = ref(null)
+
+watch(currentStep, () => {
+  nextTick(() => {
+    if (stepsRef.value) {
+      stepsRef.value.scrollTo({
+        left: stepsRef.value.scrollWidth,
+        behavior: 'smooth',
+      })
+    }
+  })
+})
 
 const preferenceOptions = ['健身房', '家里', '户外', '哑铃', '杠铃', '自重训练', '早上', '下午', '晚上']
 
@@ -270,15 +284,29 @@ async function handleSubmit() {
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #F8FBFF 0%, var(--primary-light) 100%);
-  padding: 20px;
+  padding: 32px 20px;
 }
 
 .onboarding-card {
-  width: 560px;
-  padding: 40px;
+  width: 520px;
+  padding: 36px 32px;
   background: white;
   border-radius: 16px;
   box-shadow: 0 4px 24px rgba(66, 165, 245, 0.12);
+}
+
+.steps-wrapper {
+  overflow-x: auto;
+  margin-bottom: 24px;
+  padding: 8px 16px 12px;
+}
+
+.steps-wrapper :deep(.n-steps) {
+  min-width: 400px;
+}
+
+.steps-wrapper :deep(.n-step) {
+  min-height: 48px;
 }
 
 .onboarding-header {
@@ -304,6 +332,10 @@ async function handleSubmit() {
   color: var(--text-primary);
 }
 
+.step-content h3:not(:first-child) {
+  margin-top: 20px;
+}
+
 .body-inputs {
   display: flex;
   gap: 24px;
@@ -323,6 +355,12 @@ async function handleSubmit() {
 .step-actions {
   display: flex;
   justify-content: space-between;
-  margin-top: 32px;
+  margin-top: 24px;
+}
+
+.pref-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 </style>

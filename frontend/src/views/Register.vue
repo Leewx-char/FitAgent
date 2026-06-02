@@ -6,7 +6,7 @@
         <p class="auth-subtitle">注册账号，开启你的健身之旅</p>
       </div>
 
-      <n-form ref="formRef" :model="form" :rules="rules" label-placement="left">
+      <n-form ref="formRef" :model="form" :rules="rules" label-placement="top">
         <n-form-item path="username" label="用户名">
           <n-input
             v-model:value="form.username"
