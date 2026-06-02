@@ -1,12 +1,25 @@
 import re
+import json
 from typing import Iterable
 from langchain.agents import create_agent
+from langchain_core.messages import AIMessageChunk, ToolMessage
+
 from model.factory import get_chat_model
 from utils.prompt_loader import load_system_prompts
 from agent.tools.agent_tools import (rag_summarize,
 get_weather, get_user_location, get_user_id, trigger_report,
 get_current_month, get_user_profile)
 from agent.tools.middleware import monitor_tool, log_before_model, report_prompt_switch
+
+TOOL_DISPLAY = {
+    "get_user_profile": "获取用户画像",
+    "rag_summarize": "检索知识库",
+    "get_weather": "查询天气",
+    "get_user_location": "获取位置",
+    "get_current_month": "获取月份",
+    "get_user_id": "获取用户ID",
+    "trigger_report": "生成报告",
+}
 
 class ReactAgent:
 
@@ -75,18 +88,31 @@ class ReactAgent:
         if city:
             run_context["city"] = city
 
-        for chunk in self.agent.stream(input_dict,
-           stream_mode="values",
-           context=run_context
-        ):
-            latest_message = chunk["messages"][-1]
+        seen_tool_ids = set()  # 记录已见过的工具调用ID，用于去重和判断"是否调过工具"
+        last_tool_step = None  # 记录最后一个 ToolMessage 所在的 step 编号
+        # None 表示：还没执行完所有工具调用（还在调工具阶段）
 
-            if (
-                getattr(latest_message, "type", "") == "ai"
-                and not getattr(latest_message, "tool_calls", None)
-                and latest_message.content
-            ):
-                yield latest_message.content.strip() + "\n"
+        for msg_chunk, metadata in self.agent.stream(
+                input_dict, stream_mode="messages", context=run_context
+        ):
+            if isinstance(msg_chunk, AIMessageChunk):
+                tool_call_chunks = getattr(msg_chunk, "tool_call_chunks", None) or []
+                # 工具调用通知
+                for tc_chunk in tool_call_chunks:
+                    if tc_chunk.get("name") and tc_chunk.get("id"):
+                        if tc_chunk["id"] not in seen_tool_ids:
+                            seen_tool_ids.add(tc_chunk["id"])
+                            last_tool_step = None # ← 关键：见到新工具调用，重置为 None
+                            yield json.dumps(
+                                {"type": "tool", "name": TOOL_DISPLAY.get(tc_chunk["name"], tc_chunk["name"])},
+                                ensure_ascii=False) + "\n" # 前端显示"🔍 获取画像..."
+                # 文本内容
+                if msg_chunk.content:
+                    if not seen_tool_ids or (
+                            last_tool_step is not None and metadata.get("langgraph_step", 0) > last_tool_step):
+                        yield json.dumps({"type": "text", "content": msg_chunk.content}, ensure_ascii=False) + "\n"
+            elif isinstance(msg_chunk, ToolMessage):
+                last_tool_step = metadata.get("langgraph_step", 0)
 
 if __name__ == '__main__':
     agent = ReactAgent()

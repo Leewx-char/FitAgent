@@ -6,6 +6,7 @@
 
  SSE 格式：每块数据以 "data: <文本>\n\n" 发送，前端 EventSource 自动解析。
  """
+import json
 import asyncio
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -19,7 +20,6 @@ from agent.tools.agent_tools import _user_context
 import uuid
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
-
 
 async def sse_generator(
     agent: ReactAgent,
@@ -45,18 +45,47 @@ async def sse_generator(
     user_id = current_user.id
     city = session_facts.get("city", "") or ""
     gen = iter(agent.execute_stream(messages, user_id=user_id, city=city))
-    while True:
-        # 在线程池里执行 _next_chunk(gen)，因为 agent.execute_stream 是同步的，不能阻塞主线程，服务其他用户
-        chunk = await loop.run_in_executor(None, _next_chunk, gen)
-        if chunk is _SENTINEL:
-            break
-        full_response += chunk
-        yield f"data: {chunk}\n\n"
+    try:
+        while True:
+            chunk = await loop.run_in_executor(None, _next_chunk, gen)
+            if chunk is _SENTINEL:
+                break
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            # 解析 agent 发来的 JSON 事件
+            try:
+                event = json.loads(chunk)
+            except (json.JSONDecodeError, TypeError):
+                # 不是 JSON（兜底），当纯文本处理
+                full_response += chunk
+                yield f"data: {json.dumps({'type': 'text', 'content': chunk}, ensure_ascii=False)}\n\n"
+                continue
+            if event.get("type") == "tool":
+                # 工具调用通知：把英文名翻译成中文显示给用户
+                yield f"data: {json.dumps({'type': 'tool', 'name': event.get('name', '')}, ensure_ascii=False)}\n\n"
+            elif event.get("type") == "text":
+                # 文本增量：只有新增的部分
+                content = event.get("content", "")
+                full_response += content
+                yield f"data: {json.dumps({'type': 'text', 'content': content}, ensure_ascii=False)}\n\n"
+    except Exception as e:
+        # 捕获所有异常（API Key 无效、额度不足、超时等），给用户友好的中文提示
+        error_msg = str(e)
+        if "apiKey" in error_msg or "InvalidApiKey" in error_msg or "api_key" in error_msg.lower():
+            error_msg = "AI 服务配置错误，请联系管理员"
+        elif "quota" in error_msg.lower() or "balance" in error_msg.lower() or "limit" in error_msg.lower():
+            error_msg = "AI 服务额度不足，请联系管理员"
+        elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            error_msg = "AI 服务响应超时，请稍后重试"
+        else:
+            error_msg = "服务暂时不可用，请稍后重试"
+        yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
     # 流式结束后：存 assistant 消息到数据库
     db.add(Message(
         session_id=session_id,
         role="assistant",
-        content=full_response.strip(),
+        content=full_response.strip() if full_response.strip() else "（回复异常）",
     ))
     # 如果是第一条消息，自动更新会话标题
     session = db.query(SessionModel).filter(
