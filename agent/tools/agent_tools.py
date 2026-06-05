@@ -20,9 +20,18 @@ def _request_json(base_url: str, params: dict) -> dict:
     with urlopen(url, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
 
-@tool(description="从知识库中检索运动科学、训练方法、营养学、损伤预防、动作要领等相关参考资料并总结返回。出参包含参考来源")
-def rag_summarize(query: str) -> str:
-    return rag.rag_summarize(query)
+SOURCE_MAP = {
+    "动作指南": ["动作指南大全.txt"],
+    "营养学": ["营养学知识.txt"],
+    "训练计划": ["训练计划指南.txt"],
+    "损伤预防": ["运动损伤预防.txt"],
+    "基础知识": ["健身基础知识.txt"],
+}
+
+@tool(description="从知识库检索专业资料原始片段。可选通过source指定领域缩小范围：动作指南、营养学、训练计划、损伤预防、基础知识")
+def rag_summarize(query: str, source: str = "") -> str:
+    source_filter = SOURCE_MAP.get(source) if source else None
+    return rag.rag_summarize(query, source_filter)
 
 @tool(description="获取指定城市的实时天气信息，返回温度、体感温度、降水、风速等数据")
 def get_weather(city: str):

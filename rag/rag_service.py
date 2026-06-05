@@ -3,13 +3,9 @@
 总结服务类：用户提问，搜索参考资料，讲提问和参考资料提交给模型，让模型总结回复
 """
 import re, threading
-from utils.config_handler import chroma_conf
+from utils.config_handler import chroma_conf, synonyms_conf
 from utils.logger_handler import logger
-from langchain_core.output_parsers import StrOutputParser
 from rag.vector_store import VectorStoreService
-from utils.prompt_loader import load_rag_prompts
-from langchain_core.prompts import PromptTemplate
-from model.factory import get_chat_model
 
 class RagSummarizeService(object):
     def __init__(self):
@@ -17,52 +13,16 @@ class RagSummarizeService(object):
         self._collection_ready_checked = False
         self._repair_lock = threading.Lock()
 
-        self.prompt_text = load_rag_prompts()
-        self.prompt_template = PromptTemplate.from_template(self.prompt_text)
-        self.model = get_chat_model()
-        self.chain = self._init_chain()
-
         self.top_k = chroma_conf["k"]
         self.candidate_k = chroma_conf.get("candidate_k", max(self.top_k * 2, self.top_k))
         self.min_relevance_score = chroma_conf.get("min_relevance_score", 0.0)
 
         # ：查询扩展——当用户输入包含某个关键词时，自动把同义词也加入搜索词，提高知识库召回率。
-        self.synonym_map = {
-            "减脂": ["减肚子", "瘦身", "减重", "减肥", "减去脂肪"],
-            "增肌": ["肌肉增长", "长肌肉", "增重", "肌肥大", "练大"],
-            "腹肌": ["肚子", "马甲线", "人鱼线", "核心"],
-            "大腿": ["腿部", "股四头", "股四头肌"],
-            "深蹲": ["下蹲", "负重蹲", "深蹲起"],
-            "硬拉": ["硬拉起", "拉起"],
-            "卧推": ["推胸", "胸推", "卧推举"],
-            "拉伸": ["伸展", "柔韧性", "灵活性"],
-            "膝盖痛": ["膝盖疼", "膝关节疼痛", "膝盖不适"],
-            "腰痛": ["腰疼", "下背痛", "下背部疼痛", "腰椎"],
-            "基础代谢": ["基础代谢率", "代谢率", "静息代谢", "BMR"],
-            "蛋白质": ["蛋白", "高蛋白", "蛋白质粉"],
-            "碳水": ["碳水化合物", "糖类", "碳水化合物"],
-            "有氧": ["有氧运动", "跑步", "骑车", "游泳"],
-            "力量训练": ["举铁", "抗阻训练", "阻力训练", "负重训练"],
-            "新手": ["初学者", "入门", "零基础", "小白"],
-            "热身": ["准备活动", "训练前准备", "热身运动"],
-            "酸痛": ["肌肉酸痛", "延迟性肌肉酸痛", "训练后酸痛"],
-            "体脂": ["体脂率", "脂肪率", "脂肪比例"],
-        }
-
-        self.stopwords = {
-            "的", "了", "呢", "吗", "呀", "啊", "我", "想", "请问", "一下", "怎么", "怎样",
-            "是否", "一个", "这个", "那个", "可以", "需要", "有没有", "如何", "呢", "吧",
-        }
+        self.synonym_map = synonyms_conf.get("expand", {})  # 同义词扩展
+        self.normalize_map = synonyms_conf.get("normalize", {})  # 归一化替换
+        self.stopwords = synonyms_conf.get("stopwords", set())  # 停用词
 
 
-    def _init_chain(self):
-        """
-        构建处理链：Prompt填充 → 打印调试 → LLM推理 → 字符串解析
-        Chain流程：
-        PromptTemplate → print_prompt → chat_model → StrOutputParser
-        """
-        chain = self.prompt_template | self.model | StrOutputParser()
-        return chain
 
     def _ensure_collection_ready(self):
         if self._collection_ready_checked:
@@ -105,24 +65,9 @@ class RagSummarizeService(object):
             logger.info(f"向量库重建完成，当前文档数量：{latest_count}")
 
     # 查询替换——把用户的口语化/非标准用词统一替换成知识库里的标准术语，提高向量检索命中率。
-    @staticmethod
-    def _normalize_query(query: str) -> str:
+    def _normalize_query(self, query: str) -> str:
         normalized = re.sub(r"\s+", " ", query.strip().lower())
-        replacements = {
-            "减肚子": "减脂",
-            "瘦身": "减脂",
-            "减肥": "减脂",
-            "长肌肉": "增肌",
-            "练大": "增肌",
-            "腹肌": "核心",
-            "举铁": "力量训练",
-            "抗阻训练": "力量训练",
-            "阻力训练": "力量训练",
-            "肚子": "腹部",
-            "腰疼": "腰痛",
-            "膝盖疼": "膝盖痛",
-            "蛋白粉": "乳清蛋白",
-        }
+        replacements = self.normalize_map
         for source, target in replacements.items():
             normalized = normalized.replace(source, target)
         return normalized
@@ -155,7 +100,38 @@ class RagSummarizeService(object):
         coverage = overlap / max(len(query_terms), 1)
         return relevance_score * 0.7 + coverage * 0.3
 
-    def retriever_docs(self, query: str) :
+    # threshold = 0.8：只有当 80% 以上的词重叠时才视为重复
+    def _deduplicate_docs(self, scored_docs: list[tuple], threshold: float = 0.8) -> list[tuple]:
+        kept = []  # 最终保留的 (doc, score) 列表
+        kept_terms = []  # 对应的词集合列表，用于和后续文档比较
+
+        for doc, score in scored_docs:
+            # scored_docs 已按 rerank_score 降序排列
+            # 所以先处理的文档分数更高
+
+            doc_terms = self._document_terms(doc.page_content)  # 提取当前文档的词集合
+            is_dup = False
+
+            for prev_terms in kept_terms:
+                # 和每个已保留的文档比较
+                # Jaccard = 交集大小 / 并集大小
+
+                intersection = len(doc_terms & prev_terms)  # 交集大小
+                union = len(doc_terms | prev_terms)  # 并集大小
+                if union > 0 and intersection / union > threshold:
+                    # Jaccard > 0.8，视为重复
+                    is_dup = True
+                    break  # 只要和一个已保留的文档重复就够了，不用继续比
+
+            if not is_dup:
+                # 不是重复，保留
+                kept.append((doc, score))
+                kept_terms.append(doc_terms)
+            # 如果 is_dup=True，直接跳过，相当于丢弃
+
+        return kept
+
+    def retriever_docs(self, query: str, source_filter: list[str] | None = None) :
         """确保向量数据库正常 -> 扩展提示词 -> 抽取关键词
         -> 粗召回文档（如果有错误，检查错误，并重建向量数据库）
          -> 计算这批文档的重排分数 -> 重排分数排序后截断返回"""
@@ -163,11 +139,14 @@ class RagSummarizeService(object):
 
         expanded_query = self._expand_query(query)
         query_terms = self._query_terms(query)
+        search_kwargs = {"k": self.candidate_k}
+        if source_filter:
+            search_kwargs["filter"] = {"source": {"$in": source_filter}}
 
         try:
             candidates = self.vector_store.vector_store.similarity_search_with_relevance_scores(
                 expanded_query,
-                k=self.candidate_k,
+                **search_kwargs,
             )
         except Exception as e:
             logger.error(f"向量检索失败：{str(e)}", exc_info=True)
@@ -176,7 +155,7 @@ class RagSummarizeService(object):
                     self._repair_vector_store()
                     candidates = self.vector_store.vector_store.similarity_search_with_relevance_scores(
                         expanded_query,
-                        k=self.candidate_k,
+                        **search_kwargs,
                     )
                 except Exception as repair_error:
                     logger.error(f"重建后检索仍失败：{str(repair_error)}", exc_info=True)
@@ -194,11 +173,16 @@ class RagSummarizeService(object):
             scored_docs.append((doc, rerank_score))
 
         scored_docs.sort(key=lambda item: item[1], reverse=True)
+        # 插入去重
+        before_dedup = len(scored_docs)
+        scored_docs = self._deduplicate_docs(scored_docs)
+        logger.info(f"去重：{before_dedup} -> {len(scored_docs)}条")
+
         docs = [doc for doc, _ in scored_docs[: self.top_k]]
 
         logger.info(
             f"RAG检索完成，原始query={query}，扩展query={expanded_query},"
-            f"候选数={len(candidates)}，入选数={len(docs)}"
+            f"候选数={len(candidates)}，去重前={before_dedup}，入选数={len(docs)}"
         )
         return docs
 
@@ -217,9 +201,9 @@ class RagSummarizeService(object):
             return ""
         return "\n参考来源：\n- " + "\n- ".join(references)
 
-    def rag_summarize(self, query: str) -> str:
+    def rag_summarize(self, query: str, source_filter: list[str] | None = None) -> str:
         try:
-            context_docs = self.retriever_docs(query)
+            context_docs = self.retriever_docs(query, source_filter)
         except Exception as e:
             logger.error(f"RAG检索流程异常：{str(e)}", exc_info=True)
             return "知识库检索暂时不可用，请稍后重试。"
@@ -242,12 +226,7 @@ class RagSummarizeService(object):
             )
         context = "\n\n".join(context_parts)
 
-        try:
-            answer = self.chain.invoke({"input": query, "context": context})
-            return answer.strip() + self._format_references(context_docs)
-        except Exception as e:
-            logger.error(f"RAG总结失败：{str(e)}", exc_info=True)
-            return "知识总结暂时不可用，请稍后重试"
+        return context + self._format_references(context_docs)
 
 if __name__ == '__main__':
     rag = RagSummarizeService()

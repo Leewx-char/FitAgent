@@ -33,6 +33,14 @@ def load_agent_config(
     with open(config_path, "r", encoding=encoding) as f:
         return yaml.load(f, Loader=yaml.FullLoader)
 
+def load_synonyms_config(
+        config_path: str=get_abs_path("config/synonyms.yml"),
+        encoding: str="utf-8",
+):
+    with open(config_path, "r", encoding=encoding) as f:
+        return yaml.load(f, Loader=yaml.FullLoader)
+
+synonyms_conf = load_synonyms_config()
 rag_conf = load_rag_config()
 chroma_conf = load_chroma_config()
 prompts_conf = load_prompts_config()
