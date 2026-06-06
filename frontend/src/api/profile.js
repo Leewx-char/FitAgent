@@ -11,3 +11,12 @@ export function createProfile(data) {
 export function updateProfile(data) {
   return api.put('/profile', data)
 }
+
+export function uploadHealthDoc(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return api.post('/upload/health-doc', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  })
+}

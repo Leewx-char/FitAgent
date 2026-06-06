@@ -41,6 +41,7 @@ class UserProfile(Base):
     injuries = Column(Text, default="[]")  # JSON: ["膝盖", "腰椎"]
     diet_restrict = Column(Text, default="[]")  # JSON: ["素食", "低碳"]
     preferences = Column(Text, default="{}")  # JSON: {"preferred_time": "早上", "gym": true}
+    health_data = Column(Text, default="{}")  # JSON: 从文档提取的健康指标
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

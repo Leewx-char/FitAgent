@@ -1,2 +1,3 @@
 main_prompt_path: prompts/main_prompt.txt
 report_prompt_path: prompts/report_prompt.txt
+health_extract_prompt_path: prompts/health_extract.txt

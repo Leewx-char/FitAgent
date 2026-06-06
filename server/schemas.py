@@ -11,6 +11,7 @@
   - 响应不返回 password_hash —— 安全
   - 表结构变化不影响 API 返回格式 —— 解耦
 """
+import json
 from datetime import datetime
 from pydantic import field_validator
 from pydantic import BaseModel, Field
@@ -101,6 +102,7 @@ class ProfileUpdate(BaseModel):
     injuries: list[str] | None = None
     diet_restrict: list[str] | None = None
     preferences: dict | None = None
+    health_data: dict | None = None
 
 class ProfileResponse(BaseModel):
     id: int
@@ -115,16 +117,17 @@ class ProfileResponse(BaseModel):
     injuries: list[str]
     diet_restrict: list[str]
     preferences: dict
+    health_data: dict
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
 
+    # ：MySQL 的 TEXT 列存 JSON 字符串，但 API 返回给前端时要转成 Python 原生类型
     @field_validator("injuries", "diet_restrict", mode="before")
     @classmethod
     def parse_json_list(cls, v):
         if isinstance(v, str):
-            import json
             return json.loads(v)
         return v
 
@@ -132,6 +135,24 @@ class ProfileResponse(BaseModel):
     @classmethod
     def parse_json_dict(cls, v):
         if isinstance(v, str):
-            import json
             return json.loads(v)
         return v
+
+    @field_validator("health_data", mode="before")
+    @classmethod
+    def parse_json_health_data(cls, v):
+        if v is None:
+            return {}
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
+
+# ==================== 健康文档上传 ====================
+class HealthDocUploadResponse(BaseModel):
+    status: str # ok / unrelated / parse_failed / encrypted / error
+    doc_type: str = ""
+    data: dict = {} # 提取的健康数据 JSON
+    message: str = ""
+
+class HealthDataConfirmRequest(BaseModel):
+    health_data: dict # 用户确认后的健康数据

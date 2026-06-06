@@ -49,13 +49,17 @@ def update_profile(body: ProfileUpdate, db: Session = Depends(get_db), current_u
     # 只取用户传了的字段。ProfileUpdate 所有字段都是 None，如果不用这个，没传的字段会变成 None 覆盖原有值
     update_data = body.model_dump(exclude_unset=True)
 
-    # 单独处理 JSON 字段
+    # 单独处理 JSON 字段,json.dumps把 dict → 字符串才能存入数据库
+    # pop 是因为在 for key, value in update_data.items() 循环里，
+    # dict 类型不能直接 setattr 给 TEXT 列，必须单独处理
     if "injuries" in update_data:
         profile.injuries = json.dumps(update_data.pop("injuries"), ensure_ascii=False)
     if "diet_restrict" in update_data:
         profile.diet_restrict = json.dumps(update_data.pop("diet_restrict"), ensure_ascii=False)
     if "preferences" in update_data:
         profile.preferences = json.dumps(update_data.pop("preferences"), ensure_ascii=False)
+    if "health_data" in update_data:
+        profile.health_data = json.dumps(update_data.pop("health_data"), ensure_ascii=False)
 
     # 剩余的普通字段直接赋值
     for key, value in update_data.items():

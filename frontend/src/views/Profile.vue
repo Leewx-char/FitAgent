@@ -136,6 +136,34 @@
               </div>
             </div>
           </div>
+
+          <div class="profile-section" v-if="hasHealthData">
+            <h4>
+              健康数据
+              <n-tag v-if="profile.health_data.doc_type" size="small" type="info" style="margin-left: 8px">{{ profile.health_data.doc_type }}</n-tag>
+            </h4>
+            <div class="health-data-grid">
+              <div v-for="key in healthFields" :key="key" class="health-data-item">
+                <span class="data-label">{{ healthLabels[key] }}</span>
+                <span class="data-value" v-if="getHealthValue(key)">
+                  {{ getHealthValue(key) }}<span class="data-unit" v-if="getHealthUnit(key)">{{ getHealthUnit(key) }}</span>
+                </span>
+                <span class="data-value data-none" v-else>未识别</span>
+              </div>
+            </div>
+            <template v-if="otherFindings.length">
+              <div class="health-sub-title">其他发现</div>
+              <div class="health-data-grid">
+                <div v-for="(item, idx) in otherFindings" :key="idx" class="health-data-item">
+                  <span class="data-label">{{ item.field }}</span>
+                  <span class="data-value">{{ item.value }}</span>
+                </div>
+              </div>
+            </template>
+            <div v-if="profile.health_data.raw_summary" class="health-summary">
+              {{ profile.health_data.raw_summary }}
+            </div>
+          </div>
         </div>
 
         <div v-else-if="!loading" class="empty-profile">
@@ -152,7 +180,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useProfileStore } from '@/stores/profile'
 
@@ -189,6 +217,42 @@ const editForm = reactive({
   injuries: [],
   diet_restrict: [],
 })
+
+const healthLabels = {
+  bmi: 'BMI',
+  body_fat: '体脂率',
+  heart_rate: '心率',
+  blood_pressure: '血压',
+  blood_sugar: '血糖',
+  cholesterol: '胆固醇',
+  alt: '谷丙转氨酶',
+  uric_acid: '尿酸',
+}
+
+const healthFields = Object.keys(healthLabels)
+
+const hasHealthData = computed(() => {
+  const hd = profile.value?.health_data
+  if (!hd || typeof hd !== 'object') return false
+  return Object.keys(hd).some(k => k !== 'status' && k !== 'doc_type' && k !== 'raw_summary' && k !== 'other_findings')
+})
+
+const otherFindings = computed(() => {
+  const findings = profile.value?.health_data?.other_findings
+  return Array.isArray(findings) ? findings : []
+})
+
+function getHealthValue(key) {
+  const field = profile.value?.health_data?.[key]
+  if (!field || typeof field !== 'object') return null
+  return field.value != null ? field.value : null
+}
+
+function getHealthUnit(key) {
+  const field = profile.value?.health_data?.[key]
+  if (!field || typeof field !== 'object') return null
+  return field.unit || null
+}
 
 async function loadProfile() {
   loading.value = true
@@ -323,5 +387,59 @@ onMounted(loadProfile)
   text-align: center;
   padding: 40px 0;
   color: var(--text-secondary);
+}
+
+.health-data-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.health-data-item {
+  background: #f7f8fa;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.health-data-item .data-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.health-data-item .data-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.health-data-item .data-unit {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin-left: 2px;
+}
+
+.health-data-item .data-none {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.health-sub-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-top: 14px;
+  margin-bottom: 8px;
+}
+
+.health-summary {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 8px 12px;
+  background: #f7f8fa;
+  border-radius: 6px;
 }
 </style>

@@ -38,3 +38,8 @@ def get_embedding_model() -> Embeddings:
     """惰性获取embedding模型，并通过缓存避免重复初始化。"""
     _require_dashscope_api_key()
     return EmbeddingsFactory().generator()
+
+@lru_cache(maxsize=1)
+def get_vl_model() -> BaseChatModel:
+    _require_dashscope_api_key()
+    return ChatTongyi(model="qwen-vl-plus", streaming=True, max_tokens=4096)
