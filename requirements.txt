@@ -41,3 +41,5 @@ Pillow==11.3.0
 
 # Frontend (Streamlit - legacy)
 streamlit==1.57.0
+
+rank-bm25==0.2.2

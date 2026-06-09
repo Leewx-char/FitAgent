@@ -2,10 +2,24 @@
 """
 总结服务类：用户提问，搜索参考资料，讲提问和参考资料提交给模型，让模型总结回复
 """
+
+"""
+RAG提问的完整流程
+1.用户发起提问，agent调用rag_summarize工具
+2.进入rag服务后，确认向量数据库和BM25检索正常运行
+3.先将用户的提问变成标准术语再拓展同义词
+4.然后进入两路并行的检索：向量相似度检索和BM25关键词检索
+5.向量相似度根据余弦相似度算法进行计算，取相似度高于最低阈值的数据
+6.BM25检索是对用户提问进行字级分词切分，再根据文档中对应词的稀有度和出现次数，在文本长度归一化的前提下做打分
+7.向量相似度和BM25检索用RRF算法融合
+8.最后用Jaccard去重，取前六条数据作为结果
+"""
 import re, threading
 from utils.config_handler import chroma_conf, synonyms_conf
 from utils.logger_handler import logger
 from rag.vector_store import VectorStoreService
+from rag.bm25_retriever import BM25Retriever
+from langchain_core.documents import Document
 
 class RagSummarizeService(object):
     def __init__(self):
@@ -22,7 +36,7 @@ class RagSummarizeService(object):
         self.normalize_map = synonyms_conf.get("normalize", {})  # 归一化替换
         self.stopwords = synonyms_conf.get("stopwords", set())  # 停用词
 
-
+        self.bm25 = BM25Retriever()
 
     def _ensure_collection_ready(self):
         if self._collection_ready_checked:
@@ -82,23 +96,9 @@ class RagSummarizeService(object):
             normalized = f"{normalized} {' '.join(expansions)}"
         return normalized
 
-    def _query_terms(self, query: str) -> set[str]:
-        expanded = self._expand_query(query)
-        terms = set()
-        for term in re.findall(r"[一-鿿]{2,}|[a-z0-9]+", expanded):
-            if term not in self.stopwords:
-                terms.add(term)
-        return terms
-
     @staticmethod
     def _document_terms(content: str) -> set[str]:
         return set(re.findall(r"[一-鿿]{2,}|[a-z0-9]+", content.lower()))
-
-    def _rerank_score(self, query_terms: set[str], content: str, relevance_score: float) -> float:
-        doc_terms = self._document_terms(content)
-        overlap = len(query_terms & doc_terms)
-        coverage = overlap / max(len(query_terms), 1)
-        return relevance_score * 0.7 + coverage * 0.3
 
     # threshold = 0.8：只有当 80% 以上的词重叠时才视为重复
     def _deduplicate_docs(self, scored_docs: list[tuple], threshold: float = 0.8) -> list[tuple]:
@@ -131,20 +131,95 @@ class RagSummarizeService(object):
 
         return kept
 
+    def _sync_bm25_index(self):
+        """检查BM25索引是否过期，过期则从ChromaDB重建"""
+        try:
+            # 拿到 ChromaDB 当前文档总数
+            current_count = self.vector_store.vector_store._collection.count()
+        except Exception as e:
+            logger.error(f"获取ChromaDB文档数失败：{str(e)}")
+            return
+
+        # 索引还是新鲜的吗
+        if not self.bm25.is_stale(current_count):
+            return
+
+        logger.info("BM25索引过期或未构建，准备从ChromaDB同步...")
+        try:
+            # 从 ChromaDB 拉取全量文档
+            raw = self.vector_store.vector_store.get(
+                include=["documents", "metadatas"]
+            )
+            # 把字符串列表 + 元数据列表 组装成 LangChain Document 对象列表
+            #   zip(["深蹲是...", "减脂需要..."], [{"source": "a.txt"}, {"source": "b.txt"}])
+            #   → ("深蹲是...", {"source": "a.txt"}), ("减脂需要...", {"source": "b.txt"})
+            documents = [
+                Document(page_content=text, metadata=meta or {})
+                for text, meta in zip(raw["documents"], raw["metadatas"])
+            ]
+            self.bm25.build(documents)
+        except Exception as e:
+            logger.error(f"BM25索引同步失败：{str(e)}", exc_info=True)
+
+    @staticmethod
+    def _rrf_fusion(vector_results: list[tuple], bm25_results: list[tuple], k: int = 60) -> list[tuple]:
+        """RRF双路融合：按排名合并向量检索和BM25检索结果"""
+        """
+            vector_results 格式: [(doc_A, 0.92), (doc_B, 0.87), (doc_C, 0.74)]
+            enumerate(..., start=1): rank 从 1 开始，不是 0
+                rank=1 → doc_A
+                rank=2 → doc_B
+                rank=3 → doc_C
+            key 用 (source, chunk_index) 作为文档的唯一标识
+        """
+        vector_rank_map = {}
+        for rank, (doc, _) in enumerate(vector_results, start=1):
+            key = (doc.metadata.get("source", ""), doc.metadata.get("chunk_index", -1))
+            vector_rank_map[key] = rank
+
+        bm25_rank_map = {}
+        for rank, (doc, _) in enumerate(bm25_results, start=1):
+            key = (doc.metadata.get("source", ""), doc.metadata.get("chunk_index", -1))
+            bm25_rank_map[key] = rank
+
+        # 用字典去重：同一个 key 只保留一份 Document 对象
+        all_docs = {}
+        for doc, _ in vector_results:
+            key = (doc.metadata.get("source", ""), doc.metadata.get("chunk_index", -1))
+            all_docs[key] = doc
+        for doc, _ in bm25_results:
+            key = (doc.metadata.get("source", ""), doc.metadata.get("chunk_index", -1))
+            all_docs[key] = doc
+
+        # 对每个唯一文档计算 RRF 分数
+        scored = []
+        for key, doc in all_docs.items():
+            rrf_score = 0.0
+            if key in vector_rank_map:
+                rrf_score += 1.0 / (k + vector_rank_map[key])
+            if key in bm25_rank_map:
+                rrf_score += 1.0 / (k + bm25_rank_map[key])
+            scored.append((doc, rrf_score))
+
+        # 按 RRF 总分降序排列
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored
+
     def retriever_docs(self, query: str, source_filter: list[str] | None = None) :
         """确保向量数据库正常 -> 扩展提示词 -> 抽取关键词
         -> 粗召回文档（如果有错误，检查错误，并重建向量数据库）
          -> 计算这批文档的重排分数 -> 重排分数排序后截断返回"""
         self._ensure_collection_ready()
+        self._sync_bm25_index()
 
         expanded_query = self._expand_query(query)
-        query_terms = self._query_terms(query)
         search_kwargs = {"k": self.candidate_k}
         if source_filter:
             search_kwargs["filter"] = {"source": {"$in": source_filter}}
 
+        # 向量检索
         try:
-            candidates = self.vector_store.vector_store.similarity_search_with_relevance_scores(
+            vector_candidates = self.vector_store.vector_store.similarity_search_with_relevance_scores(
                 expanded_query,
                 **search_kwargs,
             )
@@ -153,36 +228,40 @@ class RagSummarizeService(object):
             if self._is_corrupted_index_error(e):
                 try:
                     self._repair_vector_store()
-                    candidates = self.vector_store.vector_store.similarity_search_with_relevance_scores(
+                    vector_candidates = self.vector_store.vector_store.similarity_search_with_relevance_scores(
                         expanded_query,
                         **search_kwargs,
                     )
                 except Exception as repair_error:
                     logger.error(f"重建后检索仍失败：{str(repair_error)}", exc_info=True)
-                    return []
+                    vector_candidates = []
             else:
-                return []
+                vector_candidates = []
 
-        scored_docs = []
-        for doc, relevance_score in candidates:
-            if relevance_score < self.min_relevance_score:
-                continue
-            rerank_score = self._rerank_score(query_terms, doc.page_content, relevance_score)
-            doc.metadata["relevance_score"] = round(float(relevance_score), 4)
-            doc.metadata["rerank_score"] = round(float(rerank_score), 4)
-            scored_docs.append((doc, rerank_score))
+        # 过滤低相关度
+        vector_results = [
+            (doc, score) for doc, score in vector_candidates
+            if score >= self.min_relevance_score
+        ]
 
-        scored_docs.sort(key=lambda item: item[1], reverse=True)
-        # 插入去重
+        # BM 25关键词检索（不受 source_filter 影响，BM25 不做过滤）
+        bm25_results = self.bm25.search(expanded_query, k=self.candidate_k)
+
+        # RRF 双路融合
+        scored_docs = self._rrf_fusion(vector_results, bm25_results)
+
+        # Jaccard 去重
         before_dedup = len(scored_docs)
         scored_docs = self._deduplicate_docs(scored_docs)
         logger.info(f"去重：{before_dedup} -> {len(scored_docs)}条")
 
-        docs = [doc for doc, _ in scored_docs[: self.top_k]]
+        # 取 top_k
+        docs = [doc for doc, _ in scored_docs[:self.top_k]]
 
         logger.info(
-            f"RAG检索完成，原始query={query}，扩展query={expanded_query},"
-            f"候选数={len(candidates)}，去重前={before_dedup}，入选数={len(docs)}"
+            f"RAG检索完成，原始query={query}，扩展query={expanded_query}，"
+            f"向量召回={len(vector_results)}，BM25召回={len(bm25_results)}，"
+            f"融合后={before_dedup}，入选={len(docs)}"
         )
         return docs
 

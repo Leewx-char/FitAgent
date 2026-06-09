@@ -17,6 +17,7 @@ from server.auth import get_current_user
 from server.models import Session as SessionModel, Message, User
 from agent.react_agent import ReactAgent
 from agent.tools.agent_tools import _user_context
+from utils.logger_handler import logger
 import uuid
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -71,6 +72,7 @@ async def sse_generator(
                 yield f"data: {json.dumps({'type': 'text', 'content': content}, ensure_ascii=False)}\n\n"
     except Exception as e:
         # 捕获所有异常（API Key 无效、额度不足、超时等），给用户友好的中文提示
+        logger.error(f"Agent流式响应异常：{str(e)}", exc_info=True)  # ← 加这行
         error_msg = str(e)
         if "apiKey" in error_msg or "InvalidApiKey" in error_msg or "api_key" in error_msg.lower():
             error_msg = "AI 服务配置错误，请联系管理员"
