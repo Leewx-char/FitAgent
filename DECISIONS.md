@@ -21,7 +21,9 @@
 | 注册与问卷 | 分离：注册只管账号，问卷用 POST /api/profile | 降低注册门槛 |
 | SSE 流式 | 哨兵值替代 StopIteration | 解决 run_in_executor 异常 |
 | Agent 上下文 | ContextVar + runtime.context 桥接 | LangGraph 工具调用上下文隔离 |
-| RAG 检索 | 原始片段返回 + 同义词配置化 + Jaccard 去重 | 省掉中间 LLM 调用，提速 2-4 秒 |
+| RAG 检索 | 向量 + BM25 双路检索 + RRF 融合 | 语义理解 + 关键词精确，互补验证 |
+| BM25 分词 | 中文拆字、英文/数字保留整体 | 零额外依赖，IDF 自动给稀有字高权重 |
+| 项目结构 | FastAPI 标准分层（app/core/api/services） | 职责单一，目录命名符合社区惯例 |
 | 健康数据 | health_data TEXT 列存 JSON 整体 | 增删字段只改提示词和前端，中间层零改动 |
 | VL 调用 | ChatTongyi (qwen-vl-plus) | 通义千问 VL 中文识别最佳 |
 | PDF 处理 | 文字≥200字走 LLM，<200走 VL | 平衡速度与准确性 |
@@ -59,6 +61,14 @@
 - 端到端测试（图片/PDF/加密PDF上传流程）
 - 上传接口速率限制
 - 提取结果后端校验（防恶意 JSON 注入）
+- 前端思维链可视化（工具调用过程实时展示）
+
+### 阶段5：项目重构 + RAG 升级 ✅
+
+- 项目结构重组：按 FastAPI 标准分层（`app/core/` / `app/api/` / `app/services/` / `app/utils/`）
+- RAG 双路检索：BM25 关键词检索（rank-bm25，字级分词 + TF-IDF + 长度归一化）替代旧版 `coverage * 0.3`
+- RRF 排名融合：替代线性加权，两路排名公平对待、互不干扰
+- 检索耗时保持 ~300ms，BM25 增加延迟 <5ms
 
 ### 远期优化
 
@@ -135,3 +145,5 @@ health_data       # 从文档提取的健康指标（10个固定字段 + other_f
 - **MySQL TEXT**: 不支持 DEFAULT 值，由 ORM 层 default="{}" 处理
 - **stream_mode="messages"**: yield 格式为 (AIMessageChunk/ToolMessage, metadata) 元组
 - **上传流程**: 前端上传 → AI提取 → 用户确认 → PUT /api/profile 保存（身高/体重回填基本信息）
+- **RRF 融合**: `RF_score(d) = Σ 1/(60 + rank_i(d))`，向量和BM25按排名合并，k=60
+- **BM25 分词**: 中文字级分词（"深蹲"→["深","蹲"]），英文/数字保持整体（"BMI"→["bmi"]），IDF 天然淘汰停用词
