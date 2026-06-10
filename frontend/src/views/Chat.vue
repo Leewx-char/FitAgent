@@ -83,6 +83,33 @@
             <div v-html="renderMarkdown(msg.content)" />
           </div>
         </div>
+
+        <div v-if="thinking" class="message-row assistant">
+          <div class="thinking-panel">
+            <div
+              v-for="(tool, idx) in toolChain"
+              :key="idx"
+              class="tool-line"
+              :class="{ active: tool.status === 'active' }"
+            >
+              <span class="tool-icon">{{ tool.status === 'done' ? '✓' : '' }}</span>
+              <span class="tool-name">{{ tool.name }}</span>
+              <span v-if="tool.status === 'active'" class="dots">
+                <span class="dot" />
+                <span class="dot" />
+                <span class="dot" />
+              </span>
+            </div>
+            <div v-if="toolChain.length === 0" class="tool-line active">
+              <span class="tool-name">思考中</span>
+              <span class="dots">
+                <span class="dot" />
+                <span class="dot" />
+                <span class="dot" />
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div v-if="uploadResult" class="confirm-overlay">
@@ -107,7 +134,7 @@
                   {{ getFieldValue(key) }}<span class="data-unit" v-if="getFieldUnit(key)">{{ getFieldUnit(key) }}</span>
                 </span>
                 <span class="data-value data-none" v-else>未识别</span>
-              </div>
+            </div>
             </div>
             <template v-if="uploadResult.data.other_findings && uploadResult.data.other_findings.length">
               <div class="confirm-section-title">其他发现</div>
@@ -119,8 +146,8 @@
                 >
                   <span class="data-label">{{ item.field }}</span>
                   <span class="data-value">{{ item.value }}</span>
-                </div>
               </div>
+            </div>
             </template>
             <div v-if="uploadResult.data.raw_summary" class="confirm-summary">
               {{ uploadResult.data.raw_summary }}
@@ -183,7 +210,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
@@ -205,6 +232,8 @@ const uploading = ref(false)
 const uploadResult = ref(null)
 const showUserMenu = ref(false)
 const fileInputRef = ref(null)
+const thinking = ref(false)
+const toolChain = ref([])
 
 const messages = computed(() => chatStore.messages)
 
@@ -328,6 +357,8 @@ function sendMessage(text) {
   chatStore.addMessage({ role: 'user', content: text })
   chatStore.currentSessionId = chatStore.currentSessionId || null
   streaming.value = true
+  thinking.value = true
+  toolChain.value = []
   scrollToBottom()
 
   const token = localStorage.getItem('token')
@@ -389,6 +420,8 @@ function sendMessage(text) {
               if (!line.startsWith('data: ')) continue
               const raw = line.slice(6)
               if (raw === '[DONE]') {
+                thinking.value = false
+                toolChain.value = []
                 streaming.value = false
                 loadSessions()
                 return
@@ -401,10 +434,16 @@ function sendMessage(text) {
               }
 
               if (event.type === 'tool') {
+                if (toolChain.value.length > 0) {
+                  toolChain.value[toolChain.value.length - 1].status = 'done'
+                }
+                toolChain.value.push({ name: event.name || '', status: 'active' })
                 continue
               }
 
               if (event.type === 'error') {
+                thinking.value = false
+                toolChain.value = []
                 streaming.value = false
                 const errMsg = event.content || '服务异常，请稍后重试'
                 chatStore.addMessage({ role: 'assistant', content: errMsg })
@@ -413,6 +452,8 @@ function sendMessage(text) {
               }
 
               if (event.type === 'text') {
+                thinking.value = false
+                toolChain.value = []
                 if (!msgAdded) {
                   chatStore.addMessage({ role: 'assistant', content: '' })
                   msgAdded = true
@@ -425,6 +466,8 @@ function sendMessage(text) {
           }
           read()
         }).catch(() => {
+          thinking.value = false
+          toolChain.value = []
           streaming.value = false
           if (!msgAdded && assistantMsg) {
             chatStore.addMessage({ role: 'assistant', content: assistantMsg })
@@ -507,6 +550,10 @@ onMounted(async () => {
   await profileStore.fetchProfile()
   await loadSessions()
 })
+
+watch(toolChain, () => {
+  if (thinking.value) scrollToBottom()
+}, { deep: true })
 </script>
 
 <style scoped>
@@ -1029,5 +1076,65 @@ onMounted(async () => {
 .input-bottom-row {
   display: flex;
   align-items: flex-end;
+}
+
+.thinking-panel {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--text-primary);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  min-width: 180px;
+}
+
+.tool-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.tool-line.active {
+  color: var(--text-primary);
+}
+
+.tool-icon {
+  width: 16px;
+  font-size: 12px;
+  color: #52c41a;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.tool-name {
+  white-space: nowrap;
+}
+
+.dots {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-left: 2px;
+}
+
+.dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: dot-seq 1.2s ease-in-out infinite;
+}
+
+.dot:nth-child(1) { animation-delay: 0s; }
+.dot:nth-child(2) { animation-delay: 0.4s; }
+.dot:nth-child(3) { animation-delay: 0.8s; }
+
+@keyframes dot-seq {
+  0%, 30%, 100% { transform: scale(1); opacity: 0.4; }
+  15% { transform: scale(1.8); opacity: 1; }
 }
 </style>
