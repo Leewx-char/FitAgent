@@ -2,6 +2,7 @@
   <div class="auth-container">
     <div class="auth-card">
       <div class="auth-header">
+        <div class="auth-logo">F</div>
         <h1 class="auth-title">FitAgent</h1>
         <p class="auth-subtitle">你的专属运动教练</p>
       </div>
@@ -105,26 +106,40 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #F8FBFF 0%, var(--primary-light) 100%);
+  background: linear-gradient(160deg, #e8f4fd 0%, #F8FBFF 40%, var(--primary-light) 100%);
 }
 
 .auth-card {
   width: 400px;
-  padding: 40px;
+  padding: 44px 40px;
   background: white;
   border-radius: 16px;
-  box-shadow: 0 4px 24px rgba(66, 165, 245, 0.12);
+  box-shadow: 0 8px 32px rgba(66, 165, 245, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 .auth-header {
   text-align: center;
-  margin-bottom: 32px;
+  margin-bottom: 36px;
+}
+
+.auth-logo {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--primary), #1E88E5);
+  color: #fff;
+  font-size: 26px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
 }
 
 .auth-title {
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
-  color: var(--primary);
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 

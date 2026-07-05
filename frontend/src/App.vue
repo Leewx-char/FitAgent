@@ -57,6 +57,16 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(circle at 20% 80%, rgba(66, 165, 245, 0.03) 0%, transparent 50%),
+                    radial-gradient(circle at 80% 20%, rgba(30, 136, 229, 0.03) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
 a {
   text-decoration: none;
   color: var(--primary);

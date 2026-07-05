@@ -22,15 +22,25 @@ const routes = [
   },
   {
     path: '/',
-    name: 'Chat',
-    component: () => import('@/views/Chat.vue'),
+    component: () => import('@/views/AppLayout.vue'),
     meta: { requiresAuth: true },
-  },
-  {
-    path: '/profile',
-    name: 'Profile',
-    component: () => import('@/views/Profile.vue'),
-    meta: { requiresAuth: true },
+    children: [
+      {
+        path: '',
+        name: 'Chat',
+        component: () => import('@/views/Chat.vue'),
+      },
+      {
+        path: 'profile',
+        name: 'Profile',
+        component: () => import('@/views/Profile.vue'),
+      },
+      {
+        path: 'dashboard',
+        name: 'Dashboard',
+        component: () => import('@/views/Dashboard.vue'),
+      },
+    ],
   },
 ]
 

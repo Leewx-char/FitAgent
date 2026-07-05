@@ -171,10 +171,6 @@
           <n-button type="primary" @click="$router.push('/onboarding')">去创建</n-button>
         </div>
       </n-spin>
-
-      <div style="margin-top: 24px; text-align: center">
-        <n-button type="primary" text @click="$router.push('/')">返回聊天</n-button>
-      </div>
     </div>
   </div>
 </template>
@@ -354,10 +350,20 @@ onMounted(loadProfile)
 
 .profile-section h4 {
   font-size: 15px;
-  color: var(--primary-dark);
-  margin-bottom: 12px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--primary-light);
+  color: var(--text-primary);
+  font-weight: 600;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.profile-section h4::before {
+  content: '';
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--primary);
 }
 
 .profile-items {
@@ -396,9 +402,10 @@ onMounted(loadProfile)
 }
 
 .health-data-item {
-  background: #f7f8fa;
-  border-radius: 8px;
-  padding: 10px 12px;
+  background: #f8fafd;
+  border: 1px solid #e8f0f8;
+  border-radius: 10px;
+  padding: 12px 14px;
 }
 
 .health-data-item .data-label {
