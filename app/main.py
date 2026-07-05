@@ -21,7 +21,13 @@ from app.api.routers.sessions import router as sessions_router
 from app.api.routers.messages import router as messages_router
 from app.api.routers.profile import router as profile_router
 from app.api.routers.upload import router as upload_router
+from app.api.routers.fitness import router as fitness_router
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.middleware import SlowAPIMiddleware
 import os
+
+limiter = Limiter(key_func=get_remote_address)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -36,6 +42,7 @@ app.include_router(sessions_router)
 app.include_router(messages_router)
 app.include_router(profile_router)
 app.include_router(upload_router)
+app.include_router(fitness_router)
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8501").split(",")
 
@@ -46,6 +53,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.state.limiter = limiter
+app.add_exception_handler(429, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 @app.get("/api/health")
 def health_check():

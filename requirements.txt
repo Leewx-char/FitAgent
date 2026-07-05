@@ -43,3 +43,10 @@ Pillow==11.3.0
 streamlit==1.57.0
 
 rank-bm25==0.2.2
+
+# Testing
+pytest==8.4.2
+pytest-asyncio==0.26.0
+httpx==0.28.1
+
+slowapi==0.1.9

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.deps import get_db
 from app.models import User, UserProfile
-from app.schemas import ProfileCreate, ProfileUpdate, ProfileResponse
+from app.schemas import ProfileCreate, ProfileUpdate, ProfileResponse, HealthDataSchema
 from app.core.auth import get_current_user
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
@@ -59,8 +59,12 @@ def update_profile(body: ProfileUpdate, db: Session = Depends(get_db), current_u
     if "preferences" in update_data:
         profile.preferences = json.dumps(update_data.pop("preferences"), ensure_ascii=False)
     if "health_data" in update_data:
-        profile.health_data = json.dumps(update_data.pop("health_data"), ensure_ascii=False)
-
+        try:
+            cleaned = HealthDataSchema(**update_data.pop("health_data")).model_dump(
+        exclude_none=True)
+            profile.health_data = json.dumps(cleaned, ensure_ascii=False)
+        except Exception:
+            raise HTTPException(status_code=422, detail="健康数据格式不合法")
     # 剩余的普通字段直接赋值
     for key, value in update_data.items():
         setattr(profile, key, value)

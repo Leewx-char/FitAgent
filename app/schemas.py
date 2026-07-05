@@ -13,8 +13,11 @@
 """
 import json
 from datetime import datetime
+
+from anyio.streams import file
 from pydantic import field_validator
 from pydantic import BaseModel, Field
+from reportlab.lib.colors import fidlightblue
 
 
 class UserRegister(BaseModel):
@@ -156,3 +159,66 @@ class HealthDocUploadResponse(BaseModel):
 
 class HealthDataConfirmRequest(BaseModel):
     health_data: dict # 用户确认后的健康数据
+
+# 校验体检单数据，防止传入脏数据
+class HealthDataSchema(BaseModel):
+    height_cm: float | None = None
+    weight_kg: float | None = None
+    bmi: float | None = None
+    body_fat: float | None = None
+    heart_rate: int | None = None
+    blood_pressure: str | None = None
+    blood_sugar: float | None = None
+    cholesterol: float | None = None
+    alt: float | None = None
+    uric_acid: float | None = None
+    other_findings: list | None = None
+
+    @field_validator("heart_rate", mode="before")
+    @classmethod
+    def parse_int(cls, v):
+        if isinstance(v, str) and v.strip():
+            try:
+                return int(float(v))
+            except (ValueError, TypeError):
+                return v
+        return v
+
+    @field_validator("height_cm", "weight_kg", "bmi", "body_fat",
+                    "blood_sugar", "cholesterol", "alt", "uric_acid", mode="before")
+    @classmethod
+    def parse_float(cls, v):
+        if isinstance(v, str) and v.strip():
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                return v
+        return v
+
+class FitnessSyncRequest(BaseModel):
+    start_day: str = ""
+    end_day: str = ""
+
+class FitnessDataResponse(BaseModel):
+    id: int
+    user_id: int
+    date: str
+    data_type: str
+    data: dict
+    created_at: datetime
+    # 把 SQLAlchemy ORM 对象转成 JSON 返回
+    model_config = {"from_attributes": True}
+
+    @field_validator("date", mode="before")
+    @classmethod
+    def format_date(cls, v):
+        if hasattr(v, "isoformat"):
+            return v.isoformat()
+        return str(v)
+
+    @field_validator("data", mode="before")
+    @classmethod
+    def parse_json(cls, v):
+        if isinstance(v, str):
+            return json.loads(v)
+        return v

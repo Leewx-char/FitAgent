@@ -124,19 +124,19 @@ def _extract_text_from_pdf(pdf_path: str) -> str:
     try:
         # 打开 PDF 文件
         reader = PdfReader(pdf_path)
+        text_parts = []
+        # 遍历每一页
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                text_parts.append(t.strip())
+        # 最终拼接所有页的文字，用换行符分隔
+        return "\n".join(text_parts)
     except Exception as e:
         error_msg = str(e)
-        if "encrypted" in error_msg.lower() or "password" in error_msg.lower():
+        if any(kw in error_msg.lower() for kw in ("encrypted", "password", "not been decrypted")):
             raise ValueError("PDF文件已加密，请截图后以图片形式上传")
         raise
-    text_parts = []
-    # 遍历每一页
-    for page in reader.pages:
-        t = page.extract_text()
-        if t:
-            text_parts.append(t.strip())
-    # 最终拼接所有页的文字，用换行符分隔
-    return "\n".join(text_parts)
 
 # PDF转图片
 def _pdf_to_images(pdf_path: str) -> list[str]:

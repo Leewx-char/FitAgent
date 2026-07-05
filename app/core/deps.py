@@ -11,6 +11,8 @@
 """
 from app.core.database import SessionLocal
 from app.services.react_agent import ReactAgent
+from functools import lru_cache
+from app.services.coros_client import CorosClient
 
 def get_db():
     db = SessionLocal()
@@ -32,4 +34,16 @@ def get_agent():
     if _agent_instance is None:
         _agent_instance = ReactAgent()
     return _agent_instance
+
+
+@lru_cache(maxsize=1)
+def _coros_singleton():
+    return CorosClient()
+
+
+def get_coros():
+    """CorosClient 单例。用 lru_cache 而非模块级变量，保证线程安全
+    （CorosClient 创建子进程耗时 1-2s，并发窗口大，模块级变量方式
+    可能创建多个实例导致子进程泄漏）。"""
+    return _coros_singleton()
 

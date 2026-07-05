@@ -9,7 +9,9 @@
 
 三张表的关系链：User (1) → (N) Session (1) → (N) Message。
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, func, CHAR, Float
+from sqlalchemy import (Column, Integer, String,
+                        Text, DateTime, ForeignKey,
+                        func, CHAR, Float, Date, Index)
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -69,3 +71,17 @@ class Message(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     session = relationship("Session", back_populates="messages")
+
+class FitnessData(Base):
+    __tablename__ = "fitness_data"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    date = Column(Date, nullable=False)
+    data_type = Column(String(20), nullable=False)
+    data = Column(Text, default="{}")
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_fitness_user_date_type", "user_id", "date", "data_type", unique=True),
+    )
