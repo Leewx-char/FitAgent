@@ -45,3 +45,6 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+coros-mcp/
+.impeccable/
