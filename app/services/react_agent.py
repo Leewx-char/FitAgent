@@ -30,6 +30,31 @@ class ReactAgent:
 
     INVALID_CITY_VALUES = {"哪个城市", "什么城市", "哪座城市", "哪个市", "哪里", "哪儿"}
 
+    # 训练目标关键词（规则提取，固定类型少）
+    _GOAL_KEYWORDS = {
+        "增肌": ["增肌", "长肌肉", "变大", "变壮", "增重"],
+        "减脂": ["减脂", "减肥", "减重", "瘦身", "瘦下来", "掉秤"],
+        "塑形": ["塑形", "塑型", "线条", "紧致", "马甲线", "腹肌"],
+        "耐力": ["耐力", "体能", "心肺", "有氧"],
+    }
+
+    # 伤病关键词（规则提取，常见部位）
+    _INJURY_KEYWORDS = {
+        "膝盖伤": ["膝盖", "膝关节"],
+        "腰伤": ["腰", "腰椎", "腰间盘"],
+        "肩伤": ["肩", "肩关节", "肩袖"],
+        "手腕伤": ["手腕", "腕关节"],
+        "踝伤": ["脚踝", "踝关节", "崴脚"],
+        "颈椎": ["颈椎", "脖子"],
+    }
+
+    # 饮食偏好关键词
+    _DIET_KEYWORDS = {
+        "素食": ["素食", "吃素", "不吃肉"],
+        "低碳水": ["低碳水", "低碳", "生酮", "戒碳水"],
+        "高蛋白": ["高蛋白", "多吃肉", "多吃蛋"],
+    }
+
     def __init__(self):
         self.agent = create_agent(
             model=get_chat_model(),
@@ -60,6 +85,7 @@ class ReactAgent:
             if not content:
                 continue
 
+            # 城市提取
             for city in cls.COMMON_CITIES:
                 if city in content:
                     facts["city"] = city
@@ -75,6 +101,36 @@ class ReactAgent:
                 candidate_city = city_match.group(1)
                 if candidate_city not in cls.INVALID_CITY_VALUES:
                     facts["city"] = candidate_city
+
+            # 训练目标提取
+            for goal, keywords in cls._GOAL_KEYWORDS.items():
+                for kw in keywords:
+                    if kw in content:
+                        facts["training_goal"] = goal
+                        break
+                if facts.get("training_goal") == goal:
+                    break
+
+            # 伤病史提取
+            for injury, keywords in cls._INJURY_KEYWORDS.items():
+                for kw in keywords:
+                    if kw in content:
+                        facts.setdefault("injuries", []).append(injury)
+                        break
+
+            # 饮食偏好提取
+            for diet, keywords in cls._DIET_KEYWORDS.items():
+                for kw in keywords:
+                    if kw in content:
+                        facts["diet_pref"] = diet
+                        break
+                if "diet_pref" in facts:
+                    break
+
+        # 去重 injuries
+        if "injuries" in facts:
+            facts["injuries"] = list(set(facts["injuries"]))
+
         return facts
 
     def execute_stream(self, messages: list[dict], user_id: int | None = None, city: str = ""):
