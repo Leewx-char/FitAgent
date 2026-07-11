@@ -8,12 +8,14 @@
  """
 import json
 import asyncio
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session as DBSession
 from app.schemas import ChatRequest
 from app.core.deps import get_db, get_agent
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, decode_access_token
 from app.models import Session as SessionModel, Message, User
 from app.services.react_agent import ReactAgent
 from app.services.agent_tools import _user_context
@@ -34,6 +36,21 @@ def _redact_sensitive(text: str) -> str:
     return text
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+
+def _rate_limit_key(request: Request) -> str:
+    """按登录用户限流：从 Authorization 头解出 user_id 作为限流键。
+    无有效 token 时回退到客户端 IP（防御性，chat 实际要求登录）。
+    这样同一 IP 下的多个用户各自独立计数，单用户也无法靠换 IP 绕过。"""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        payload = decode_access_token(auth[7:])
+        if payload and payload.get("user_id"):
+            return f"user:{payload['user_id']}"
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_rate_limit_key)
 
 async def sse_generator(
     agent: ReactAgent,
@@ -114,23 +131,25 @@ async def sse_generator(
     yield "data: [DONE]\n\n"
 
 @router.post("")
+@limiter.limit("20/minute")
 async def chat(
-    request: ChatRequest,
+    request: Request,
+    payload: ChatRequest,
     db: DBSession = Depends(get_db),
     agent: ReactAgent = Depends(get_agent),
     current_user: User = Depends(get_current_user),
 ):
     # 0. 输入校验：防 token 炸弹 + 空消息
-    if not request.message or not request.message.strip():
+    if not payload.message or not payload.message.strip():
         return {"code": 400, "message": "消息不能为空", "data": None}
-    if len(request.message) > 4000:
-        return {"code": 400, "message": f"消息过长（{len(request.message)}字符），请精简后重试（上限4000字符）", "data": None}
+    if len(payload.message) > 4000:
+        return {"code": 400, "message": f"消息过长（{len(payload.message)}字符），请精简后重试（上限4000字符）", "data": None}
 
     # 1. 如果没有 session_id，自动创建新会话
-    if request.session_id:
+    if payload.session_id:
         session = (
             db.query(SessionModel)
-            .filter(SessionModel.id == request.session_id, SessionModel.user_id == current_user.id)
+            .filter(SessionModel.id == payload.session_id, SessionModel.user_id == current_user.id)
             .first()
         )
         if not session:
@@ -149,7 +168,7 @@ async def chat(
     db.add(Message(
         session_id=session_id,
         role="user",
-        content=request.message,
+        content=payload.message,
     ))
     db.commit()
     # 3. 从数据库加载历史消息，拼接新消息
@@ -168,7 +187,7 @@ async def chat(
     _user_context.set({"user_id": current_user.id, "city": session_facts.get("city", "") or ""})
     # 4. 流式响应
     return StreamingResponse(
-        sse_generator(agent, messages, db, session_id, request.message, current_user),
+        sse_generator(agent, messages, db, session_id, payload.message, current_user),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -31,3 +31,16 @@ class TestChat:
         data = resp.json()
         assert data['code'] == 404
         assert '不存在' in data['message']
+
+    def test_chat_rate_limit(self, auth_client, agent_mock):
+        """同一用户超过 20/分钟 → 触发限流返回 429。
+        每个 auth_client 是独立新用户（独立限流桶），不影响其他测试。"""
+        # execute_stream 会被多次调用，每次返回新的空迭代器，避免迭代器耗尽
+        agent_mock.execute_stream.side_effect = lambda *a, **k: iter([])
+        statuses = [
+            auth_client.post('/api/chat', json={'message': f'msg{i}'}).status_code
+            for i in range(21)
+        ]
+        assert statuses[:20] == [200] * 20  # 前 20 次放行
+        assert statuses[20] == 429          # 第 21 次被限流
+
