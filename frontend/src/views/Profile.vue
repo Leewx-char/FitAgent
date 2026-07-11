@@ -255,7 +255,9 @@ async function loadProfile() {
   try {
     await profileStore.fetchProfile()
     profile.value = profileStore.profile
-  } catch {
+  } catch (e) {
+    console.error('加载 profile 失败:', e)
+    message.error('加载档案失败')
     profile.value = null
   } finally {
     loading.value = false

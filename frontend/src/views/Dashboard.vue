@@ -79,6 +79,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useMessage } from 'naive-ui'
 import * as echarts from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
@@ -136,6 +137,7 @@ const sleepRecords = ref([])
 const activities = ref([])
 const loading = ref(true)
 const syncing = ref(false)
+const message = useMessage()
 
 const tloadChartRef = ref(null)
 const sleepChartRef = ref(null)
@@ -250,6 +252,7 @@ async function loadData() {
     buildSleepChart()
   } catch (e) {
     console.error('加载运动数据失败:', e)
+    message.error('加载运动数据失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -262,6 +265,7 @@ async function handleSync() {
     await loadData()
   } catch (e) {
     console.error('同步失败:', e)
+    message.error('同步失败，请稍后重试')
   } finally {
     syncing.value = false
   }

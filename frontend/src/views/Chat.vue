@@ -139,9 +139,13 @@
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { uploadHealthDoc, updateProfile } from '@/api/profile'
+
+marked.setOptions({ breaks: true, gfm: true })
 
 const router = useRouter()
 const message = useMessage()
@@ -195,19 +199,7 @@ const quickActions = [
 
 function renderMarkdown(text) {
   if (!text) return ''
-  let html = text
-  html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
-  html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>')
-  html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>')
-  html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>')
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>')
-  html = html.replace(/^(\d+)\. (.+)$/gm, '<li class="ol-item">$2</li>')
-  html = html.replace(/^\- (.+)$/gm, '<li>$1</li>')
-  html = html.replace(/((?:<li[^>]*>.*<\/li>\s*)+)/g, '<ul>$1</ul>')
-  html = html.replace(/\n/g, '<br>')
-  return html
+  return DOMPurify.sanitize(marked.parse(text))
 }
 
 async function scrollToBottom() {
@@ -238,7 +230,7 @@ function sendMessage(text) {
   toolChain.value = []
   scrollToBottom()
 
-  const token = localStorage.getItem('token')
+  const token = authStore.token
   const sessionId = chatStore.currentSessionId || ''
 
   fetch('/api/chat', {
@@ -255,8 +247,7 @@ function sendMessage(text) {
     .then((response) => {
       if (response.status === 401) {
         streaming.value = false
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
+        authStore.logout()
         router.push('/login')
         message.error('登录已过期，请重新登录')
         return null

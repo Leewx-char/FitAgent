@@ -1,16 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getSessions } from '@/api/chat'
 
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref([])
   const currentSessionId = ref(null)
   const messages = ref([])
-
-  async function fetchSessions() {
-    const res = await getSessions()
-    sessions.value = res.data
-  }
 
   function setMessages(msgs) {
     messages.value = msgs
@@ -37,7 +31,6 @@ export const useChatStore = defineStore('chat', () => {
     sessions,
     currentSessionId,
     messages,
-    fetchSessions,
     setMessages,
     addMessage,
     updateLastAssistantMessage,

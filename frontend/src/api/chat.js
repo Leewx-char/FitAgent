@@ -15,7 +15,3 @@ export function deleteSession(sessionId) {
 export function getMessages(sessionId) {
   return api.get(`/sessions/${sessionId}/messages`)
 }
-
-export function chatMessage(message, sessionId = null) {
-  return api.post('/chat', { message, session_id: sessionId })
-}
