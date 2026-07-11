@@ -11,10 +11,11 @@
 每个请求的执行顺序：CORS → 异常处理器 → 路由 → 依赖注入 → 业务逻辑
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.exception_handlers import register_exception_handlers
 from app.core.database import engine, Base
+from app.utils.bootstrap import validate_runtime
 from app.api.routers.chat import router as chat_router
 from app.api.routers.auth import router as auth_router
 from app.api.routers.sessions import router as sessions_router
@@ -25,12 +26,23 @@ from app.api.routers.fitness import router as fitness_router
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from contextvars import ContextVar
+import uuid
 import os
+import time
+
+request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 
 limiter = Limiter(key_func=get_remote_address)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    issues = validate_runtime()
+    if issues:
+        for issue in issues:
+            print(f"[启动检查失败] {issue}")
+        raise RuntimeError(f"启动检查未通过，共 {len(issues)} 个问题，请修复后重试")
     Base.metadata.create_all(bind=engine)
     yield
 
@@ -56,6 +68,20 @@ app.add_middleware(
 app.state.limiter = limiter
 app.add_exception_handler(429, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+# request_id 中间件：每次请求生成唯一 ID，注入响应头 + ContextVar（供日志/业务代码使用）
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    rid = uuid.uuid4().hex[:16]
+    request_id_var.set(rid)
+    request.state.request_id = rid
+    start = time.time()
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = rid
+    # 记录请求耗时（结构化日志，方便排查慢请求）
+    duration_ms = (time.time() - start) * 1000
+    response.headers["X-Response-Time-Ms"] = f"{duration_ms:.0f}"
+    return response
 
 @app.get("/api/health")
 def health_check():

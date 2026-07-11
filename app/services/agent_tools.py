@@ -1,10 +1,12 @@
 from datetime import datetime
 import json
 import os
+import time
 from urllib.parse import urlencode
 from urllib.request import urlopen
 from urllib.error import URLError
 from contextvars import ContextVar
+from functools import wraps
 from langchain_core.tools import tool
 from app.services.rag_service import RagSummarizeService
 from app.utils.logger_handler import logger
@@ -14,6 +16,36 @@ from app.models import UserProfile
 rag = RagSummarizeService()
 
 _user_context: ContextVar[dict] = ContextVar("user_context", default={})
+
+
+def _with_retry(max_retries: int = 1, delay: float = 1.0):
+    """工具调用重试装饰器：对外部 API 的瞬时故障重试一次。
+    只重试网络类异常（URLError、ConnectionError），业务异常直接透传。"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exc = None
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except (URLError, ConnectionError, TimeoutError, OSError) as e:
+                    last_exc = e
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"工具 {func.__name__} 调用失败（第{attempt + 1}次），"
+                            f"{delay}秒后重试：{str(e)}"
+                        )
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"工具 {func.__name__} 重试{max_retries}次后仍失败：{str(e)}")
+            # 所有重试均失败 → 返回降级提示
+            return json.dumps({
+                "status": "error",
+                "message": f"服务暂时不可用，已重试{max_retries}次仍失败",
+                "suggestion": "可以跳过此工具，基于已有信息继续回复，或提示用户稍后重试",
+            }, ensure_ascii=False)
+        return wrapper
+    return decorator
 
 def _request_json(base_url: str, params: dict) -> dict:
     url = f"{base_url}?{urlencode(params)}"
@@ -29,71 +61,68 @@ SOURCE_MAP = {
 }
 
 @tool(description="从知识库检索专业资料原始片段。可选通过source指定领域缩小范围：动作指南、营养学、训练计划、损伤预防、基础知识")
+@_with_retry()
 def rag_summarize(query: str, source: str = "") -> str:
     source_filter = SOURCE_MAP.get(source) if source else None
     return rag.rag_summarize(query, source_filter)
 
 @tool(description="获取指定城市的实时天气信息，返回温度、体感温度、降水、风速等数据")
+@_with_retry()
 def get_weather(city: str):
     city = city.strip()
     if not city:
-        return "城市不能为空。"
+        return json.dumps({"status": "error", "message": "城市不能为空", "suggestion": "请提供有效的城市名称"}, ensure_ascii=False)
 
-    try:
-        geocode_data = _request_json(
-            "https://geocoding-api.open-meteo.com/v1/search",
-            {"name": city, "count": 1, "language": "zh", "format": "json"},
-        )
-        results = geocode_data.get("results") or []
-        if not results:
-            return f"未查询到城市 {city} 的地理信息，请确认城市名称。"
+    # 网络异常由 @_with_retry 兜底重试，这里只处理业务异常
+    geocode_data = _request_json(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        {"name": city, "count": 1, "language": "zh", "format": "json"},
+    )
+    results = geocode_data.get("results") or []
+    if not results:
+        return f"未查询到城市 {city} 的地理信息，请确认城市名称。"
 
-        location = results[0]
-        latitude = location["latitude"]
-        longitude = location["longitude"]
-        resolved_name = location.get("name", city)
-        admin1 = location.get("admin1", "")
-        country = location.get("country", "")
+    location = results[0]
+    latitude = location["latitude"]
+    longitude = location["longitude"]
+    resolved_name = location.get("name", city)
+    admin1 = location.get("admin1", "")
+    country = location.get("country", "")
 
-        weather_data = _request_json(
-            "https://api.open-meteo.com/v1/forecast",
-            {
-                "latitude": latitude,
-                "longitude": longitude,
-                "current": "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,wind_speed_10m,weather_code",
-                "timezone": "auto",
-            },
-        )
-        current = weather_data.get("current") or {}
-        if not current:
-            return f"已定位到 {resolved_name}，但未获取到实时天气数据。"
+    weather_data = _request_json(
+        "https://api.open-meteo.com/v1/forecast",
+        {
+            "latitude": latitude,
+            "longitude": longitude,
+            "current": "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,wind_speed_10m,weather_code",
+            "timezone": "auto",
+        },
+    )
 
-        weather_code_map = {
-            0: "晴", 1: "大部晴朗", 2: "局部多云", 3: "阴",
-            45: "雾", 48: "冻雾",
-            51: "小毛毛雨", 53: "毛毛雨", 55: "强毛毛雨",
-            61: "小雨", 63: "中雨", 65: "大雨",
-            71: "小雪", 73: "中雪", 75: "大雪",
-            80: "阵雨", 81: "较强阵雨", 82: "强阵雨",
-            95: "雷暴",
-        }
-        weather_text = weather_code_map.get(current.get("weather_code"), "未知天气")
+    current = weather_data.get("current") or {}
+    if not current:
+        return f"已定位到 {resolved_name}，但未获取到实时天气数据。"
 
-        location_text = ", ".join(filter(None, [resolved_name, admin1, country]))
-        return (
-            f"{location_text} 当前天气：{weather_text}；"
-            f"温度：{current.get('temperature_2m')}°C，"
-            f"体感温度：{current.get('apparent_temperature')}°C，"
-            f"相对湿度：{current.get('relative_humidity_2m')}%，"
-            f"降水：{current.get('precipitation')} mm，"
-            f"风速：{current.get('wind_speed_10m')} km/h。"
-        )
-    except URLError as e:
-        logger.warning(f"天气查询失败：{str(e)}")
-        return f"天气服务当前不可用，无法获取 {city} 的实时天气。"
-    except Exception as e:
-        logger.error(f"天气查询异常：{str(e)}", exc_info=True)
-        return f"获取 {city} 天气时发生异常。"
+    weather_code_map = {
+        0: "晴", 1: "大部晴朗", 2: "局部多云", 3: "阴",
+        45: "雾", 48: "冻雾",
+        51: "小毛毛雨", 53: "毛毛雨", 55: "强毛毛雨",
+        61: "小雨", 63: "中雨", 65: "大雨",
+        71: "小雪", 73: "中雪", 75: "大雪",
+        80: "阵雨", 81: "较强阵雨", 82: "强阵雨",
+        95: "雷暴",
+    }
+    weather_text = weather_code_map.get(current.get("weather_code"), "未知天气")
+
+    location_text = ", ".join(filter(None, [resolved_name, admin1, country]))
+    return (
+        f"{location_text} 当前天气：{weather_text}；"
+        f"温度：{current.get('temperature_2m')}°C，"
+        f"体感温度：{current.get('apparent_temperature')}°C，"
+        f"相对湿度：{current.get('relative_humidity_2m')}%，"
+        f"降水：{current.get('precipitation')} mm，"
+        f"风速：{current.get('wind_speed_10m')} km/h。"
+    )
 
 
 @tool(description="获取当前会话绑定的城市名称。未绑定时明确返回未知，不允许编造。")
@@ -150,7 +179,11 @@ def get_user_profile():
 
 @tool(description="无入参，当识别到用户想生成近期运动总结报告时调用，触发报告模式切换。仅在用户明确要求生成报告/总结时调用。")
 def trigger_report():
-    return "trigger_report已调用"
+    """信号工具：调用后中间件（middleware.py 的 monitor_tool）会把
+    request.runtime.context['report'] 置为 True，下一轮 LLM 调用
+    通过 report_prompt_switch 切到 report_prompt。
+    本工具不返回数据，仅触发 prompt 切换。"""
+    return "已切换到报告模式，请基于用户近期运动数据生成报告"
 
 if __name__ == '__main__':
     print(rag_summarize.invoke({"query": "深蹲标准动作"}))

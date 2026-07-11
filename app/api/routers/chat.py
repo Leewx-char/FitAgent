@@ -19,6 +19,19 @@ from app.services.react_agent import ReactAgent
 from app.services.agent_tools import _user_context
 from app.utils.logger_handler import logger
 import uuid
+import re
+
+# 敏感信息脱敏正则
+_SENSITIVE_PATTERNS = [
+    (re.compile(r'1[3-9]\d{9}'), '[手机号已隐藏]'),
+    (re.compile(r'\d{17}[\dXx]'), '[身份证号已隐藏]'),
+    (re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'), '[邮箱已隐藏]'),
+]
+
+def _redact_sensitive(text: str) -> str:
+    for pattern, replacement in _SENSITIVE_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -59,6 +72,7 @@ async def sse_generator(
                 event = json.loads(chunk)
             except (json.JSONDecodeError, TypeError):
                 # 不是 JSON（兜底），当纯文本处理
+                chunk = _redact_sensitive(chunk)
                 full_response += chunk
                 yield f"data: {json.dumps({'type': 'text', 'content': chunk}, ensure_ascii=False)}\n\n"
                 continue
@@ -67,7 +81,7 @@ async def sse_generator(
                 yield f"data: {json.dumps({'type': 'tool', 'name': event.get('name', '')}, ensure_ascii=False)}\n\n"
             elif event.get("type") == "text":
                 # 文本增量：只有新增的部分
-                content = event.get("content", "")
+                content = _redact_sensitive(event.get("content", ""))
                 full_response += content
                 yield f"data: {json.dumps({'type': 'text', 'content': content}, ensure_ascii=False)}\n\n"
     except Exception as e:
@@ -106,6 +120,12 @@ async def chat(
     agent: ReactAgent = Depends(get_agent),
     current_user: User = Depends(get_current_user),
 ):
+    # 0. 输入校验：防 token 炸弹 + 空消息
+    if not request.message or not request.message.strip():
+        return {"code": 400, "message": "消息不能为空", "data": None}
+    if len(request.message) > 4000:
+        return {"code": 400, "message": f"消息过长（{len(request.message)}字符），请精简后重试（上限4000字符）", "data": None}
+
     # 1. 如果没有 session_id，自动创建新会话
     if request.session_id:
         session = (
@@ -139,9 +159,12 @@ async def chat(
         .order_by(Message.created_at)
         .all()
     )
-    messages = [{"role": m.role, "content": m.content} for m in history_messages]
-    # 从对话中提取城市等上下文信息
-    session_facts = ReactAgent._extract_session_facts(messages)
+    all_messages = [{"role": m.role, "content": m.content} for m in history_messages]
+    # 从对话中提取城市等上下文信息（用全量消息，保证提取准确）
+    session_facts = ReactAgent._extract_session_facts(all_messages)
+    # 滑动窗口：只保留最近 20 轮（40 条消息），防止长对话 token 爆炸
+    MAX_ROUNDS = 20
+    messages = all_messages[-(MAX_ROUNDS * 2):] if len(all_messages) > MAX_ROUNDS * 2 else all_messages
     _user_context.set({"user_id": current_user.id, "city": session_facts.get("city", "") or ""})
     # 4. 流式响应
     return StreamingResponse(
@@ -150,6 +173,7 @@ async def chat(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
             "X-Session-Id": session_id,
         },
     )

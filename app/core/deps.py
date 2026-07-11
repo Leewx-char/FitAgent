@@ -26,14 +26,11 @@ def get_db():
         db.close()
 
 
-_agent_instance = None
-
-
 def get_agent():
-    global _agent_instance
-    if _agent_instance is None:
-        _agent_instance = ReactAgent()
-    return _agent_instance
+    """每次请求创建新的 ReactAgent 实例（实例级隔离），底层 ChatTongyi 模型
+    通过 get_chat_model() 的 @lru_cache 复用连接（连接级复用）。
+    避免全局单例在并发请求时 LangChain agent 内部状态交叉污染。"""
+    return ReactAgent()
 
 
 @lru_cache(maxsize=1)

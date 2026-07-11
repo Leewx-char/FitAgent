@@ -47,6 +47,7 @@ class RagSummarizeService(object):
             current_count = self.vector_store.vector_store._collection.count()
         except Exception as e:
             logger.error(f"获取向量库文档数量失败：{str(e)}", exc_info=True)
+            current_count = 0
 
         if current_count > 0:
             logger.info(f"当前向量库已有文档，数量：{current_count}")
