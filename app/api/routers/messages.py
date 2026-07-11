@@ -5,9 +5,9 @@ from app.models import Session as SessionModel, Message, User
 from app.schemas import MessageResponse
 from app.core.auth import get_current_user
 
-router = APIRouter(prefix="/api/sessions", tags=["messages"])
+router = APIRouter(prefix="/api/sessions/{session_id}/messages", tags=["messages"])
 
-@router.get("/{session_id}/messages", response_model=list[MessageResponse])
+@router.get("", response_model=list[MessageResponse])
 def list_messages(
     session_id: str,
     skip: int = 0,

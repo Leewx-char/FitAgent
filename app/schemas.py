@@ -13,11 +13,8 @@
 """
 import json
 from datetime import datetime
-
-from anyio.streams import file
 from pydantic import field_validator
 from pydantic import BaseModel, Field
-from reportlab.lib.colors import fidlightblue
 
 
 class UserRegister(BaseModel):
@@ -156,9 +153,6 @@ class HealthDocUploadResponse(BaseModel):
     doc_type: str = ""
     data: dict = {} # 提取的健康数据 JSON
     message: str = ""
-
-class HealthDataConfirmRequest(BaseModel):
-    health_data: dict # 用户确认后的健康数据
 
 # 校验体检单数据，防止传入脏数据
 class HealthDataSchema(BaseModel):

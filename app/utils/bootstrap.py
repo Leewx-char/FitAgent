@@ -1,5 +1,5 @@
 import os
-from app.utils.config_handler import agent_conf, prompts_conf, chroma_conf, rag_conf
+from app.utils.config_handler import prompts_conf, chroma_conf, rag_conf
 from app.utils.path_tool import get_abs_path
 
 def validate_runtime() -> list[str]:
@@ -12,10 +12,8 @@ def validate_runtime() -> list[str]:
     # 检查 2：关键文件路径
     required_paths = [
         ("主提示词", prompts_conf.get("main_prompt_path")),
-        ("RAG 提示词", prompts_conf.get("rag_summarize_prompt_path")),
         ("报告提示词", prompts_conf.get("report_prompt_path")),
         ("知识库目录", chroma_conf.get("data_path")),
-        ("外部数据文件", agent_conf.get("external_data_path")),
     ]
     for label, relative_path in required_paths:
         if not relative_path:
@@ -38,7 +36,6 @@ def validate_runtime() -> list[str]:
     # 检查 5: 提示词编码
     prompts_key = (
         prompts_conf.get("main_prompt_path"),
-        prompts_conf.get("rag_summarize_prompt_path"),
         prompts_conf.get("report_prompt_path"),
     )
     for relative_path in prompts_key:
