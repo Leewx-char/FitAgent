@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 import os
 import time
+import threading
 from urllib.parse import urlencode
 from urllib.request import urlopen
 from urllib.error import URLError
@@ -18,18 +19,29 @@ rag = RagSummarizeService()
 _user_context: ContextVar[dict] = ContextVar("user_context", default={})
 
 
+_NETWORK_ERRORS = (URLError, ConnectionError, TimeoutError, OSError)
+
+
+def _degradation_json(message: str,
+                      suggestion: str = "可以跳过此工具，基于已有信息继续回复，或提示用户稍后重试") -> str:
+    """降级兜底：外部服务不可用时返回结构化错误，供 LLM 自然融入回复。"""
+    return json.dumps({
+        "status": "error",
+        "message": message,
+        "suggestion": suggestion,
+    }, ensure_ascii=False)
+
+
 def _with_retry(max_retries: int = 1, delay: float = 1.0):
-    """工具调用重试装饰器：对外部 API 的瞬时故障重试一次。
-    只重试网络类异常（URLError、ConnectionError），业务异常直接透传。"""
+    """纯重试层：对外部 API 的瞬时故障重试 N 次。只重试网络类异常，
+    业务异常直接透传；最终仍失败则 re-raise，交给外层熔断/降级处理。"""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            last_exc = None
             for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
-                except (URLError, ConnectionError, TimeoutError, OSError) as e:
-                    last_exc = e
+                except _NETWORK_ERRORS as e:
                     if attempt < max_retries:
                         logger.warning(
                             f"工具 {func.__name__} 调用失败（第{attempt + 1}次），"
@@ -38,14 +50,82 @@ def _with_retry(max_retries: int = 1, delay: float = 1.0):
                         time.sleep(delay)
                     else:
                         logger.error(f"工具 {func.__name__} 重试{max_retries}次后仍失败：{str(e)}")
-            # 所有重试均失败 → 返回降级提示
-            return json.dumps({
-                "status": "error",
-                "message": f"服务暂时不可用，已重试{max_retries}次仍失败",
-                "suggestion": "可以跳过此工具，基于已有信息继续回复，或提示用户稍后重试",
-            }, ensure_ascii=False)
+                        raise  # 交给外层熔断器记账 + 降级
         return wrapper
     return decorator
+
+
+class CircuitBreaker:
+    """熔断器：连续失败达阈值后置 OPEN（快速失败，不再真调外部服务），
+    冷却期满进 HALF_OPEN 放行一次试探，成功→CLOSED 恢复，失败→重新 OPEN。
+
+    状态机：CLOSED --失败达阈值--> OPEN --冷却超时--> HALF_OPEN --成功--> CLOSED
+                                                          └--失败--> OPEN
+    """
+    def __init__(self, name: str, failure_threshold: int = 3, recovery_timeout: float = 30.0):
+        self.name = name
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.state = "closed"
+        self.failure_count = 0
+        self.opened_at = 0.0
+        self._lock = threading.Lock()
+
+    def allow(self) -> bool:
+        """是否放行本次调用。OPEN 且冷却未满 → 拒绝（快速失败）。"""
+        with self._lock:
+            if self.state == "open":
+                if time.time() - self.opened_at >= self.recovery_timeout:
+                    self.state = "half_open"  # 冷却结束，放一次试探
+                    return True
+                return False
+            return True  # closed / half_open
+
+    def on_success(self):
+        with self._lock:
+            self.failure_count = 0
+            self.state = "closed"
+
+    def on_failure(self):
+        with self._lock:
+            self.failure_count += 1
+            # HALF_OPEN 下试探失败，或 CLOSED 下累计到阈值 → OPEN
+            if self.state == "half_open" or self.failure_count >= self.failure_threshold:
+                self.state = "open"
+                self.opened_at = time.time()
+
+
+def _with_circuit_breaker(name: str, failure_threshold: int = 3, recovery_timeout: float = 30.0):
+    """熔断 + 降级层：包在 _with_retry 外面。
+    - 熔断 OPEN 时直接返回降级 JSON，不真调（快速失败，给下游喘息）
+    - 放行时：调用异常→记失败+降级；成功→记成功。
+    每个被装饰函数持有独立熔断器（一个工具挂了不影响别的工具）。"""
+    breaker = CircuitBreaker(name, failure_threshold, recovery_timeout)
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if not breaker.allow():
+                logger.warning(f"熔断器[{name}]OPEN，快速失败，跳过真实调用")
+                return _degradation_json(
+                    f"服务[{name}]连续失败已熔断，冷却中",
+                    "暂时跳过此工具，基于已有信息继续回复，稍后会自动尝试恢复",
+                )
+            try:
+                result = func(*args, **kwargs)
+            except _NETWORK_ERRORS as e:
+                breaker.on_failure()
+                logger.error(
+                    f"熔断器[{name}]记录失败(state={breaker.state}, "
+                    f"count={breaker.failure_count})：{str(e)}"
+                )
+                return _degradation_json(f"服务[{name}]暂时不可用：{str(e)}")
+            else:
+                breaker.on_success()
+                return result
+        return wrapper
+    return decorator
+
 
 def _request_json(base_url: str, params: dict) -> dict:
     url = f"{base_url}?{urlencode(params)}"
@@ -61,12 +141,14 @@ SOURCE_MAP = {
 }
 
 @tool(description="从知识库检索专业资料原始片段。可选通过source指定领域缩小范围：动作指南、营养学、训练计划、损伤预防、基础知识")
+@_with_circuit_breaker(name="rag_summarize")
 @_with_retry()
 def rag_summarize(query: str, source: str = "") -> str:
     source_filter = SOURCE_MAP.get(source) if source else None
     return rag.rag_summarize(query, source_filter)
 
 @tool(description="获取指定城市的实时天气信息，返回温度、体感温度、降水、风速等数据")
+@_with_circuit_breaker(name="get_weather")
 @_with_retry()
 def get_weather(city: str):
     city = city.strip()
