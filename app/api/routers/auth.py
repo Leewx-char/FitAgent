@@ -4,6 +4,7 @@ from app.core.deps import get_db
 from app.models import User
 from app.schemas import UserRegister, UserResponse, TokenResponse
 from app.core.auth import hash_password, verify_password, create_access_token, get_current_user
+from app.utils.audit import audit_log
 from fastapi.security import OAuth2PasswordRequestForm
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -19,14 +20,18 @@ def register(body: UserRegister, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    audit_log("register", user_id=user.id, username=user.username)
     return user
 
 @router.post("/login", response_model=TokenResponse)
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.password_hash):
+        # 登录失败是关键安全事件（暴力破解线索），无 user_id 但记下尝试的用户名
+        audit_log("login", result="fail", username=form_data.username)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     access_token = create_access_token(data={"user_id": user.id, "username": user.username})
+    audit_log("login", user_id=user.id, username=user.username)
     return TokenResponse(access_token=access_token, token_type="bearer")
 
 @router.get("/me", response_model=UserResponse)

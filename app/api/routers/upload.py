@@ -4,6 +4,7 @@ from app.models import User
 from app.services.doc_parser import handle_upload
 from app.schemas import HealthDocUploadResponse
 from app.schemas import HealthDataSchema
+from app.utils.audit import audit_log
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from fastapi import Request
@@ -39,9 +40,19 @@ async def upload_health_doc(
         except Exception:
             result = {"status": "parse_failed", "message": "AI提取结果格式异常，请重试"}
 
+    status = result.get("status", "parse_failed")
+    # 上传健康文档涉及敏感数据，记审计（只记状态和文档类型，不记具体健康数值）
+    audit_log(
+        "health_doc_upload",
+        user_id=current_user.id,
+        result="success" if status == "ok" else "fail",
+        doc_status=status,
+        filename=file.filename,
+    )
+
     return HealthDocUploadResponse(
-        status=result.get("status", "parse_failed"),
+        status=status,
         doc_type=result.get("doc_type", ""),
-        data=result if result.get("status") == "ok" else {},
+        data=result if status == "ok" else {},
         message=result.get("message", ""),
     )

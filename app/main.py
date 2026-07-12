@@ -27,12 +27,10 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from contextvars import ContextVar
+from app.core.request_context import request_id_var
 import uuid
 import os
 import time
-
-request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 
 limiter = Limiter(key_func=get_remote_address)
 

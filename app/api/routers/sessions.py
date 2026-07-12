@@ -5,6 +5,7 @@ from app.core.deps import get_db
 from app.models import Session as SessionModel, User
 from app.schemas import SessionCreate, SessionResponse
 from app.core.auth import get_current_user
+from app.utils.audit import audit_log
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -41,6 +42,7 @@ def delete_session(session_id: str, db: Session = Depends(get_db), current_user:
         raise HTTPException(status_code=404, detail="会话不存在")
     db.delete(session)
     db.commit()
+    audit_log("session_delete", user_id=current_user.id, session_id=session_id)
     return {"message": "会话已删除"}
 
 @router.patch("/{session_id}", response_model=SessionResponse)
