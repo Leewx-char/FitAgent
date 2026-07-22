@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import json
 import os
 import time
@@ -12,7 +12,7 @@ from langchain_core.tools import tool
 from app.services.rag_service import RagSummarizeService
 from app.utils.logger_handler import logger
 from app.core.database import SessionLocal
-from app.models import UserProfile
+from app.models import UserProfile, FitnessData
 
 rag = RagSummarizeService()
 
@@ -258,6 +258,108 @@ def get_user_profile():
         )
     finally:
         db.close()
+
+
+@tool(description="获取用户近4周运动数据摘要：含平均静息心率、HRV、训练负荷、睡眠时长/质量、运动类型分布。当用户询问训练建议/运动报告/身体状态时调用，与用户画像和天气数据一起为个性化推荐提供数据基础。")
+def get_fitness_summary() -> str:
+    # 从请求级 ContextVar 取 user_id（chat 端点会在调用 Agent 前设置）
+    ctx = _user_context.get()
+    user_id = ctx.get("user_id")
+    if not user_id:
+        return "未获取到用户信息，请让用户先登录。"
+
+    # 手动开 DB 会话：工具函数在 LangChain Agent 内部调用，不走 FastAPI Depends 注入
+    db = SessionLocal()
+    try:
+        # 查近4周所有健身数据
+        since = date.today() - timedelta(weeks=4)
+        records = (
+            db.query(FitnessData)
+            .filter(FitnessData.user_id == user_id, FitnessData.date >= since)
+            .all()
+        )
+
+        if not records:
+            return "用户近4周暂无运动数据。请引导用户去 Dashboard 点击「同步」按钮获取高驰设备数据，同步后即可基于真实运动数据提供个性化建议。"
+
+        # 按 data_type 分三类，同时解析 JSON 字符串为 dict
+        daily_list, sleep_list, activities = [], [], []
+        for r in records:
+            parsed = json.loads(r.data) if isinstance(r.data, str) else r.data
+            if r.data_type == "daily_metrics":
+                daily_list.append(parsed)
+            elif r.data_type == "sleep":
+                sleep_list.append(parsed)
+            else:
+                activities.append(parsed)
+
+        lines = ["用户近4周运动数据摘要："]
+
+        # === 日指标聚合：恢复(rhr+hrv) + 负荷(tl+ratio) + 状态(tired) + 能力(vo2max) ===
+        if daily_list:
+            # filter 用 .get() 排掉缺字段的记录，值用 [] 直接取（filter 已保证 key 存在）
+            rhr_vals = [d["rhr"] for d in daily_list if d.get("rhr")]
+            hrv_vals = [d["avg_sleep_hrv"] for d in daily_list if d.get("avg_sleep_hrv")]
+            tl_vals = [d["training_load"] for d in daily_list if d.get("training_load")]
+            ratio_vals = [d["training_load_ratio"] for d in daily_list if d.get("training_load_ratio")]
+            tired_vals = [d["tired_rate"] for d in daily_list if d.get("tired_rate")]
+            vo2_vals = [d["vo2max"] for d in daily_list if d.get("vo2max")]
+
+            lines.append(f"- 有效日指标数据：{len(daily_list)}天")
+            if rhr_vals:
+                avg_rhr = sum(rhr_vals) / len(rhr_vals)
+                # 静息心率偏低=恢复好、偏高=疲劳；给 LLM 一个可直接引用的中文状态标签
+                label = "偏低，恢复良好" if avg_rhr < 60 else ("偏高，注意恢复" if avg_rhr > 75 else "正常")
+                lines.append(f"- 平均静息心率：{avg_rhr:.0f} bpm（{label}）")
+            if hrv_vals:
+                lines.append(f"- 平均睡眠HRV(RMSSD)：{sum(hrv_vals) / len(hrv_vals):.0f} ms")
+            if tl_vals:
+                lines.append(f"- 训练负荷：日均{sum(tl_vals) / len(tl_vals):.0f}，单日最高{max(tl_vals)}")
+            if ratio_vals:
+                avg_ratio = sum(ratio_vals) / len(ratio_vals)
+                # 急/慢性比 > 1.3 通常表示短期负荷远超长期平均，overtraining 风险信号
+                ratio_label = "急性负荷偏高，注意恢复" if avg_ratio > 1.3 else "负荷比例正常"
+                lines.append(f"- 训练负荷比(急性/慢性)：{avg_ratio:.1f}（{ratio_label}）")
+            if tired_vals:
+                lines.append(f"- 平均疲劳度：{sum(tired_vals) / len(tired_vals):.1f}")
+            if vo2_vals:
+                # VO2max 取最新值（非平均），反映当前心肺能力
+                lines.append(f"- 最新VO2max：{vo2_vals[-1]}")
+
+        # === 睡眠聚合：总时长 + 深度睡眠（恢复质量的核心指标）===
+        if sleep_list:
+            durations = [s["total_duration_minutes"] for s in sleep_list if s.get("total_duration_minutes")]
+            # phases 是嵌套 dict，用海象运算符 := 避免重复取值
+            deep_vals = []
+            for s in sleep_list:
+                if (phases := s.get("phases")) and phases.get("deep_minutes"):
+                    deep_vals.append(phases["deep_minutes"])
+            if durations:
+                lines.append(f"- 平均睡眠时长：{sum(durations) / len(durations) / 60:.1f}小时（{len(durations)}天）")
+            if deep_vals:
+                lines.append(f"- 平均深度睡眠：{sum(deep_vals) / len(deep_vals):.0f}分钟")
+
+        # === 运动聚合：次数 + 类型分布 + 总时长 ===
+        if activities:
+            sport_counts = {}
+            total_sec = 0
+            for a in activities:
+                # name 是用户在手表中看到的运动中文名（如"跑步""骑行"），比 sport_name 更友好
+                sport = a.get("name", "未知运动")
+                sport_counts[sport] = sport_counts.get(sport, 0) + 1
+                if a.get("duration_seconds"):
+                    total_sec += a["duration_seconds"]
+            lines.append(f"- 运动次数：{len(activities)}次")
+            # 按出现次数降序取前5种运动类型，避免长列表塞爆输出
+            top_sports = sorted(sport_counts.items(), key=lambda x: -x[-1])[:5]
+            lines.append(f"- 运动类型分布：{'、'.join(f'{k}x{v}' for k, v in top_sports)}")
+            if total_sec:
+                lines.append(f"- 总运动时长：{total_sec / 3600:.1f}小时")
+
+        return "\n".join(lines)
+    finally:
+        db.close()
+
 
 @tool(description="无入参，当识别到用户想生成近期运动总结报告时调用，触发报告模式切换。仅在用户明确要求生成报告/总结时调用。")
 def trigger_report():

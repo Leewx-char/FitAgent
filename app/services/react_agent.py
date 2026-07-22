@@ -8,7 +8,7 @@ from app.services.factory import get_chat_model
 from app.utils.prompt_loader import load_system_prompts
 from app.services.agent_tools import (rag_summarize,
                                       get_weather, get_user_location, get_user_id, trigger_report,
-                                      get_current_month, get_user_profile)
+                                      get_current_month, get_user_profile, get_fitness_summary)
 from app.services.middleware import monitor_tool, log_before_model, report_prompt_switch
 
 TOOL_DISPLAY = {
@@ -19,6 +19,7 @@ TOOL_DISPLAY = {
     "get_current_month": "获取月份",
     "get_user_id": "获取用户ID",
     "trigger_report": "生成报告",
+    "get_fitness_summary": "获取运动数据",
 }
 
 class ReactAgent:
@@ -60,7 +61,7 @@ class ReactAgent:
             model=get_chat_model(),
             system_prompt=load_system_prompts(),
             tools=[rag_summarize, get_weather, get_user_location,get_user_id,
-                   get_current_month, get_user_profile, trigger_report
+                   get_current_month, get_user_profile, get_fitness_summary, trigger_report
             ],
             middleware=[monitor_tool, log_before_model, report_prompt_switch]
         )
