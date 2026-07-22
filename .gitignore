@@ -29,6 +29,9 @@ env/
 chroma_db/
 *.sqlite3
 
+# Models (AGENTS.md requirement)
+models/
+
 # Logs
 logs/
 *.log

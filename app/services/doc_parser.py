@@ -17,7 +17,15 @@ import re
 import uuid
 import base64
 from pathlib import Path
-import magic
+try:
+    import magic
+except ImportError:
+    raise ImportError(
+        "缺少 python-magic 依赖。\n"
+        "Windows 用户请执行：pip install python-magic-bin\n"
+        "macOS 用户请执行：brew install libmagic\n"
+        "Linux 用户请执行：apt install libmagic1"
+    )
 from pypdf import PdfReader
 from pdf2image import convert_from_path
 from langchain_core.messages import HumanMessage

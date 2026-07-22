@@ -18,8 +18,8 @@ DEFAULT_LOG_FORMAT = logging.Formatter(
 
 def get_logger(
         name: str = "agent",
-        console_level: int = logging.INFO,
-        file_level: int = logging.DEBUG,
+        console_level: int = None,
+        file_level: int = None,
         log_file = None,
 ) -> logging.Logger:
     # Logger 是日志系统的"入口"和"管理者"
@@ -29,6 +29,13 @@ def get_logger(
     # 避免重复添加Handler
     if logger.handlers:
         return logger
+
+    if console_level is None:
+        level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+        console_level = getattr(logging, level_name, logging.INFO)
+    if file_level is None:
+        level_name = os.getenv("LOG_LEVEL", "DEBUG").upper()
+        file_level = getattr(logging, level_name, logging.DEBUG)
 
     # 控制台Handler，Handler 是实际的"执行者"，决定日志输出到哪里
     console_handler = logging.StreamHandler()

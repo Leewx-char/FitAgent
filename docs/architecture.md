@@ -1,7 +1,7 @@
 # FitAgent 架构说明
 
 > 本文聚焦**系统分层**与**Coros MCP 集成边界**。
-> UI 设计规范见 `DESIGN.md`，关键技术决策见 `DECISIONS.md`。
+> UI 设计规范见 `design.md`，关键技术决策见 `decisions.md`。
 
 ---
 

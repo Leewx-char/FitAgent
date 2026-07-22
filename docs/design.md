@@ -98,7 +98,7 @@ components:
 
 ## 2. Colors
 
-调色板以单一主色驱动，辅以严格的中性色阶梯和三个状态信号色。这是 PRODUCT.md 中"简洁"原则的直接体现：不超过10个语义色。
+调色板以单一主色驱动，辅以严格的中性色阶梯和三个状态信号色。这是 product.md 中"简洁"原则的直接体现：不超过10个语义色。
 
 ### Primary
 
@@ -127,7 +127,7 @@ components:
 
 **The Signal Inversion Rule.** 当 Clear Pool Blue 作为背景时（如主按钮），文字必须变为 Bright White。当它作为文字时，背景必须是无色中性。
 
-**The Anti-Cream Rule.** 页面背景必须是冷调近白（Glacier Mist），而不是暖调奶油色、沙色、米色。这是 PRODUCT.md 中"拒绝平庸 SaaS"的直接体现——暖调 body bg 是 2025-2026 AI 产出的最大信号。
+**The Anti-Cream Rule.** 页面背景必须是冷调近白（Glacier Mist），而不是暖调奶油色、沙色、米色。这是 product.md 中"拒绝平庸 SaaS"的直接体现——暖调 body bg 是 2025-2026 AI 产出的最大信号。
 
 ## 3. Typography
 
@@ -227,7 +227,7 @@ components:
 - **Don't** 嵌套卡片。一个卡片就够了；两层卡片永远不对。
 - **Don't** 使用 >16px 的圆角在卡片上。12px 是上限。
 - **Don't** 堆砌 hero metric 模板（大数字 + 小标签 + 蓝色渐变点缀）。这是 SaaS 陈词滥调。
-- **Don't** 在 body 背景使用暖调奶油色、沙色、米色。反例参照 PRODUCT.md 的"拒绝平庸 SaaS"。
+- **Don't** 在 body 背景使用暖调奶油色、沙色、米色。反例参照 product.md 的"拒绝平庸 SaaS"。
 - **Don't** 用玻璃拟态（backdrop-filter blur）做默认卡片风格。极罕见且有意义时才用，否则不用。
 - **Don't** 在页面顶部加小而全大写加宽字距的 "ABOUT" "FEATURES" "WORKOUTS" eyebrow。每屏一个 eyebrow 是 AI 语法。
 - **Don't** 让 AI 思考面板之外的任何区域出现 `backdrop-filter: blur()`。透明模糊是 AI 廉价感的第一信号。

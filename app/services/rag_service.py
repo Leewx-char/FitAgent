@@ -15,7 +15,7 @@ RAG提问的完整流程
 8.最后用Jaccard去重，取前六条数据作为结果
 """
 import re, threading
-from app.utils.config_handler import chroma_conf, synonyms_conf
+from app.utils.config_handler import get_chroma_config, get_synonyms_config
 from app.utils.logger_handler import logger
 from app.services.vector_store import VectorStoreService
 from app.services.bm25_retriever import BM25Retriever
@@ -27,14 +27,14 @@ class RagSummarizeService(object):
         self._collection_ready_checked = False
         self._repair_lock = threading.Lock()
 
-        self.top_k = chroma_conf["k"]
-        self.candidate_k = chroma_conf.get("candidate_k", max(self.top_k * 2, self.top_k))
-        self.min_relevance_score = chroma_conf.get("min_relevance_score", 0.0)
+        self.top_k = get_chroma_config()["k"]
+        self.candidate_k = get_chroma_config().get("candidate_k", max(self.top_k * 2, self.top_k))
+        self.min_relevance_score = get_chroma_config().get("min_relevance_score", 0.0)
 
         # ：查询扩展——当用户输入包含某个关键词时，自动把同义词也加入搜索词，提高知识库召回率。
-        self.synonym_map = synonyms_conf.get("expand", {})  # 同义词扩展
-        self.normalize_map = synonyms_conf.get("normalize", {})  # 归一化替换
-        self.stopwords = synonyms_conf.get("stopwords", set())  # 停用词
+        self.synonym_map = get_synonyms_config().get("expand", {})  # 同义词扩展
+        self.normalize_map = get_synonyms_config().get("normalize", {})  # 归一化替换
+        self.stopwords = get_synonyms_config().get("stopwords", set())  # 停用词
 
         self.bm25 = BM25Retriever()
 

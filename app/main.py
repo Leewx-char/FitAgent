@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.exception_handlers import register_exception_handlers
-from app.core.database import engine, Base
+from app.core.database import engine, Base, ensure_database_exists
 from app.utils.bootstrap import validate_runtime
 from app.api.routers.chat import router as chat_router
 from app.api.routers.auth import router as auth_router
@@ -41,10 +41,11 @@ async def lifespan(app: FastAPI):
         for issue in issues:
             print(f"[启动检查失败] {issue}")
         raise RuntimeError(f"启动检查未通过，共 {len(issues)} 个问题，请修复后重试")
+    ensure_database_exists()
     Base.metadata.create_all(bind=engine)
     yield
 
-app = FastAPI(title="智扫通 API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="FitAgent API", version="2.0.0", lifespan=lifespan)
 register_exception_handlers(app)
 app.include_router(chat_router)
 app.include_router(auth_router)
@@ -54,7 +55,7 @@ app.include_router(profile_router)
 app.include_router(upload_router)
 app.include_router(fitness_router)
 
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8501").split(",")
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
 
 app.add_middleware(
     CORSMiddleware,

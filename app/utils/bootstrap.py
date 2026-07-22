@@ -1,5 +1,5 @@
 import os
-from app.utils.config_handler import prompts_conf, chroma_conf, rag_conf
+from app.utils.config_handler import get_prompts_config, get_chroma_config, get_models_config
 from app.utils.path_tool import get_abs_path
 
 def validate_runtime() -> list[str]:
@@ -11,9 +11,9 @@ def validate_runtime() -> list[str]:
 
     # 检查 2：关键文件路径
     required_paths = [
-        ("主提示词", prompts_conf.get("main_prompt_path")),
-        ("报告提示词", prompts_conf.get("report_prompt_path")),
-        ("知识库目录", chroma_conf.get("data_path")),
+        ("主提示词", get_prompts_config().get("main_prompt_path")),
+        ("报告提示词", get_prompts_config().get("report_prompt_path")),
+        ("知识库目录", get_chroma_config().get("data_path")),
     ]
     for label, relative_path in required_paths:
         if not relative_path:
@@ -25,18 +25,19 @@ def validate_runtime() -> list[str]:
 
     # 检查 3: 模型配置
     for key in ("chat_model_name", "embedding_model_name"):
-        if not rag_conf.get(key):
+        if not get_models_config().get(key):
             issues.append(f"模型配置缺失：{key}")
 
     # 检查 4: 向量库配置
     for key in ("collection_name", "persist_directory", "data_path"):
-        if not chroma_conf.get(key):
+        if not get_chroma_config().get(key):
             issues.append(f"向量库配置缺失：{key}")
 
     # 检查 5: 提示词编码
+    prompts_cfg = get_prompts_config()
     prompts_key = (
-        prompts_conf.get("main_prompt_path"),
-        prompts_conf.get("report_prompt_path"),
+        prompts_cfg.get("main_prompt_path"),
+        prompts_cfg.get("report_prompt_path"),
     )
     for relative_path in prompts_key:
         if not relative_path:

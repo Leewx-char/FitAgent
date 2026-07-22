@@ -18,9 +18,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from starlette.exceptions import HTTPException
 
+import os
+
 from app.utils.logger_handler import logger
 
-DEBUG_MODE = True
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
 
 async def http_exception_handler(request: Request, exc: HTTPException):

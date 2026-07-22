@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import Optional, Union
 from langchain_community.embeddings import DashScopeEmbeddings
 
-from app.utils.config_handler import rag_conf
+from app.utils.config_handler import get_models_config
 from langchain_community.chat_models.tongyi import ChatTongyi
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
@@ -16,11 +16,11 @@ class BaseModelFactory(ABC):
 
 class ChatModelFactory(BaseModelFactory):
     def generator(self) -> BaseChatModel:
-        return ChatTongyi(model=rag_conf["chat_model_name"], max_tokens=4096, streaming=True)
+        return ChatTongyi(model=get_models_config()["chat_model_name"], max_tokens=4096, streaming=True)
 
 class EmbeddingsFactory(BaseModelFactory):
     def generator(self) -> Embeddings:
-        return DashScopeEmbeddings(model=rag_conf["embedding_model_name"])
+        return DashScopeEmbeddings(model=get_models_config()["embedding_model_name"])
 
 def _require_dashscope_api_key() -> None:
     """在真正初始化模型前检查，避免 import阶段静默失败。"""
@@ -42,4 +42,4 @@ def get_embedding_model() -> Embeddings:
 @lru_cache(maxsize=1)
 def get_vl_model() -> BaseChatModel:
     _require_dashscope_api_key()
-    return ChatTongyi(model="qwen-vl-plus", streaming=True, max_tokens=4096)
+    return ChatTongyi(model=get_models_config()["vl_model_name"], streaming=True, max_tokens=4096)

@@ -5,7 +5,7 @@ import os.path
 import hashlib
 from app.utils.file_handler import listdir_with_allowed_type, get_file_md5_hex
 from langchain_chroma import Chroma
-from app.utils.config_handler import chroma_conf
+from app.utils.config_handler import get_chroma_config
 from app.utils.file_handler import txt_loader, pdf_loader
 from app.utils.logger_handler import logger
 from app.utils.path_tool import get_abs_path
@@ -15,9 +15,9 @@ from langchain_core.documents import Document
 
 class VectorStoreService:
     def __init__(self):
-        self.persist_directory = get_abs_path(chroma_conf['persist_directory'])
+        self.persist_directory = get_abs_path(get_chroma_config()['persist_directory'])
         self.manifest_store = get_abs_path(
-            chroma_conf.get('manifest_store',
+            get_chroma_config().get('manifest_store',
             os.path.join(self.persist_directory, 'knowledge_manifest.json')),
         )
 
@@ -28,23 +28,23 @@ class VectorStoreService:
         self.vector_store = self.create_chroma()
 
         self.default_splitter = self._build_splitter(
-            chunk_size=chroma_conf['chunk_size'],
-            chunk_overlap=chroma_conf['chunk_overlap'],
+            chunk_size=get_chroma_config()['chunk_size'],
+            chunk_overlap=get_chroma_config()['chunk_overlap'],
         )
 
         self.txt_splitter = self._build_splitter(
-            chunk_size=chroma_conf.get('txt_chunk_size', chroma_conf['chunk_size']),
-            chunk_overlap=chroma_conf.get('txt_chunk_overlap', chroma_conf['chunk_overlap']),
+            chunk_size=get_chroma_config().get('txt_chunk_size', get_chroma_config()['chunk_size']),
+            chunk_overlap=get_chroma_config().get('txt_chunk_overlap', get_chroma_config()['chunk_overlap']),
         )
 
         self.pdf_splitter = self._build_splitter(
-            chunk_size=chroma_conf.get('pdf_chunk_size', chroma_conf['chunk_size']),
-            chunk_overlap=chroma_conf.get('pdf_chunk_overlap', chroma_conf['chunk_overlap']),
+            chunk_size=get_chroma_config().get('pdf_chunk_size', get_chroma_config()['chunk_size']),
+            chunk_overlap=get_chroma_config().get('pdf_chunk_overlap', get_chroma_config()['chunk_overlap']),
         )
 
     def create_chroma(self):
         return Chroma(
-            collection_name=chroma_conf["collection_name"],
+            collection_name=get_chroma_config()["collection_name"],
             embedding_function=get_embedding_model(),
             persist_directory=self.persist_directory
         )
@@ -53,7 +53,7 @@ class VectorStoreService:
         return RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
-            separators=chroma_conf['separators'],
+            separators=get_chroma_config()['separators'],
             length_function=len,
         )
 
@@ -71,7 +71,7 @@ class VectorStoreService:
 
 
     def get_retriever(self):
-        return self.vector_store.as_retriever(search_kwargs={"k": chroma_conf["k"]})
+        return self.vector_store.as_retriever(search_kwargs={"k": get_chroma_config()["k"]})
 
     def _load_manifest(self) -> dict:
         if not os.path.exists(self.manifest_store):
@@ -104,7 +104,7 @@ class VectorStoreService:
 
     def _cleanup_stale_documents(self, allowed_files_path):
         existing_sources = {
-            os.path.relpath(path, get_abs_path(chroma_conf["data_path"]))
+            os.path.relpath(path, get_abs_path(get_chroma_config()["data_path"]))
             for path in allowed_files_path
         }
 
@@ -169,8 +169,8 @@ class VectorStoreService:
             return []
 
         allowed_files_path: list[str] = listdir_with_allowed_type(
-            get_abs_path(chroma_conf["data_path"]),
-            tuple(chroma_conf["allow_knowledge_file_type"]),
+            get_abs_path(get_chroma_config()["data_path"]),
+            tuple(get_chroma_config()["allow_knowledge_file_type"]),
         )
         self._cleanup_stale_documents(allowed_files_path)
         manifest = self._load_manifest()
@@ -179,7 +179,7 @@ class VectorStoreService:
             # 获取文件的MD5
             md5_hex = get_file_md5_hex(path)
 
-            source = os.path.relpath(path, get_abs_path(chroma_conf["data_path"]))
+            source = os.path.relpath(path, get_abs_path(get_chroma_config()["data_path"]))
             if manifest.get(source, {}).get("md5") == md5_hex:
                 logger.info(f"[加载知识库]{path}内容已经存在知识库内，跳过")
                 continue

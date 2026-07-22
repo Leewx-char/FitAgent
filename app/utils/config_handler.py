@@ -1,50 +1,33 @@
 """
-yaml
-k: v
+YAML 配置文件加载模块。
+
+所有配置通过 @lru_cache 惰性加载，首次调用时读取 YAML 文件并缓存。
+测试中可通过 get_xxx_config.cache_clear() 重置。
 """
 import yaml
+from functools import lru_cache
 from app.utils.path_tool import get_abs_path
 
-def load_rag_config(
-        config_path: str=get_abs_path("config/rag.yml"),
-        encoding: str="utf-8",
-):
-    with open(config_path, "r", encoding=encoding) as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+def _load_yaml(relative_path: str) -> dict:
+    abs_path = get_abs_path(relative_path)
+    with open(abs_path, "r", encoding="utf-8") as f:
+        return yaml.load(f, Loader=yaml.SafeLoader)
 
-def load_chroma_config(
-        config_path: str=get_abs_path("config/chroma.yml"),
-        encoding: str="utf-8",
-):
-    with open(config_path, "r", encoding=encoding) as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+@lru_cache(maxsize=1)
+def get_models_config() -> dict:
+    return _load_yaml("config/models.yml")
 
-def load_prompts_config(
-        config_path: str=get_abs_path("config/prompts.yml"),
-        encoding: str="utf-8",
-):
-    with open(config_path, "r", encoding=encoding) as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+@lru_cache(maxsize=1)
+def get_chroma_config() -> dict:
+    return _load_yaml("config/chroma.yml")
 
-def load_agent_config(
-        config_path: str=get_abs_path("config/agent.yml"),
-        encoding: str="utf-8",
-):
-    with open(config_path, "r", encoding=encoding) as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+@lru_cache(maxsize=1)
+def get_synonyms_config() -> dict:
+    return _load_yaml("config/synonyms.yml")
 
-def load_synonyms_config(
-        config_path: str=get_abs_path("config/synonyms.yml"),
-        encoding: str="utf-8",
-):
-    with open(config_path, "r", encoding=encoding) as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
-
-synonyms_conf = load_synonyms_config()
-rag_conf = load_rag_config()
-chroma_conf = load_chroma_config()
-prompts_conf = load_prompts_config()
-agent_conf = load_agent_config()
+@lru_cache(maxsize=1)
+def get_prompts_config() -> dict:
+    return _load_yaml("config/prompts.yml")
 
 if __name__ == '__main__':
-    print(rag_conf["chat_model_name"])
+    print(get_models_config()["chat_model_name"])
