@@ -8,7 +8,7 @@
 |------|------|------|
 | Python | 3.11+ | |
 | Node.js | 20+ | |
-| MySQL | 8.0+ | |
+| MySQL | 8.0+ | 需提前安装并启动服务 |
 | [Windows] Visual C++ | 14.0+ | 编译 python-magic-bin 所需 |
 | [Windows] poppler | 最新版 | pdf2image 依赖,[下载地址](https://github.com/oschwartz10612/poppler-windows/releases),将 `bin/` 加入系统 PATH |
 
@@ -43,7 +43,7 @@ python -m venv .venv
 pip install -r requirements.txt
 pip install python-magic-bin   # Windows 必需,提供 libmagic DLL
 
-# 3. 启动后端
+# 3. 确保 MySQL 服务已启动，然后启动后端
 uvicorn app.main:app --reload --port 8000
 
 # 4. 启动前端（新终端）
@@ -62,7 +62,7 @@ cp .env.example .env
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 3. 启动后端
+# 3. 确保 MySQL 服务已启动，然后启动后端
 uvicorn app.main:app --reload --port 8000
 
 # 4. 启动前端
@@ -129,51 +129,6 @@ FitAgent/
 ```
 
 更多设计决策和技术细节请查看 [docs/decisions.md](./docs/decisions.md)。
-
-## 常见问题
-
-### Q: Windows 上 `.\.venv\Scripts\Activate.ps1` 报错 "running scripts is disabled"
-
-PowerShell 默认禁止执行脚本。以管理员身份运行 PowerShell,执行：
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-或者使用 cmd 替代：在 cmd 中运行 `.venv\Scripts\activate.bat`
-
-### Q: Windows 上启动报 `ImportError: No module named 'magic'`
-
-`python-magic` 在 Windows 上需要额外安装 DLL：
-```
-pip install python-magic-bin
-```
-
-### Q: 上传 PDF 时报 "Is poppler installed and in PATH?"
-
-Windows 需要手动安装 poppler。从 [poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases) 下载最新版,解压后将 `bin/` 目录加入系统 PATH 环境变量,重启终端即可。
-
-### Q: 启动报错 "Can't connect to MySQL server"
-
-1. 确认 MySQL 服务已启动（Windows：服务管理器查找 MySQL80）
-2. 检查 `.env` 中的 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASSWORD` 是否正确
-3. 应用启动时会自动创建 `zhitong` 数据库，无需手动建库
-
-### Q: `mysql` 命令找不到 (Windows)
-
-MySQL 安装路径默认不在 PATH 中。使用完整路径运行：
-```powershell
-& "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p
-```
-或者将 MySQL bin 目录添加到系统 PATH。
-
-### Q: ChromaDB 向量库损坏
-
-删除 `chroma_db/` 目录后重启,应用会自动重建向量库。
-
-### Q: `npm install` 失败或前端启动报错
-
-1. 确认 Node.js 版本 ≥ 20：`node --version`
-2. 删除 `node_modules/` 和 `package-lock.json`,重新 `npm install`
-3. Windows 防火墙弹出时点"允许"
 
 ## License
 
