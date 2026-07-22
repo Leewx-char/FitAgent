@@ -37,21 +37,16 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 cp .env.example .env
 # 编辑 .env,填入 DASHSCOPE_API_KEY、MySQL 配置、JWT_SECRET_KEY
 
-# 2. 创建数据库
-# 如果 mysql 不在 PATH 中,使用完整路径,例如:
-# & "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p -e "CREATE DATABASE IF NOT EXISTS zhitong CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS zhitong CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-
-# 3. Python 环境 & 依赖
+# 2. Python 环境 & 依赖
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 pip install python-magic-bin   # Windows 必需,提供 libmagic DLL
 
-# 4. 启动后端
+# 3. 启动后端
 uvicorn app.main:app --reload --port 8000
 
-# 5. 启动前端（新终端）
+# 4. 启动前端（新终端）
 cd frontend
 npm install
 npm run dev
@@ -63,17 +58,14 @@ npm run dev
 # 1. 克隆并配置环境变量
 cp .env.example .env
 
-# 2. 创建数据库
-mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS zhitong CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-
-# 3. Python 环境
+# 2. Python 环境
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 4. 启动后端
+# 3. 启动后端
 uvicorn app.main:app --reload --port 8000
 
-# 5. 启动前端
+# 4. 启动前端
 cd frontend && npm install && npm run dev
 ```
 
@@ -162,11 +154,8 @@ Windows 需要手动安装 poppler。从 [poppler-windows](https://github.com/os
 ### Q: 启动报错 "Can't connect to MySQL server"
 
 1. 确认 MySQL 服务已启动（Windows：服务管理器查找 MySQL80）
-2. 确认已创建 zhitong 数据库：
-```sql
-CREATE DATABASE IF NOT EXISTS zhitong CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-```
-3. 检查 `.env` 中的 `MYSQL_HOST` 和 `MYSQL_PORT` 是否正确
+2. 检查 `.env` 中的 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASSWORD` 是否正确
+3. 应用启动时会自动创建 `zhitong` 数据库，无需手动建库
 
 ### Q: `mysql` 命令找不到 (Windows)
 
