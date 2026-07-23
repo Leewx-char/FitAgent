@@ -31,7 +31,7 @@
 | **JSON 字段过度使用** | `models.py:44-46,82` | 中 | `injuries`, `diet_restrict`, `preferences`, `health_data`, `data` 都是 TEXT 列存 JSON |
 | **数据一致性无保障** | `fitness.py` | 高 | 运动数据同步时无幂等保证，重复同步可能产生脏数据 |
 | **数据清理缺失** | 全局 | 中 | 上传临时文件、过期会话、旧日志无自动清理 |
-| **数据迁移策略缺失** | 全局 | 低 | 无 Alembic 等迁移工具，建表靠 `Base.metadata.create_all` |
+| **后续数据迁移策略待完善** | 全局 | 低 | 01 已引入 Alembic；JSON 类型变更、回填和迁移演练仍待治理 |
 | **测试数据管理** | `app/tests/conftest.py` | 低 | 测试数据库依赖真实 MySQL 连接，非隔离 |
 | **向量库版本追溯** | `vector_store.py` | 中 | 知识库更新后无法回滚到上一个版本 |
 | **Coros 子进程管理** | `coros_client.py` | 中 | 子进程异常退出或僵尸进程无自动恢复机制 |
@@ -319,32 +319,23 @@ async def lifespan(app: FastAPI):
     yield
 ```
 
-### 步骤 5：数据库迁移工具引入
+### 步骤 5：数据库迁移完善
 
-**当前问题**：表结构变更依赖 `create_all`，无法增量迁移。
+> Alembic 基础设施与空开发数据库初始迁移已前置到 01。此阶段只负责后续数据类型变更、回填和迁移演练。
 
-**方案**：引入 Alembic：
+**现状**：`alembic/`、`alembic.ini` 与空开发数据库的初始迁移已在 01 完成。应用启动不再调用
+`Base.metadata.create_all()`；首次建表统一执行 `alembic upgrade head`。
 
-```bash
-pip install alembic
-alembic init alembic
-```
-
-配置 `alembic/env.py`：
-
-```python
-from app.core.database import Base, DATABASE_URL
-from app.models import User, UserProfile, Session, Message, FitnessData
-
-target_metadata = Base.metadata
-```
-
-之后每次改模型：
+**本阶段方案**：针对 JSON 类型替换、数据回填或其他已部署表的变更，先在可还原的
+开发数据库演练升级与降级，再提交一个独立迁移：
 
 ```bash
 alembic revision --autogenerate -m "add_column_to_user_profiles"
 alembic upgrade head
 ```
+
+迁移必须包含数据兼容策略、回滚评估与备份方案；不要在 05 再次初始化 Alembic 或重建
+01 的初始 schema。
 
 ### 步骤 6：Coros 子进程管理器
 
@@ -546,7 +537,7 @@ def load_document(self):
 - [ ] 4. `fitness.py` 添加幂等写入函数
 - [ ] 5. 创建 `app/core/maintenance.py`（自动清理任务）
 - [ ] 6. `main.py` lifespan 注册维护调度器
-- [ ] 7. 引入 Alembic，创建初始迁移
+- [x] 7. Alembic 基础设施与初始迁移（已在 01 完成）
 - [ ] 8. `coros_client.py` 添加子进程自动恢复
 - [ ] 9. `vector_store.py` 添加备份/恢复功能
 - [ ] 10. `vector_store.py` `load_document` 前自动备份

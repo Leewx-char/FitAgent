@@ -11,19 +11,23 @@
   - 响应不返回 password_hash —— 安全
   - 表结构变化不影响 API 返回格式 —— 解耦
 """
+
 import json
 from datetime import datetime
-from pydantic import field_validator
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class UserRegister(BaseModel):
     username: str = Field(..., min_length=2, max_length=50)
     password: str = Field(..., min_length=6, max_length=100)
 
+
 class UserLogin(BaseModel):
     username: str
     password: str
+
 
 class UserResponse(BaseModel):
     id: int
@@ -32,12 +36,13 @@ class UserResponse(BaseModel):
     extra_info: str
     created_at: datetime
 
-    model_config = {"from_attributes": True} # 允许从 ORM 对象直接转换
+    model_config = {"from_attributes": True}  # 允许从 ORM 对象直接转换
 
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
 
 # ==================== 会话 ====================
 
@@ -55,6 +60,7 @@ class SessionResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
+
 # ==================== 消息 ====================
 
 
@@ -67,9 +73,10 @@ class MessageResponse(BaseModel):
     session_id: str
     role: str
     content: str
-    created_at:datetime
+    created_at: datetime
 
     model_config = {"from_attributes": True}
+
 
 # ==================== 对话 ====================
 
@@ -78,18 +85,20 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     session_id: str | None = None
 
+
 # ==================== 用户画像 ====================
 class ProfileCreate(BaseModel):
     gender: str = Field(..., max_length=10)
-    age: int = Field(..., ge=1, le=150)              # 必填，1-150
-    height: int = Field(..., ge=50, le=300)          # 必填，50-300 cm
-    weight: float = Field(..., gt=0, le=500)        # 必填，0-500 kg
+    age: int = Field(..., ge=1, le=150)  # 必填，1-150
+    height: int = Field(..., ge=50, le=300)  # 必填，50-300 cm
+    weight: float = Field(..., gt=0, le=500)  # 必填，0-500 kg
     goal: str = Field("", max_length=20)  # 减脂/增肌/塑形/耐力提升/健康维护
     weekly_days: int = Field(3, ge=1, le=7)
-    experience: str = Field("新手", max_length=20)   # 新手/有基础/资深
+    experience: str = Field("新手", max_length=20)  # 新手/有基础/资深
     injuries: list[str] = Field(default_factory=list)
     diet_restrict: list[str] = Field(default_factory=list)
     preferences: dict = Field(default_factory=dict)
+
 
 class ProfileUpdate(BaseModel):
     gender: str | None = None
@@ -102,7 +111,8 @@ class ProfileUpdate(BaseModel):
     injuries: list[str] | None = None
     diet_restrict: list[str] | None = None
     preferences: dict | None = None
-    health_data: dict | None = None
+    health_data: "HealthDataSchema | None" = None
+
 
 class ProfileResponse(BaseModel):
     id: int
@@ -147,51 +157,64 @@ class ProfileResponse(BaseModel):
             return json.loads(v)
         return v
 
+
 # ==================== 健康文档上传 ====================
-class HealthDocUploadResponse(BaseModel):
-    status: str # ok / unrelated / parse_failed / encrypted / error
-    doc_type: str = ""
-    data: dict = {} # 提取的健康数据 JSON
-    message: str = ""
+class HealthMetric(BaseModel):
+    """从健康文档提取、可供用户核对的单项指标。"""
 
-# 校验体检单数据，防止传入脏数据
+    value: float | int | str | None = None
+    unit: str = ""
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def normalize_value(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
 class HealthDataSchema(BaseModel):
-    height_cm: float | None = None
-    weight_kg: float | None = None
-    bmi: float | None = None
-    body_fat: float | None = None
-    heart_rate: int | None = None
-    blood_pressure: str | None = None
-    blood_sugar: float | None = None
-    cholesterol: float | None = None
-    alt: float | None = None
-    uric_acid: float | None = None
-    other_findings: list | None = None
+    """上传确认和用户画像更新共用的健康数据持久化契约。"""
 
-    @field_validator("heart_rate", mode="before")
-    @classmethod
-    def parse_int(cls, v):
-        if isinstance(v, str) and v.strip():
-            try:
-                return int(float(v))
-            except (ValueError, TypeError):
-                return v
-        return v
+    height_cm: HealthMetric | None = None
+    weight_kg: HealthMetric | None = None
+    bmi: HealthMetric | None = None
+    body_fat: HealthMetric | None = None
+    heart_rate: HealthMetric | None = None
+    blood_pressure: HealthMetric | None = None
+    blood_sugar: HealthMetric | None = None
+    cholesterol: HealthMetric | None = None
+    alt: HealthMetric | None = None
+    uric_acid: HealthMetric | None = None
 
-    @field_validator("height_cm", "weight_kg", "bmi", "body_fat",
-                    "blood_sugar", "cholesterol", "alt", "uric_acid", mode="before")
-    @classmethod
-    def parse_float(cls, v):
-        if isinstance(v, str) and v.strip():
-            try:
-                return float(v)
-            except (ValueError, TypeError):
-                return v
-        return v
+
+class HealthMetricCandidate(BaseModel):
+    page: int
+    metric: HealthMetric
+
+
+class HealthDocumentData(BaseModel):
+    """健康文档上传成功时的业务数据。"""
+
+    metrics: HealthDataSchema
+    conflicts: dict[str, list[HealthMetricCandidate]] = Field(default_factory=dict)
+
+
+class HealthDocUploadResponse(BaseModel):
+    """健康文档模型和上传接口共用的统一响应信封。"""
+
+    code: int
+    messages: list[str] = Field(default_factory=list)
+    data: HealthDocumentData | None = None
+
+
+ProfileUpdate.model_rebuild()
+
 
 class FitnessSyncRequest(BaseModel):
     start_day: str = ""
     end_day: str = ""
+
 
 class FitnessDataResponse(BaseModel):
     id: int

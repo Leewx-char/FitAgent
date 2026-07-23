@@ -2,7 +2,6 @@ from unittest.mock import patch
 
 
 class TestUploadHealthDoc:
-
     def test_upload_without_auth(self, anon_client, image_file):
         with open(image_file, "rb") as f:
             response = anon_client.post(
@@ -19,8 +18,9 @@ class TestUploadHealthDoc:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "error"
-        assert "不支持" in data["message"]
+        assert set(data) == {"code", "messages", "data"}
+        assert data["code"] == 1004
+        assert "不支持" in data["messages"][0]
 
     def test_upload_image_success(self, client, image_file, mock_health_data):
         with patch("app.services.doc_parser._extract_with_vl", return_value=mock_health_data):
@@ -31,11 +31,12 @@ class TestUploadHealthDoc:
                 )
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ok"
-        assert data["data"]["height_cm"] == 175.0
-        assert data["data"]["weight_kg"] == 70.0
-        assert data["data"]["bmi"] == 22.9
-        assert data["data"]["heart_rate"] == 72
+        assert set(data) == {"code", "messages", "data"}
+        assert data["code"] == 0
+        assert data["data"]["metrics"]["height_cm"]["value"] == 175.0
+        assert data["data"]["metrics"]["weight_kg"]["value"] == 70.0
+        assert data["data"]["metrics"]["bmi"]["value"] == 22.9
+        assert data["data"]["metrics"]["heart_rate"]["value"] == 72
 
     def test_upload_text_pdf_success(self, client, text_pdf, mock_health_data):
         with patch("app.services.doc_parser._extract_with_llm", return_value=mock_health_data):
@@ -46,7 +47,7 @@ class TestUploadHealthDoc:
                 )
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ok"
+        assert data["code"] == 0
 
     def test_upload_encrypted_pdf(self, client, encrypted_pdf):
         with open(encrypted_pdf, "rb") as f:
@@ -56,5 +57,5 @@ class TestUploadHealthDoc:
             )
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "encrypted"
-        assert "加密" in data["message"]
+        assert data["code"] == 1003
+        assert "加密" in data["messages"][0]

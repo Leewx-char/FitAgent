@@ -7,6 +7,7 @@ from app.core.auth import get_current_user
 
 router = APIRouter(prefix="/api/sessions/{session_id}/messages", tags=["messages"])
 
+
 @router.get("", response_model=list[MessageResponse])
 def list_messages(
     session_id: str,

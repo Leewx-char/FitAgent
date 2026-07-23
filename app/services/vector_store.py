@@ -13,12 +13,14 @@ from app.services.factory import get_embedding_model
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
+
 class VectorStoreService:
     def __init__(self):
-        self.persist_directory = get_abs_path(get_chroma_config()['persist_directory'])
+        self.persist_directory = get_abs_path(get_chroma_config()["persist_directory"])
         self.manifest_store = get_abs_path(
-            get_chroma_config().get('manifest_store',
-            os.path.join(self.persist_directory, 'knowledge_manifest.json')),
+            get_chroma_config().get(
+                "manifest_store", os.path.join(self.persist_directory, "knowledge_manifest.json")
+            ),
         )
 
         manifest_dir = os.path.dirname(self.manifest_store)
@@ -28,32 +30,38 @@ class VectorStoreService:
         self.vector_store = self.create_chroma()
 
         self.default_splitter = self._build_splitter(
-            chunk_size=get_chroma_config()['chunk_size'],
-            chunk_overlap=get_chroma_config()['chunk_overlap'],
+            chunk_size=get_chroma_config()["chunk_size"],
+            chunk_overlap=get_chroma_config()["chunk_overlap"],
         )
 
         self.txt_splitter = self._build_splitter(
-            chunk_size=get_chroma_config().get('txt_chunk_size', get_chroma_config()['chunk_size']),
-            chunk_overlap=get_chroma_config().get('txt_chunk_overlap', get_chroma_config()['chunk_overlap']),
+            chunk_size=get_chroma_config().get("txt_chunk_size", get_chroma_config()["chunk_size"]),
+            chunk_overlap=get_chroma_config().get(
+                "txt_chunk_overlap", get_chroma_config()["chunk_overlap"]
+            ),
         )
 
         self.pdf_splitter = self._build_splitter(
-            chunk_size=get_chroma_config().get('pdf_chunk_size', get_chroma_config()['chunk_size']),
-            chunk_overlap=get_chroma_config().get('pdf_chunk_overlap', get_chroma_config()['chunk_overlap']),
+            chunk_size=get_chroma_config().get("pdf_chunk_size", get_chroma_config()["chunk_size"]),
+            chunk_overlap=get_chroma_config().get(
+                "pdf_chunk_overlap", get_chroma_config()["chunk_overlap"]
+            ),
         )
 
     def create_chroma(self):
         return Chroma(
             collection_name=get_chroma_config()["collection_name"],
             embedding_function=get_embedding_model(),
-            persist_directory=self.persist_directory
+            persist_directory=self.persist_directory,
         )
 
-    def _build_splitter(self, chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTextSplitter:
+    def _build_splitter(
+        self, chunk_size: int, chunk_overlap: int
+    ) -> RecursiveCharacterTextSplitter:
         return RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
-            separators=get_chroma_config()['separators'],
+            separators=get_chroma_config()["separators"],
             length_function=len,
         )
 
@@ -68,7 +76,6 @@ class VectorStoreService:
     def _build_chunk_id(source: str, chunk_index: int, content: str) -> str:
         digest = hashlib.md5(content.encode("utf-8")).hexdigest()[:12]
         return f"{source}:{chunk_index}:{digest}"
-
 
     def get_retriever(self):
         return self.vector_store.as_retriever(search_kwargs={"k": get_chroma_config()["k"]})
@@ -93,7 +100,7 @@ class VectorStoreService:
         return {
             "md5": md5_hex,
             "chunk_count": chunk_count,
-            "updated_at": datetime.now().isoformat(timespec="seconds")
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
         }
 
     def _delete_documents_by_source(self, source: str):
@@ -150,8 +157,9 @@ class VectorStoreService:
         self.vector_store = self.create_chroma()
         logger.info("向量库重建完成")
 
-
-    def load_document(self,):
+    def load_document(
+        self,
+    ):
         """
         从数据文件夹内读取数据文件，转为向量存入向量库
         要计算文件的md5做去重
@@ -193,7 +201,9 @@ class VectorStoreService:
 
                 documents = normalize_documents(documents)
 
-                if source.endswith("100问.txt") or "常见问题" in clean_text(documents[0].page_content[:80]):
+                if source.endswith("100问.txt") or "常见问题" in clean_text(
+                    documents[0].page_content[:80]
+                ):
                     documents = split_qa_documents(documents)
 
                 split_document: list[Document] = self._get_splitter(path).split_documents(documents)
@@ -216,8 +226,8 @@ class VectorStoreService:
                 batch_size = 10
                 for i in range(0, len(split_document), batch_size):
                     self.vector_store.add_documents(
-                        split_document[i:i + batch_size],
-                        ids=ids[i:i + batch_size],
+                        split_document[i : i + batch_size],
+                        ids=ids[i : i + batch_size],
                     )
 
                 # 记录这个已经处理好的文件的md5值，避免下次重复加载
@@ -231,7 +241,7 @@ class VectorStoreService:
                 continue
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     vs = VectorStoreService()
 
     vs.load_document()
@@ -241,4 +251,4 @@ if __name__ == '__main__':
     res = retriever.invoke("迷路")
     for r in res:
         print(r.page_content)
-        print("-"*20)
+        print("-" * 20)

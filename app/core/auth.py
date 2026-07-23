@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
-from jose import JWTError, jwt # jose：JWT 的编解码库
-from passlib.context import CryptContext # passlib：密码哈希库
+from jose import JWTError, jwt  # jose：JWT 的编解码库
+from passlib.context import CryptContext  # passlib：密码哈希库
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer # OAuth2PasswordBearer：FastAPI 提供的工具，自动从请求头的 Authorization: Bearer xxx 中提取 Token
+from fastapi.security import (
+    OAuth2PasswordBearer,
+)  # OAuth2PasswordBearer：FastAPI 提供的工具，自动从请求头的 Authorization: Bearer xxx 中提取 Token
 from app.core.database import SessionLocal
 from app.models import User
 import os
@@ -15,26 +17,36 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto") # 密码哈希的上下文
-def hash_password(plain: str) -> str: # 注册调用
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")  # 密码哈希的上下文
+
+
+def hash_password(plain: str) -> str:  # 注册调用
     return pwd_context.hash(plain)
-def verify_password(plain: str, hashed: str) -> bool: # 登录调用
+
+
+def verify_password(plain: str, hashed: str) -> bool:  # 登录调用
     return pwd_context.verify(plain, hashed)
 
-# 密钥就是"只有服务端知道的印章"——生成 Token 时盖章，验证 Token 时验章。没有密钥就无法伪造合法 Token。
-def create_access_token(data: dict) -> str: # 生成令牌
+
+# 密钥是服务端私有的签名材料，缺失它就无法伪造合法 Token。
+def create_access_token(data: dict) -> str:  # 生成令牌
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-def decode_access_token(token: str) -> dict: # 解析令牌
+
+
+def decode_access_token(token: str) -> dict:  # 解析令牌
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
     except JWTError:
         return None
 
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+
 def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     payload = decode_access_token(token)
     if payload is None:

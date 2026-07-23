@@ -138,10 +138,7 @@
           </div>
 
           <div class="profile-section" v-if="hasHealthData">
-            <h4>
-              健康数据
-              <n-tag v-if="profile.health_data.doc_type" size="small" type="info" style="margin-left: 8px">{{ profile.health_data.doc_type }}</n-tag>
-            </h4>
+            <h4>健康数据</h4>
             <div class="health-data-grid">
               <div v-for="key in healthFields" :key="key" class="health-data-item">
                 <span class="data-label">{{ healthLabels[key] }}</span>
@@ -150,18 +147,6 @@
                 </span>
                 <span class="data-value data-none" v-else>未识别</span>
               </div>
-            </div>
-            <template v-if="otherFindings.length">
-              <div class="health-sub-title">其他发现</div>
-              <div class="health-data-grid">
-                <div v-for="(item, idx) in otherFindings" :key="idx" class="health-data-item">
-                  <span class="data-label">{{ item.field }}</span>
-                  <span class="data-value">{{ item.value }}</span>
-                </div>
-              </div>
-            </template>
-            <div v-if="profile.health_data.raw_summary" class="health-summary">
-              {{ profile.health_data.raw_summary }}
             </div>
           </div>
         </div>
@@ -230,12 +215,7 @@ const healthFields = Object.keys(healthLabels)
 const hasHealthData = computed(() => {
   const hd = profile.value?.health_data
   if (!hd || typeof hd !== 'object') return false
-  return Object.keys(hd).some(k => k !== 'status' && k !== 'doc_type' && k !== 'raw_summary' && k !== 'other_findings')
-})
-
-const otherFindings = computed(() => {
-  const findings = profile.value?.health_data?.other_findings
-  return Array.isArray(findings) ? findings : []
+  return Object.values(hd).some(field => field?.value != null)
 })
 
 function getHealthValue(key) {
@@ -435,20 +415,4 @@ onMounted(loadProfile)
   font-weight: 400;
 }
 
-.health-sub-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  margin-top: 14px;
-  margin-bottom: 8px;
-}
-
-.health-summary {
-  margin-top: 12px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  padding: 8px 12px;
-  background: #f7f8fa;
-  border-radius: 6px;
-}
 </style>

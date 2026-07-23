@@ -15,17 +15,21 @@ router = APIRouter(prefix="/api/fitness", tags=["fitness"])
 
 # 先尝试插入。如果已经存在（user_id + date + data_type 三个字段重复了）
 # ，那就只更新 data 字段的内容。
-def _upsert_fitness(db: Session, user_id: int, date_str: str,
-                    data_type: str, data: dict):
-    stmt = mysql_upsert(FitnessData).values(
-        user_id=user_id,
-        date=datetime.strptime(date_str, "%Y%m%d").date(),
-        data_type=data_type,
-        data=json.dumps(data, ensure_ascii=False),
-    ).on_duplicate_key_update(
-        data=json.dumps(data, ensure_ascii=False),
+def _upsert_fitness(db: Session, user_id: int, date_str: str, data_type: str, data: dict):
+    stmt = (
+        mysql_upsert(FitnessData)
+        .values(
+            user_id=user_id,
+            date=datetime.strptime(date_str, "%Y%m%d").date(),
+            data_type=data_type,
+            data=json.dumps(data, ensure_ascii=False),
+        )
+        .on_duplicate_key_update(
+            data=json.dumps(data, ensure_ascii=False),
+        )
     )
     db.execute(stmt)
+
 
 @router.post("/sync")
 def sync_fitness(
@@ -75,7 +79,7 @@ def sync_fitness(
         result = coros.list_activities(start_day, end_day, size=100)
         for act in result.get("activities", []):
             start_time = act.get("start_time", "")
-            digits = re.sub(r"\D", "", start_time) # 去掉所有非数字字符
+            digits = re.sub(r"\D", "", start_time)  # 去掉所有非数字字符
             act_date = digits[:8] if len(digits) >= 8 else ""
             if act_date:
                 _upsert_fitness(db, current_user.id, act_date, "activity", act)
@@ -84,6 +88,7 @@ def sync_fitness(
         raise HTTPException(status_code=502, detail=f"同步活动数据失败：{str(e)}")
 
     return {"message": "同步完成", "upserted": upserted}
+
 
 # 查当前用户近4周的每日指标
 @router.get("/daily", response_model=list[FitnessDataResponse])
@@ -104,6 +109,7 @@ def get_daily_data(
         .all()
     )
 
+
 @router.get("/sleep", response_model=list[FitnessDataResponse])
 def get_sleep_data(
     weeks: int = 4,
@@ -121,6 +127,7 @@ def get_sleep_data(
         .order_by(FitnessData.date.desc())
         .all()
     )
+
 
 @router.get("/activities", response_model=list[FitnessDataResponse])
 def get_activities(

@@ -2,7 +2,7 @@ import json
 import time
 from urllib.error import URLError
 
-from app.services.agent_tools import _with_circuit_breaker, _with_retry, CircuitBreaker
+from app.services.agent_tools import _with_circuit_breaker, _with_retry
 
 
 def _make_flaky(fail_flag: dict, threshold=2, recovery=0.2):
@@ -22,7 +22,6 @@ def _make_flaky(fail_flag: dict, threshold=2, recovery=0.2):
 
 
 class TestCircuitBreaker:
-
     def test_opens_after_threshold_then_fast_fails(self):
         """连续失败达阈值 → OPEN；OPEN 后不再真调（快速失败）"""
         fail = {"on": True}
@@ -43,24 +42,26 @@ class TestCircuitBreaker:
         """冷却超时后 HALF_OPEN 放行试探，成功则 CLOSED 恢复"""
         fail = {"on": True}
         flaky, calls = _make_flaky(fail, threshold=2, recovery=0.2)
-        flaky(); flaky()          # 打到 OPEN
+        flaky()
+        flaky()  # 打到 OPEN
         assert calls["n"] == 2
 
-        time.sleep(0.25)          # 超过冷却期
-        fail["on"] = False        # 下游恢复正常
-        assert flaky() == "OK"    # HALF_OPEN 试探成功
-        assert calls["n"] == 3    # 真调了
-        assert flaky() == "OK"    # 已 CLOSED，继续正常
+        time.sleep(0.25)  # 超过冷却期
+        fail["on"] = False  # 下游恢复正常
+        assert flaky() == "OK"  # HALF_OPEN 试探成功
+        assert calls["n"] == 3  # 真调了
+        assert flaky() == "OK"  # 已 CLOSED，继续正常
 
     def test_halfopen_failure_reopens(self):
         """HALF_OPEN 试探仍失败 → 立刻重新 OPEN"""
         fail = {"on": True}
         flaky, calls = _make_flaky(fail, threshold=2, recovery=0.2)
-        flaky(); flaky()          # OPEN
+        flaky()
+        flaky()  # OPEN
         time.sleep(0.25)
-        r = json.loads(flaky())   # HALF_OPEN 试探，仍失败
+        r = json.loads(flaky())  # HALF_OPEN 试探，仍失败
         assert r["status"] == "error"
-        assert calls["n"] == 3    # 试探真调了一次
+        assert calls["n"] == 3  # 试探真调了一次
         # 重新 OPEN：下一次又快速失败，不真调
         json.loads(flaky())
         assert calls["n"] == 3

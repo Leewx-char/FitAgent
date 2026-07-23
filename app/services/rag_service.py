@@ -1,10 +1,10 @@
+"""
+RAG 总结服务。
 
-"""
-总结服务类：用户提问，搜索参考资料，讲提问和参考资料提交给模型，让模型总结回复
-"""
+用户提问后，服务会扩展术语与同义词，经向量检索和 BM25 关键词检索后用 RRF
+融合、Jaccard 去重，最后选取参考资料供模型生成答复。
 
-"""
-RAG提问的完整流程
+完整流程：
 1.用户发起提问，agent调用rag_summarize工具
 2.进入rag服务后，确认向量数据库和BM25检索正常运行
 3.先将用户的提问变成标准术语再拓展同义词
@@ -14,12 +14,15 @@ RAG提问的完整流程
 7.向量相似度和BM25检索用RRF算法融合
 8.最后用Jaccard去重，取前六条数据作为结果
 """
-import re, threading
+
+import re
+import threading
 from app.utils.config_handler import get_chroma_config, get_synonyms_config
 from app.utils.logger_handler import logger
 from app.services.vector_store import VectorStoreService
 from app.services.bm25_retriever import BM25Retriever
 from langchain_core.documents import Document
+
 
 class RagSummarizeService(object):
     def __init__(self):
@@ -148,9 +151,7 @@ class RagSummarizeService(object):
         logger.info("BM25索引过期或未构建，准备从ChromaDB同步...")
         try:
             # 从 ChromaDB 拉取全量文档
-            raw = self.vector_store.vector_store.get(
-                include=["documents", "metadatas"]
-            )
+            raw = self.vector_store.vector_store.get(include=["documents", "metadatas"])
             # 把字符串列表 + 元数据列表 组装成 LangChain Document 对象列表
             #   zip(["深蹲是...", "减脂需要..."], [{"source": "a.txt"}, {"source": "b.txt"}])
             #   → ("深蹲是...", {"source": "a.txt"}), ("减脂需要...", {"source": "b.txt"})
@@ -163,7 +164,9 @@ class RagSummarizeService(object):
             logger.error(f"BM25索引同步失败：{str(e)}", exc_info=True)
 
     @staticmethod
-    def _rrf_fusion(vector_results: list[tuple], bm25_results: list[tuple], k: int = 60) -> list[tuple]:
+    def _rrf_fusion(
+        vector_results: list[tuple], bm25_results: list[tuple], k: int = 60
+    ) -> list[tuple]:
         """RRF双路融合：按排名合并向量检索和BM25检索结果"""
         """
             vector_results 格式: [(doc_A, 0.92), (doc_B, 0.87), (doc_C, 0.74)]
@@ -206,7 +209,7 @@ class RagSummarizeService(object):
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored
 
-    def retriever_docs(self, query: str, source_filter: list[str] | None = None) :
+    def retriever_docs(self, query: str, source_filter: list[str] | None = None):
         """确保向量数据库正常 -> 扩展提示词 -> 抽取关键词
         -> 粗召回文档（如果有错误，检查错误，并重建向量数据库）
          -> 计算这批文档的重排分数 -> 重排分数排序后截断返回"""
@@ -220,18 +223,22 @@ class RagSummarizeService(object):
 
         # 向量检索
         try:
-            vector_candidates = self.vector_store.vector_store.similarity_search_with_relevance_scores(
-                expanded_query,
-                **search_kwargs,
+            vector_candidates = (
+                self.vector_store.vector_store.similarity_search_with_relevance_scores(
+                    expanded_query,
+                    **search_kwargs,
+                )
             )
         except Exception as e:
             logger.error(f"向量检索失败：{str(e)}", exc_info=True)
             if self._is_corrupted_index_error(e):
                 try:
                     self._repair_vector_store()
-                    vector_candidates = self.vector_store.vector_store.similarity_search_with_relevance_scores(
-                        expanded_query,
-                        **search_kwargs,
+                    vector_candidates = (
+                        self.vector_store.vector_store.similarity_search_with_relevance_scores(
+                            expanded_query,
+                            **search_kwargs,
+                        )
                     )
                 except Exception as repair_error:
                     logger.error(f"重建后检索仍失败：{str(repair_error)}", exc_info=True)
@@ -241,8 +248,7 @@ class RagSummarizeService(object):
 
         # 过滤低相关度
         vector_results = [
-            (doc, score) for doc, score in vector_candidates
-            if score >= self.min_relevance_score
+            (doc, score) for doc, score in vector_candidates if score >= self.min_relevance_score
         ]
 
         # BM 25关键词检索（不受 source_filter 影响，BM25 不做过滤）
@@ -257,7 +263,7 @@ class RagSummarizeService(object):
         logger.info(f"去重：{before_dedup} -> {len(scored_docs)}条")
 
         # 取 top_k
-        docs = [doc for doc, _ in scored_docs[:self.top_k]]
+        docs = [doc for doc, _ in scored_docs[: self.top_k]]
 
         logger.info(
             f"RAG检索完成，原始query={query}，扩展query={expanded_query}，"
@@ -308,7 +314,8 @@ class RagSummarizeService(object):
 
         return context + self._format_references(context_docs)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     rag = RagSummarizeService()
 
     print(rag.rag_summarize("新手应该怎么开始健身"))

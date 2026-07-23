@@ -63,33 +63,48 @@
         <span class="confirm-close" @click="uploadResult = null">✕</span>
       </div>
 
-      <div v-if="uploadResult.status === 'ok'" class="confirm-body">
-        <div class="doc-type-badge">{{ uploadResult.doc_type === 'pdf' ? 'PDF' : '图片' }}</div>
+      <div v-if="uploadResult.code === HEALTH_DOCUMENT_SUCCESS_CODE" class="confirm-body">
+        <p class="health-disclaimer">识别结果仅供健康信息整理，不构成医疗诊断；请核对后再保存。</p>
         <div class="field-grid">
           <div
             v-for="fieldKey in displayFields"
             :key="fieldKey"
             class="field-item"
-            v-show="getFieldValue(fieldKey)"
+            v-if="hasEditableValue(fieldKey)"
           >
             <span class="field-label">{{ fieldLabels[fieldKey] }}</span>
-            <span class="field-value">
-              {{ getFieldValue(fieldKey) }}
-              <small v-if="getFieldUnit(fieldKey)">{{ getFieldUnit(fieldKey) }}</small>
-            </span>
+            <n-input v-model:value="editableHealthData[fieldKey].value" size="small" />
+            <small v-if="editableHealthData[fieldKey].unit">{{ editableHealthData[fieldKey].unit }}</small>
           </div>
+        </div>
+        <div v-if="hasUnresolvedConflicts" class="conflict-panel">
+          <div class="conflict-title">以下指标在不同页面存在冲突，请选择要保存的值</div>
+          <div v-for="(candidates, fieldKey) in uploadResult.data.conflicts" :key="fieldKey" class="conflict-row">
+            <span>{{ fieldLabels[fieldKey] || fieldKey }}</span>
+            <n-button
+              v-for="candidate in candidates"
+              :key="`${fieldKey}-${candidate.page}`"
+              size="tiny"
+              @click="selectConflict(fieldKey, candidate.metric)"
+            >
+              第{{ candidate.page }}页：{{ candidate.metric.value }} {{ candidate.metric.unit || '' }}
+            </n-button>
+          </div>
+        </div>
+        <div v-if="uploadResult.messages?.length" class="health-warnings">
+          {{ uploadResult.messages.join('；') }}
         </div>
       </div>
 
       <div v-else class="confirm-body confirm-error">
         <div class="error-icon">⚠️</div>
-        <div class="error-text">{{ uploadResult.message || '文档解析失败，请重试' }}</div>
-        <div v-if="uploadResult.status === 'encrypted'" class="error-hint">请截图后以图片形式重新上传</div>
+        <div class="error-text">{{ uploadResult.messages?.join('；') || '文档解析失败，请重试' }}</div>
+        <div v-if="uploadResult.code === HEALTH_DOCUMENT_ENCRYPTED_CODE" class="error-hint">请截图后以图片形式重新上传</div>
       </div>
 
-      <div class="confirm-actions" v-if="uploadResult.status === 'ok'">
+      <div class="confirm-actions" v-if="uploadResult.code === HEALTH_DOCUMENT_SUCCESS_CODE">
         <n-button @click="uploadResult = null">取消</n-button>
-        <n-button type="primary" @click="confirmHealthData">确认保存到画像</n-button>
+        <n-button type="primary" :disabled="hasUnresolvedConflicts" @click="confirmHealthData">确认保存到画像</n-button>
       </div>
       <div class="confirm-actions" v-else>
         <n-button @click="uploadResult = null">关闭</n-button>
@@ -143,7 +158,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
-import { uploadHealthDoc, updateProfile } from '@/api/profile'
+import { updateProfile, uploadHealthDoc } from '@/api/profile'
 
 marked.setOptions({ breaks: true, gfm: true })
 
@@ -158,9 +173,12 @@ const streaming = ref(false)
 const uploading = ref(false)
 const uploadResult = ref(null)
 const fileInputRef = ref(null)
+const editableHealthData = ref({})
 const thinking = ref(false)
 const toolChain = ref([])
 
+const HEALTH_DOCUMENT_SUCCESS_CODE = 0
+const HEALTH_DOCUMENT_ENCRYPTED_CODE = 1003
 const messages = computed(() => chatStore.messages)
 
 const fieldLabels = {
@@ -177,17 +195,22 @@ const fieldLabels = {
 }
 
 const displayFields = Object.keys(fieldLabels)
+const hasUnresolvedConflicts = computed(() =>
+  Object.keys(uploadResult.value?.data?.conflicts || {}).length > 0,
+)
 
-function getFieldValue(key) {
-  const field = uploadResult.value?.data?.[key]
-  if (!field || typeof field !== 'object') return null
-  return field.value != null ? field.value : null
+function hasEditableValue(key) {
+  const value = editableHealthData.value?.[key]?.value
+  return value !== null && value !== undefined && value !== ''
 }
 
-function getFieldUnit(key) {
-  const field = uploadResult.value?.data?.[key]
-  if (!field || typeof field !== 'object') return null
-  return field.unit || null
+function prepareEditableHealthData(data) {
+  editableHealthData.value = JSON.parse(JSON.stringify(data || {}))
+}
+
+function selectConflict(key, metric) {
+  editableHealthData.value[key] = JSON.parse(JSON.stringify(metric))
+  delete uploadResult.value.data.conflicts[key]
 }
 
 const quickActions = [
@@ -345,7 +368,12 @@ function sendMessage(text) {
 }
 
 function triggerUpload() {
-  fileInputRef.value?.click()
+  const acknowledged = window.confirm(
+    '提醒：文件会发送至 DashScope 模型提取指标，处理结束后会清理临时文件。是否继续选择文件？',
+  )
+  if (acknowledged) {
+    fileInputRef.value?.click()
+  }
 }
 
 async function handleFileSelect(e) {
@@ -353,12 +381,13 @@ async function handleFileSelect(e) {
   if (!file) return
   uploading.value = true
   try {
-    const formData = new FormData()
-    formData.append('file', file)
-    const res = await uploadHealthDoc(formData)
+    const res = await uploadHealthDoc(file)
     uploadResult.value = res.data
+    if (res.data.code === HEALTH_DOCUMENT_SUCCESS_CODE) {
+      prepareEditableHealthData(res.data.data.metrics)
+    }
   } catch (err) {
-    uploadResult.value = { status: 'error', message: '上传失败，请检查网络连接' }
+    uploadResult.value = { code: -1, messages: ['上传失败，请检查网络连接'], data: null }
   } finally {
     uploading.value = false
     e.target.value = ''
@@ -366,9 +395,14 @@ async function handleFileSelect(e) {
 }
 
 async function confirmHealthData() {
+  if (hasUnresolvedConflicts.value) {
+    message.warning('请先选择冲突指标的保存值')
+    return
+  }
   try {
-    await updateProfile({ health_data: uploadResult.value.data })
+    await updateProfile({ health_data: editableHealthData.value })
     uploadResult.value = null
+    editableHealthData.value = {}
     message.success('健康数据已保存到档案')
   } catch (err) {
     message.error('保存失败，请重试')
@@ -672,17 +706,6 @@ watch(toolChain, () => {
   padding: 16px 20px;
 }
 
-.doc-type-badge {
-  display: inline-block;
-  border-radius: 8px;
-  padding: 4px 12px;
-  background: var(--primary-light);
-  color: var(--primary);
-  font-size: 12px;
-  font-weight: 600;
-  margin-bottom: 16px;
-}
-
 .field-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -739,6 +762,44 @@ watch(toolChain, () => {
   gap: 12px;
   padding: 12px 20px;
   border-top: 1px solid #e2e8f0;
+}
+
+.health-disclaimer {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+
+.health-warnings {
+  color: #b26a00;
+  font-size: 13px;
+  line-height: 1.6;
+  margin-top: 12px;
+}
+
+.conflict-panel {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #ffdca8;
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.conflict-title {
+  margin-bottom: 8px;
+  color: #7a4a00;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.conflict-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
 }
 
 .input-area {

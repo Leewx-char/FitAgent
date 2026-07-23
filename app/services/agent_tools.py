@@ -7,14 +7,20 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 from urllib.error import URLError
 from contextvars import ContextVar
-from functools import wraps
+from functools import lru_cache, wraps
 from langchain_core.tools import tool
 from app.services.rag_service import RagSummarizeService
 from app.utils.logger_handler import logger
 from app.core.database import SessionLocal
 from app.models import UserProfile, FitnessData
 
-rag = RagSummarizeService()
+
+@lru_cache(maxsize=1)
+def _get_rag_service() -> RagSummarizeService:
+    """首次实际检索时再初始化 RAG，避免导入路由时连接外部模型。"""
+
+    return RagSummarizeService()
+
 
 _user_context: ContextVar[dict] = ContextVar("user_context", default={})
 
@@ -22,19 +28,24 @@ _user_context: ContextVar[dict] = ContextVar("user_context", default={})
 _NETWORK_ERRORS = (URLError, ConnectionError, TimeoutError, OSError)
 
 
-def _degradation_json(message: str,
-                      suggestion: str = "可以跳过此工具，基于已有信息继续回复，或提示用户稍后重试") -> str:
+def _degradation_json(
+    message: str, suggestion: str = "可以跳过此工具，基于已有信息继续回复，或提示用户稍后重试"
+) -> str:
     """降级兜底：外部服务不可用时返回结构化错误，供 LLM 自然融入回复。"""
-    return json.dumps({
-        "status": "error",
-        "message": message,
-        "suggestion": suggestion,
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "status": "error",
+            "message": message,
+            "suggestion": suggestion,
+        },
+        ensure_ascii=False,
+    )
 
 
 def _with_retry(max_retries: int = 1, delay: float = 1.0):
     """纯重试层：对外部 API 的瞬时故障重试 N 次。只重试网络类异常，
     业务异常直接透传；最终仍失败则 re-raise，交给外层熔断/降级处理。"""
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -51,7 +62,9 @@ def _with_retry(max_retries: int = 1, delay: float = 1.0):
                     else:
                         logger.error(f"工具 {func.__name__} 重试{max_retries}次后仍失败：{str(e)}")
                         raise  # 交给外层熔断器记账 + 降级
+
         return wrapper
+
     return decorator
 
 
@@ -62,6 +75,7 @@ class CircuitBreaker:
     状态机：CLOSED --失败达阈值--> OPEN --冷却超时--> HALF_OPEN --成功--> CLOSED
                                                           └--失败--> OPEN
     """
+
     def __init__(self, name: str, failure_threshold: int = 3, recovery_timeout: float = 30.0):
         self.name = name
         self.failure_threshold = failure_threshold
@@ -123,7 +137,9 @@ def _with_circuit_breaker(name: str, failure_threshold: int = 3, recovery_timeou
             else:
                 breaker.on_success()
                 return result
+
         return wrapper
+
     return decorator
 
 
@@ -131,6 +147,7 @@ def _request_json(base_url: str, params: dict) -> dict:
     url = f"{base_url}?{urlencode(params)}"
     with urlopen(url, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
+
 
 SOURCE_MAP = {
     "动作指南": ["动作指南大全.txt"],
@@ -140,12 +157,16 @@ SOURCE_MAP = {
     "基础知识": ["健身基础知识.txt"],
 }
 
-@tool(description="从知识库检索专业资料原始片段。可选通过source指定领域缩小范围：动作指南、营养学、训练计划、损伤预防、基础知识")
+
+@tool(
+    description="从知识库检索专业资料原始片段。可选通过source指定领域缩小范围：动作指南、营养学、训练计划、损伤预防、基础知识"
+)
 @_with_circuit_breaker(name="rag_summarize")
 @_with_retry()
 def rag_summarize(query: str, source: str = "") -> str:
     source_filter = SOURCE_MAP.get(source) if source else None
-    return rag.rag_summarize(query, source_filter)
+    return _get_rag_service().rag_summarize(query, source_filter)
+
 
 @tool(description="获取指定城市的实时天气信息，返回温度、体感温度、降水、风速等数据")
 @_with_circuit_breaker(name="get_weather")
@@ -153,7 +174,10 @@ def rag_summarize(query: str, source: str = "") -> str:
 def get_weather(city: str):
     city = city.strip()
     if not city:
-        return json.dumps({"status": "error", "message": "城市不能为空", "suggestion": "请提供有效的城市名称"}, ensure_ascii=False)
+        return json.dumps(
+            {"status": "error", "message": "城市不能为空", "suggestion": "请提供有效的城市名称"},
+            ensure_ascii=False,
+        )
 
     # 网络异常由 @_with_retry 兜底重试，这里只处理业务异常
     geocode_data = _request_json(
@@ -171,12 +195,16 @@ def get_weather(city: str):
     admin1 = location.get("admin1", "")
     country = location.get("country", "")
 
+    weather_fields = (
+        "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,"
+        "wind_speed_10m,weather_code"
+    )
     weather_data = _request_json(
         "https://api.open-meteo.com/v1/forecast",
         {
             "latitude": latitude,
             "longitude": longitude,
-            "current": "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,wind_speed_10m,weather_code",
+            "current": weather_fields,
             "timezone": "auto",
         },
     )
@@ -186,12 +214,24 @@ def get_weather(city: str):
         return f"已定位到 {resolved_name}，但未获取到实时天气数据。"
 
     weather_code_map = {
-        0: "晴", 1: "大部晴朗", 2: "局部多云", 3: "阴",
-        45: "雾", 48: "冻雾",
-        51: "小毛毛雨", 53: "毛毛雨", 55: "强毛毛雨",
-        61: "小雨", 63: "中雨", 65: "大雨",
-        71: "小雪", 73: "中雪", 75: "大雪",
-        80: "阵雨", 81: "较强阵雨", 82: "强阵雨",
+        0: "晴",
+        1: "大部晴朗",
+        2: "局部多云",
+        3: "阴",
+        45: "雾",
+        48: "冻雾",
+        51: "小毛毛雨",
+        53: "毛毛雨",
+        55: "强毛毛雨",
+        61: "小雨",
+        63: "中雨",
+        65: "大雨",
+        71: "小雪",
+        73: "中雪",
+        75: "大雪",
+        80: "阵雨",
+        81: "较强阵雨",
+        82: "强阵雨",
         95: "雷暴",
     }
     weather_text = weather_code_map.get(current.get("weather_code"), "未知天气")
@@ -215,6 +255,7 @@ def get_user_location() -> str:
     city = os.getenv("AGENT_USER_CITY", "").strip()
     return city if city else "当前会话未绑定城市信息，请让用户明确提供所在城市。"
 
+
 @tool(description="获取当前会话绑定的用户ID。未绑定时明确返回未知，不允许随机生成。")
 def get_user_id():
     ctx = _user_context.get()
@@ -222,11 +263,15 @@ def get_user_id():
         return str(ctx["user_id"])
     return "当前会话未绑定用户ID，请让用户明确提供用户ID。"
 
+
 @tool(description="获取当前月份，格式为 YYYY-MM。")
 def get_current_month():
     return datetime.now().strftime("%Y-%m")
 
-@tool(description="获取当前用户的完整健身画像，包括性别、年龄、身高、体重、健身目标、训练经验、伤病史、饮食限制等信息。每位用户首次提问时建议主动调用一次。")
+
+@tool(
+    description="获取当前用户的完整健身画像，包括性别、年龄、身高、体重、健身目标、训练经验、伤病史、饮食限制等信息。每位用户首次提问时建议主动调用一次。"
+)
 def get_user_profile():
     ctx = _user_context.get()
     user_id = ctx.get("user_id")
@@ -239,9 +284,19 @@ def get_user_profile():
         if not profile:
             return "用户尚未填写健身画像，请引导用户完善个人健身信息（年龄、身高、体重、目标等）。"
 
-        injuries = json.loads(profile.injuries) if isinstance(profile.injuries, str) else profile.injuries
-        diet_restrict = json.loads(profile.diet_restrict) if isinstance(profile.diet_restrict, str) else profile.diet_restrict
-        preferences = json.loads(profile.preferences) if isinstance(profile.preferences, str) else profile.preferences
+        injuries = (
+            json.loads(profile.injuries) if isinstance(profile.injuries, str) else profile.injuries
+        )
+        diet_restrict = (
+            json.loads(profile.diet_restrict)
+            if isinstance(profile.diet_restrict, str)
+            else profile.diet_restrict
+        )
+        preferences = (
+            json.loads(profile.preferences)
+            if isinstance(profile.preferences, str)
+            else profile.preferences
+        )
 
         return (
             f"用户画像：\n"
@@ -260,7 +315,9 @@ def get_user_profile():
         db.close()
 
 
-@tool(description="获取用户近4周运动数据摘要：含平均静息心率、HRV、训练负荷、睡眠时长/质量、运动类型分布。当用户询问训练建议/运动报告/身体状态时调用，与用户画像和天气数据一起为个性化推荐提供数据基础。")
+@tool(
+    description="获取用户近4周运动数据摘要：含平均静息心率、HRV、训练负荷、睡眠时长/质量、运动类型分布。当用户询问训练建议/运动报告/身体状态时调用，与用户画像和天气数据一起为个性化推荐提供数据基础。"
+)
 def get_fitness_summary() -> str:
     # 从请求级 ContextVar 取 user_id（chat 端点会在调用 Agent 前设置）
     ctx = _user_context.get()
@@ -280,7 +337,10 @@ def get_fitness_summary() -> str:
         )
 
         if not records:
-            return "用户近4周暂无运动数据。请引导用户去 Dashboard 点击「同步」按钮获取高驰设备数据，同步后即可基于真实运动数据提供个性化建议。"
+            return (
+                "用户近4周暂无运动数据。请引导用户去 Dashboard 点击「同步」按钮获取"
+                "高驰设备数据，同步后即可基于真实运动数据提供个性化建议。"
+            )
 
         # 按 data_type 分三类，同时解析 JSON 字符串为 dict
         daily_list, sleep_list, activities = [], [], []
@@ -301,7 +361,9 @@ def get_fitness_summary() -> str:
             rhr_vals = [d["rhr"] for d in daily_list if d.get("rhr")]
             hrv_vals = [d["avg_sleep_hrv"] for d in daily_list if d.get("avg_sleep_hrv")]
             tl_vals = [d["training_load"] for d in daily_list if d.get("training_load")]
-            ratio_vals = [d["training_load_ratio"] for d in daily_list if d.get("training_load_ratio")]
+            ratio_vals = [
+                d["training_load_ratio"] for d in daily_list if d.get("training_load_ratio")
+            ]
             tired_vals = [d["tired_rate"] for d in daily_list if d.get("tired_rate")]
             vo2_vals = [d["vo2max"] for d in daily_list if d.get("vo2max")]
 
@@ -309,12 +371,18 @@ def get_fitness_summary() -> str:
             if rhr_vals:
                 avg_rhr = sum(rhr_vals) / len(rhr_vals)
                 # 静息心率偏低=恢复好、偏高=疲劳；给 LLM 一个可直接引用的中文状态标签
-                label = "偏低，恢复良好" if avg_rhr < 60 else ("偏高，注意恢复" if avg_rhr > 75 else "正常")
+                label = (
+                    "偏低，恢复良好"
+                    if avg_rhr < 60
+                    else ("偏高，注意恢复" if avg_rhr > 75 else "正常")
+                )
                 lines.append(f"- 平均静息心率：{avg_rhr:.0f} bpm（{label}）")
             if hrv_vals:
                 lines.append(f"- 平均睡眠HRV(RMSSD)：{sum(hrv_vals) / len(hrv_vals):.0f} ms")
             if tl_vals:
-                lines.append(f"- 训练负荷：日均{sum(tl_vals) / len(tl_vals):.0f}，单日最高{max(tl_vals)}")
+                lines.append(
+                    f"- 训练负荷：日均{sum(tl_vals) / len(tl_vals):.0f}，单日最高{max(tl_vals)}"
+                )
             if ratio_vals:
                 avg_ratio = sum(ratio_vals) / len(ratio_vals)
                 # 急/慢性比 > 1.3 通常表示短期负荷远超长期平均，overtraining 风险信号
@@ -328,14 +396,17 @@ def get_fitness_summary() -> str:
 
         # === 睡眠聚合：总时长 + 深度睡眠（恢复质量的核心指标）===
         if sleep_list:
-            durations = [s["total_duration_minutes"] for s in sleep_list if s.get("total_duration_minutes")]
+            durations = [
+                s["total_duration_minutes"] for s in sleep_list if s.get("total_duration_minutes")
+            ]
             # phases 是嵌套 dict，用海象运算符 := 避免重复取值
             deep_vals = []
             for s in sleep_list:
                 if (phases := s.get("phases")) and phases.get("deep_minutes"):
                     deep_vals.append(phases["deep_minutes"])
             if durations:
-                lines.append(f"- 平均睡眠时长：{sum(durations) / len(durations) / 60:.1f}小时（{len(durations)}天）")
+                average_hours = sum(durations) / len(durations) / 60
+                lines.append(f"- 平均睡眠时长：{average_hours:.1f}小时（{len(durations)}天）")
             if deep_vals:
                 lines.append(f"- 平均深度睡眠：{sum(deep_vals) / len(deep_vals):.0f}分钟")
 
@@ -361,7 +432,9 @@ def get_fitness_summary() -> str:
         db.close()
 
 
-@tool(description="无入参，当识别到用户想生成近期运动总结报告时调用，触发报告模式切换。仅在用户明确要求生成报告/总结时调用。")
+@tool(
+    description="无入参，当识别到用户想生成近期运动总结报告时调用，触发报告模式切换。仅在用户明确要求生成报告/总结时调用。"
+)
 def trigger_report():
     """信号工具：调用后中间件（middleware.py 的 monitor_tool）会把
     request.runtime.context['report'] 置为 True，下一轮 LLM 调用
@@ -369,5 +442,6 @@ def trigger_report():
     本工具不返回数据，仅触发 prompt 切换。"""
     return "已切换到报告模式，请基于用户近期运动数据生成报告"
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     print(rag_summarize.invoke({"query": "深蹲标准动作"}))

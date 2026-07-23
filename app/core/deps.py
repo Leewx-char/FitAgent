@@ -9,10 +9,12 @@
 
 路由函数通过 FastAPI 的 Depends() 注入这些依赖。
 """
+
 from app.core.database import SessionLocal
 from app.services.react_agent import ReactAgent
 from functools import lru_cache
 from app.services.coros_client import CorosClient
+
 
 def get_db():
     db = SessionLocal()
@@ -43,4 +45,3 @@ def get_coros():
     （CorosClient 创建子进程耗时 1-2s，并发窗口大，模块级变量方式
     可能创建多个实例导致子进程泄漏）。"""
     return _coros_singleton()
-

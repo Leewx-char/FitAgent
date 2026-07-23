@@ -1,10 +1,11 @@
 import json
-import select # 用于给 stdin/stdout 加超时
-import subprocess # 启动和管理子进程
+import select  # 用于给 stdin/stdout 加超时
+import subprocess  # 启动和管理子进程
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
 
 # 请求是_send发的
 class CorosClient:
@@ -42,12 +43,16 @@ class CorosClient:
     发了这个请求，得到一个回应。然后还要发一个 notifications/initialized 通知
     （不需要等回复），告诉服务端"我准备好了"。这两步少任何一步服务端都不理你。
     """
+
     def _initialize(self):
-        resp = self._send("initialize", {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "fitagent", "version": "1.0.0"},
-        })
+        self._send(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "fitagent", "version": "1.0.0"},
+            },
+        )
         notification = {"jsonrpc": "2.0", "method": "notifications/initialized"}
         self.proc.stdin.write(json.dumps(notification) + "\n")
         self.proc.stdin.flush()
@@ -100,11 +105,14 @@ class CorosClient:
 
     # 这个时间段的运动记录
     def list_activities(self, start_day: str, end_day: str, size: int = 50) -> dict:
-        return self._call_tool("list_activities", {
-            "start_day": start_day,
-            "end_day": end_day,
-            "size": size,
-        })
+        return self._call_tool(
+            "list_activities",
+            {
+                "start_day": start_day,
+                "end_day": end_day,
+                "size": size,
+            },
+        )
 
     def close(self):
         if self.proc:

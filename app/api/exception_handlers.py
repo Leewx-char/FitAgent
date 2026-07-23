@@ -13,6 +13,7 @@
 
 DEBUG_MODE = True 时返回技术细节，生产环境设为 False。
 """
+
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
@@ -36,7 +37,11 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
     logger.warning(f"数据库约束冲突: {str(exc)}")
     return JSONResponse(
         status_code=400,
-        content={"code": 400, "message": "数据已存在或关联数据不完整，请检查输入。", "data": str(exc) if DEBUG_MODE else None},
+        content={
+            "code": 400,
+            "message": "数据已存在或关联数据不完整，请检查输入。",
+            "data": str(exc) if DEBUG_MODE else None,
+        },
     )
 
 
@@ -53,8 +58,13 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"未处理异常: {str(exc)}", exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"code": 500, "message": "服务器内部错误，请稍后重试。" if not DEBUG_MODE else f"内部错误: {str(exc)}",
-                 "data": str(exc) if DEBUG_MODE else None},
+        content={
+            "code": 500,
+            "message": "服务器内部错误，请稍后重试。"
+            if not DEBUG_MODE
+            else f"内部错误: {str(exc)}",
+            "data": str(exc) if DEBUG_MODE else None,
+        },
     )
 
 

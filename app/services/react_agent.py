@@ -6,9 +6,16 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 
 from app.services.factory import get_chat_model
 from app.utils.prompt_loader import load_system_prompts
-from app.services.agent_tools import (rag_summarize,
-                                      get_weather, get_user_location, get_user_id, trigger_report,
-                                      get_current_month, get_user_profile, get_fitness_summary)
+from app.services.agent_tools import (
+    rag_summarize,
+    get_weather,
+    get_user_location,
+    get_user_id,
+    trigger_report,
+    get_current_month,
+    get_user_profile,
+    get_fitness_summary,
+)
 from app.services.middleware import monitor_tool, log_before_model, report_prompt_switch
 
 TOOL_DISPLAY = {
@@ -22,11 +29,29 @@ TOOL_DISPLAY = {
     "get_fitness_summary": "获取运动数据",
 }
 
-class ReactAgent:
 
+class ReactAgent:
     COMMON_CITIES = [
-        "北京", "上海", "广州", "深圳", "杭州", "苏州", "南京", "成都", "重庆", "天津",
-        "武汉", "西安", "长沙", "青岛", "宁波", "厦门", "郑州", "合肥", "福州", "济南",
+        "北京",
+        "上海",
+        "广州",
+        "深圳",
+        "杭州",
+        "苏州",
+        "南京",
+        "成都",
+        "重庆",
+        "天津",
+        "武汉",
+        "西安",
+        "长沙",
+        "青岛",
+        "宁波",
+        "厦门",
+        "郑州",
+        "合肥",
+        "福州",
+        "济南",
     ]
 
     INVALID_CITY_VALUES = {"哪个城市", "什么城市", "哪座城市", "哪个市", "哪里", "哪儿"}
@@ -60,10 +85,17 @@ class ReactAgent:
         self.agent = create_agent(
             model=get_chat_model(),
             system_prompt=load_system_prompts(),
-            tools=[rag_summarize, get_weather, get_user_location,get_user_id,
-                   get_current_month, get_user_profile, get_fitness_summary, trigger_report
+            tools=[
+                rag_summarize,
+                get_weather,
+                get_user_location,
+                get_user_id,
+                get_current_month,
+                get_user_profile,
+                get_fitness_summary,
+                trigger_report,
             ],
-            middleware=[monitor_tool, log_before_model, report_prompt_switch]
+            middleware=[monitor_tool, log_before_model, report_prompt_switch],
         )
 
     @staticmethod
@@ -150,7 +182,7 @@ class ReactAgent:
         # None 表示：还没执行完所有工具调用（还在调工具阶段）
 
         for msg_chunk, metadata in self.agent.stream(
-                input_dict, stream_mode="messages", context=run_context
+            input_dict, stream_mode="messages", context=run_context
         ):
             if isinstance(msg_chunk, AIMessageChunk):
                 tool_call_chunks = getattr(msg_chunk, "tool_call_chunks", None) or []
@@ -159,19 +191,36 @@ class ReactAgent:
                     if tc_chunk.get("name") and tc_chunk.get("id"):
                         if tc_chunk["id"] not in seen_tool_ids:
                             seen_tool_ids.add(tc_chunk["id"])
-                            last_tool_step = None # ← 关键：见到新工具调用，重置为 None
-                            yield json.dumps(
-                                {"type": "tool", "name": TOOL_DISPLAY.get(tc_chunk["name"], tc_chunk["name"])},
-                                ensure_ascii=False) + "\n" # 前端显示"🔍 获取画像..."
+                            last_tool_step = None  # ← 关键：见到新工具调用，重置为 None
+                            yield (
+                                json.dumps(
+                                    {
+                                        "type": "tool",
+                                        "name": TOOL_DISPLAY.get(
+                                            tc_chunk["name"], tc_chunk["name"]
+                                        ),
+                                    },
+                                    ensure_ascii=False,
+                                )
+                                + "\n"
+                            )  # 前端显示"🔍 获取画像..."
                 # 文本内容
                 if msg_chunk.content:
                     if not seen_tool_ids or (
-                            last_tool_step is not None and metadata.get("langgraph_step", 0) > last_tool_step):
-                        yield json.dumps({"type": "text", "content": msg_chunk.content}, ensure_ascii=False) + "\n"
+                        last_tool_step is not None
+                        and metadata.get("langgraph_step", 0) > last_tool_step
+                    ):
+                        yield (
+                            json.dumps(
+                                {"type": "text", "content": msg_chunk.content}, ensure_ascii=False
+                            )
+                            + "\n"
+                        )
             elif isinstance(msg_chunk, ToolMessage):
                 last_tool_step = metadata.get("langgraph_step", 0)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     agent = ReactAgent()
     res = agent.execute_stream([{"role": "user", "content": "我想减脂，应该怎么练？"}])
     for chunk in res:

@@ -1,11 +1,12 @@
 """
- 对话路由 —— 聊天消息的接收和 SSE 流式响应。
+对话路由 —— 聊天消息的接收和 SSE 流式响应。
 
- POST /api/chat：接收用户消息和会话 ID，调用 Agent 的 execute_stream，
-                 通过 Server-Sent Events 逐块推回前端。
+POST /api/chat：接收用户消息和会话 ID，调用 Agent 的 execute_stream，
+                通过 Server-Sent Events 逐块推回前端。
 
- SSE 格式：每块数据以 "data: <文本>\n\n" 发送，前端 EventSource 自动解析。
- """
+SSE 格式：每块数据以 "data: <文本>\n\n" 发送，前端 EventSource 自动解析。
+"""
+
 import json
 import asyncio
 from fastapi import APIRouter, Depends, Request
@@ -25,15 +26,17 @@ import re
 
 # 敏感信息脱敏正则
 _SENSITIVE_PATTERNS = [
-    (re.compile(r'1[3-9]\d{9}'), '[手机号已隐藏]'),
-    (re.compile(r'\d{17}[\dXx]'), '[身份证号已隐藏]'),
-    (re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'), '[邮箱已隐藏]'),
+    (re.compile(r"1[3-9]\d{9}"), "[手机号已隐藏]"),
+    (re.compile(r"\d{17}[\dXx]"), "[身份证号已隐藏]"),
+    (re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), "[邮箱已隐藏]"),
 ]
+
 
 def _redact_sensitive(text: str) -> str:
     for pattern, replacement in _SENSITIVE_PATTERNS:
         text = pattern.sub(replacement, text)
     return text
+
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -52,6 +55,7 @@ def _rate_limit_key(request: Request) -> str:
 
 limiter = Limiter(key_func=_rate_limit_key)
 
+
 async def sse_generator(
     agent: ReactAgent,
     messages: list[dict],
@@ -65,12 +69,14 @@ async def sse_generator(
     full_response = ""
     # 用哨兵值代替 StopIteration，避免 run_in_executor 报错
     _SENTINEL = object()
+
     # 调 next(gen) 取下一块，如果生成器结束了（抛出 StopIteration），返回哨兵而不是让异常冒泡
     def _next_chunk(gen):
         try:
             return next(gen)
         except StopIteration:
             return _SENTINEL
+
     # 把 gen 创建为能传递 user_id/city 的闭包
     session_facts = ReactAgent._extract_session_facts(messages)
     user_id = current_user.id
@@ -91,23 +97,30 @@ async def sse_generator(
                 # 不是 JSON（兜底），当纯文本处理
                 chunk = _redact_sensitive(chunk)
                 full_response += chunk
-                yield f"data: {json.dumps({'type': 'text', 'content': chunk}, ensure_ascii=False)}\n\n"
+                payload = {"type": "text", "content": chunk}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 continue
             if event.get("type") == "tool":
                 # 工具调用通知：把英文名翻译成中文显示给用户
-                yield f"data: {json.dumps({'type': 'tool', 'name': event.get('name', '')}, ensure_ascii=False)}\n\n"
+                payload = {"type": "tool", "name": event.get("name", "")}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
             elif event.get("type") == "text":
                 # 文本增量：只有新增的部分
                 content = _redact_sensitive(event.get("content", ""))
                 full_response += content
-                yield f"data: {json.dumps({'type': 'text', 'content': content}, ensure_ascii=False)}\n\n"
+                payload = {"type": "text", "content": content}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
     except Exception as e:
         # 捕获所有异常（API Key 无效、额度不足、超时等），给用户友好的中文提示
         logger.error(f"Agent流式响应异常：{str(e)}", exc_info=True)  # ← 加这行
         error_msg = str(e)
         if "apiKey" in error_msg or "InvalidApiKey" in error_msg or "api_key" in error_msg.lower():
             error_msg = "AI 服务配置错误，请联系管理员"
-        elif "quota" in error_msg.lower() or "balance" in error_msg.lower() or "limit" in error_msg.lower():
+        elif (
+            "quota" in error_msg.lower()
+            or "balance" in error_msg.lower()
+            or "limit" in error_msg.lower()
+        ):
             error_msg = "AI 服务额度不足，请联系管理员"
         elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
             error_msg = "AI 服务响应超时，请稍后重试"
@@ -115,20 +128,27 @@ async def sse_generator(
             error_msg = "服务暂时不可用，请稍后重试"
         yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
     # 流式结束后：存 assistant 消息到数据库
-    db.add(Message(
-        session_id=session_id,
-        role="assistant",
-        content=full_response.strip() if full_response.strip() else "（回复异常）",
-    ))
+    db.add(
+        Message(
+            session_id=session_id,
+            role="assistant",
+            content=full_response.strip() if full_response.strip() else "（回复异常）",
+        )
+    )
     # 如果是第一条消息，自动更新会话标题
-    session = db.query(SessionModel).filter(
-        SessionModel.id == session_id,
-        SessionModel.user_id == current_user.id,
-    ).first()
+    session = (
+        db.query(SessionModel)
+        .filter(
+            SessionModel.id == session_id,
+            SessionModel.user_id == current_user.id,
+        )
+        .first()
+    )
     if session and session.title == "新对话":
         session.title = user_message[:24] + ("..." if len(user_message) > 24 else "")
     db.commit()
     yield "data: [DONE]\n\n"
+
 
 @router.post("")
 @limiter.limit("20/minute")
@@ -143,7 +163,11 @@ async def chat(
     if not payload.message or not payload.message.strip():
         return {"code": 400, "message": "消息不能为空", "data": None}
     if len(payload.message) > 4000:
-        return {"code": 400, "message": f"消息过长（{len(payload.message)}字符），请精简后重试（上限4000字符）", "data": None}
+        return {
+            "code": 400,
+            "message": f"消息过长（{len(payload.message)}字符），请精简后重试（上限4000字符）",
+            "data": None,
+        }
 
     # 1. 如果没有 session_id，自动创建新会话
     if payload.session_id:
@@ -165,11 +189,13 @@ async def chat(
         db.add(new_session)
         db.commit()
     # 2. 存用户消息到数据库
-    db.add(Message(
-        session_id=session_id,
-        role="user",
-        content=payload.message,
-    ))
+    db.add(
+        Message(
+            session_id=session_id,
+            role="user",
+            content=payload.message,
+        )
+    )
     db.commit()
     # 3. 从数据库加载历史消息，拼接新消息
     history_messages = (
@@ -183,7 +209,9 @@ async def chat(
     session_facts = ReactAgent._extract_session_facts(all_messages)
     # 滑动窗口：只保留最近 20 轮（40 条消息），防止长对话 token 爆炸
     MAX_ROUNDS = 20
-    messages = all_messages[-(MAX_ROUNDS * 2):] if len(all_messages) > MAX_ROUNDS * 2 else all_messages
+    messages = (
+        all_messages[-(MAX_ROUNDS * 2) :] if len(all_messages) > MAX_ROUNDS * 2 else all_messages
+    )
     _user_context.set({"user_id": current_user.id, "city": session_facts.get("city", "") or ""})
     # 4. 流式响应
     return StreamingResponse(

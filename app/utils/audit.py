@@ -9,6 +9,7 @@
   audit_log("login", user_id=user.id, result="success")
   audit_log("login", result="fail", username=name)   # 失败无 user_id
 """
+
 import json
 import logging
 import os

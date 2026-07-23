@@ -9,10 +9,10 @@ from langgraph.types import Command
 from app.services.agent_tools import _user_context
 from app.utils.logger_handler import logger
 
+
 @wrap_tool_call
 def monitor_tool(
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command]
+    request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command]
 ) -> ToolMessage | Command:
     runtime_ctx = request.runtime.context or {}
     user_id = runtime_ctx.get("user_id")
@@ -29,7 +29,7 @@ def monitor_tool(
         result = handler(request)
         logger.info(f"[tool monitor]工具{tool_name}调用成功")
         if tool_name == "trigger_report":
-            request.runtime.context['report'] = True
+            request.runtime.context["report"] = True
         return result
     except Exception as e:
         logger.error(f"工具{tool_name}调用失败，原因：{str(e)}", exc_info=True)
@@ -38,19 +38,26 @@ def monitor_tool(
             tool_call_id=request.tool_call.get("id", tool_name),
         )
 
+
 @before_model
 def log_before_model(
-        state: AgentState, # 整个Agent智能体中的状态记录
-        runtime: Runtime, # 记录了整个执行过程的上下文信息
-): # 在模型执行前输出日志
+    state: AgentState,  # 整个Agent智能体中的状态记录
+    runtime: Runtime,  # 记录了整个执行过程的上下文信息
+):  # 在模型执行前输出日志
     logger.info(f"[log_before_model]即将调用模型，带有{len(state['messages'])}条消息。")
 
-    logger.debug(f"[log_before_model]{type(state['messages'][-1]).__name__}| {state['messages'][-1].content.strip()}")
+    last_message = state["messages"][-1]
+    logger.debug(
+        "[log_before_model]%s| %s",
+        type(last_message).__name__,
+        last_message.content.strip(),
+    )
 
     return None
 
-@dynamic_prompt # 每一次在生成提示词之前，调用此函数
-def report_prompt_switch(request: ModelRequest): # 动态切换提示词
+
+@dynamic_prompt  # 每一次在生成提示词之前，调用此函数
+def report_prompt_switch(request: ModelRequest):  # 动态切换提示词
     is_report = request.runtime.context.get("report", False)
     session_facts = request.runtime.context.get("session_facts", {})
 
@@ -58,8 +65,9 @@ def report_prompt_switch(request: ModelRequest): # 动态切换提示词
     if session_facts:
         fact_lines = [f"- {key}: {value}" for key, value in session_facts.items()]
         facts_prompt = (
-            "\n\n已知会话事实：\n" + "\n".join(fact_lines) +
-            "\n请优先使用这些历史事实回答，不要忽略用户之前已经明确提到的信息。"
+            "\n\n已知会话事实：\n"
+            + "\n".join(fact_lines)
+            + "\n请优先使用这些历史事实回答，不要忽略用户之前已经明确提到的信息。"
         )
 
     if is_report:  # 是报告生成场景，返回报告生成提示词内容

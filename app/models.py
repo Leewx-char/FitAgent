@@ -9,11 +9,23 @@
 
 三张表的关系链：User (1) → (N) Session (1) → (N) Message。
 """
-from sqlalchemy import (Column, Integer, String,
-                        Text, DateTime, ForeignKey,
-                        func, CHAR, Float, Date, Index)
+
+from sqlalchemy import (
+    CHAR,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import relationship
 from app.core.database import Base
+
 
 class User(Base):
     __tablename__ = "users"
@@ -24,15 +36,20 @@ class User(Base):
     city = Column(String(50), default="")
     extra_info = Column(Text, default="")  # 扩展字段（JSON字符串，存用户画像）
     created_at = Column(DateTime, server_default=func.now())
-    # 参数一：指向哪个模型类 参数二：对应模型类也有一个指回我，形成双向绑定 参数三：删用户时自动删掉他所有会话
+    # 与 Session 建立双向关系；删除用户时级联删除其会话。
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
-    profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    profile = relationship(
+        "UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
+
 
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
     gender = Column(String(10), default="")  # male / female / other
     age = Column(Integer, nullable=True)  # 年龄
     height = Column(Integer, nullable=True)  # 身高(cm)
@@ -49,6 +66,7 @@ class UserProfile(Base):
 
     user = relationship("User", back_populates="profile")
 
+
 class Session(Base):
     __tablename__ = "sessions"
 
@@ -61,6 +79,7 @@ class Session(Base):
     user = relationship("User", back_populates="sessions")
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
 
+
 class Message(Base):
     __tablename__ = "messages"
 
@@ -71,6 +90,7 @@ class Message(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     session = relationship("Session", back_populates="messages")
+
 
 class FitnessData(Base):
     __tablename__ = "fitness_data"

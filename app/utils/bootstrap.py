@@ -2,6 +2,7 @@ import os
 from app.utils.config_handler import get_prompts_config, get_chroma_config, get_models_config
 from app.utils.path_tool import get_abs_path
 
+
 def validate_runtime() -> list[str]:
     issues = []
 
@@ -24,7 +25,12 @@ def validate_runtime() -> list[str]:
             issues.append(f"{label}不存在：{abs_path}")
 
     # 检查 3: 模型配置
-    for key in ("chat_model_name", "embedding_model_name"):
+    for key in (
+        "chat_model_name",
+        "embedding_model_name",
+        "vl_primary_model_name",
+        "vl_fallback_model_name",
+    ):
         if not get_models_config().get(key):
             issues.append(f"模型配置缺失：{key}")
 

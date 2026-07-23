@@ -24,7 +24,7 @@
 | RAG 检索 | 向量 + BM25 双路检索 + RRF 融合 | 语义理解 + 关键词精确，互补验证 |
 | BM25 分词 | 中文拆字、英文/数字保留整体 | 零额外依赖，IDF 自动给稀有字高权重 |
 | 项目结构 | FastAPI 标准分层（app/core/api/services） | 职责单一，目录命名符合社区惯例 |
-| 健康数据 | health_data TEXT 列存 JSON 整体 | 增删字段只改提示词和前端，中间层零改动 |
+| 健康数据 | health_data TEXT 列存十项固定指标 JSON | 健身场景字段稳定，契约和前端展示更简单 |
 | VL 调用 | ChatTongyi (qwen-vl-plus) | 通义千问 VL 中文识别最佳 |
 | PDF 处理 | 文字≥200字走 LLM，<200走 VL | 平衡速度与准确性 |
 | 前端框架 | Naive UI（非 Element Plus） | 配色 #42A5F5，清新极简风 |
@@ -51,7 +51,7 @@
 
 - 后端：upload_router + doc_parser + VL/LLM 双路线 + 加密PDF检测 + health_data 存储
 - 前端：Chat.vue 上传按钮 + 确认面板 + Profile.vue 健康数据展示
-- 提示词：10个健身核心字段 + other_findings 扩展 + 置信度标注
+- 提示词与上传接口：统一使用 `{code, messages, data}`，仅保留十个健身核心指标和单位
 - 去重：身高/体重从体检报告回填到基本信息，不在健康数据区块重复展示
 - VL模型 response.content list→str 修复
 - 上传按钮 loading 状态替代 title 悬浮提示
@@ -111,7 +111,7 @@ gender, age, height, weight, goal, weekly_days, experience
 injuries          # ["膝盖", "腰椎"]
 diet_restrict     # ["素食", "低碳"]
 preferences       # {"preferred_time": "早上", "gym": true}
-health_data       # 从文档提取的健康指标（10个固定字段 + other_findings）
+health_data       # 从文档提取的健康指标（10个固定字段）
 ```
 
 ### health_data 字段设计
@@ -131,7 +131,7 @@ health_data       # 从文档提取的健康指标（10个固定字段 + other_f
 | alt | 谷丙转氨酶 | U/L | 肝功能→蛋白摄入 |
 | uric_acid | 尿酸 | μmol/L | 痛风→动作选择 |
 
-不在上述字段中的发现 → `other_findings` 数组，前端同风格渲染。
+不在上述字段中的发现不写入画像；页面冲突以候选值和页码返回，由用户确认后保存。
 
 ---
 
@@ -160,7 +160,7 @@ health_data       # 从文档提取的健康指标（10个固定字段 + other_f
 - **ContextVar**: run_in_executor 自动复制，LangGraph 工具调用隔离需 runtime.context 桥接
 - **SSE**: POST /api/chat，前端 fetch + ReadableStream 逐行解析 data: 前缀
 - **ProfileUpdate**: model_dump(exclude_unset=True) 只更新传了的字段
-- **health_data**: 增删字段只改提示词（prompts/health_extract.txt）+ 前端映射（fieldLabels），数据库/Schema/API 零改动
+- **health_data**: 十项固定字段由 `HealthDataSchema` 约束；模型和上传接口均返回 `{code, messages, data}`
 - **VL模型**: ChatTongyi response.content 可能是 list，需 isinstance(content, list) 转 str
 - **MySQL TEXT**: 不支持 DEFAULT 值，由 ORM 层 default="{}" 处理
 - **stream_mode="messages"**: yield 格式为 (AIMessageChunk/ToolMessage, metadata) 元组

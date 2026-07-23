@@ -9,7 +9,6 @@
 | Python | 3.11+ | |
 | Node.js | 20+ | |
 | MySQL | 8.0+ | 需提前安装并启动服务 |
-| [Windows] Visual C++ | 14.0+ | 编译 python-magic-bin 所需 |
 | [Windows] poppler | 最新版 | pdf2image 依赖,[下载地址](https://github.com/oschwartz10612/poppler-windows/releases),将 `bin/` 加入系统 PATH |
 
 ## 技术栈
@@ -37,16 +36,21 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 cp .env.example .env
 # 编辑 .env,填入 DASHSCOPE_API_KEY、MySQL 配置、JWT_SECRET_KEY
 
-# 2. Python 环境 & 依赖
+# 2. Python 环境与开发依赖（pyproject.toml 是唯一依赖入口）
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-pip install python-magic-bin   # Windows 必需,提供 libmagic DLL
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 
-# 3. 确保 MySQL 服务已启动，然后启动后端
+# 3. 初始化空开发数据库并执行迁移
+# .env 中 AUTO_CREATE_DATABASE=true 时才允许创建数据库
+python -c "from app.core.database import ensure_database_exists; ensure_database_exists()"
+alembic upgrade head
+
+# 4. 确保 MySQL 服务已启动，然后启动后端
 uvicorn app.main:app --reload --port 8000
 
-# 4. 启动前端（新终端）
+# 5. 启动前端（新终端）
 cd frontend
 npm install
 npm run dev
@@ -58,18 +62,39 @@ npm run dev
 # 1. 克隆并配置环境变量
 cp .env.example .env
 
-# 2. Python 环境
+# 2. Python 环境与开发依赖
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 
-# 3. 确保 MySQL 服务已启动，然后启动后端
+# 3. 初始化空开发数据库并执行迁移
+python -c "from app.core.database import ensure_database_exists; ensure_database_exists()"
+alembic upgrade head
+
+# 4. 确保 MySQL 服务已启动，然后启动后端
 uvicorn app.main:app --reload --port 8000
 
-# 4. 启动前端
+# 5. 启动前端
 cd frontend && npm install && npm run dev
 ```
 
 浏览器打开 http://localhost:5173
+
+只安装运行依赖时使用：`python -m pip install .`。
+
+## 开发门禁
+
+```bash
+ruff format --check app
+ruff check app
+pytest app/tests
+```
+
+## 健康文档处理提示
+
+- 可选文字的 PDF 使用文本模型；扫描版 PDF 和图片先使用 Qwen-VL Plus，失败页才以更高精度交给 Max 重试。扫描 PDF 会处理全部页面，默认最多 20 页。
+- 上传前会提示文件将发送至 DashScope 用于指标提取；原始临时文件在处理完成后删除。
+- 健康文档接口统一返回 `{code, messages, data}`：成功时 `data` 包含指标和冲突候选，失败时为 `null`。系统只整理十项体检指标及单位，不提供医疗诊断。识别结果必须经用户编辑/确认后才写入健康画像。
 
 ## 项目结构
 
@@ -81,6 +106,7 @@ FitAgent/
 │   ├── schemas.py              # Pydantic 请求/响应模型
 │   ├── core/                   # 基础设施
 │   │   ├── database.py         # MySQL 连接
+│   │   ├── settings.py         # 环境配置
 │   │   ├── auth.py             # JWT 认证
 │   │   └── deps.py             # 依赖注入
 │   ├── api/                    # HTTP 层
@@ -111,6 +137,8 @@ FitAgent/
 │   ├── decisions.md
 │   ├── design.md
 │   └── product.md
+├── alembic/                     # 数据库迁移
+├── alembic.ini
 ├── storage/uploads/            # 上传文件临时目录
 └── chroma_db/                  # ChromaDB 持久化存储
 ```

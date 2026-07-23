@@ -8,6 +8,8 @@ from app.utils.audit import audit_log
 from fastapi.security import OAuth2PasswordRequestForm
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
 @router.post("/register", response_model=UserResponse)
 def register(body: UserRegister, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.username == body.username).first()
@@ -23,6 +25,7 @@ def register(body: UserRegister, db: Session = Depends(get_db)):
     audit_log("register", user_id=user.id, username=user.username)
     return user
 
+
 @router.post("/login", response_model=TokenResponse)
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == form_data.username).first()
@@ -34,7 +37,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     audit_log("login", user_id=user.id, username=user.username)
     return TokenResponse(access_token=access_token, token_type="bearer")
 
-@router.get("/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user)): # FastAPI 自动执行 get_current_user
-    return current_user
 
+@router.get("/me", response_model=UserResponse)
+def get_me(current_user: User = Depends(get_current_user)):  # FastAPI 自动执行 get_current_user
+    return current_user

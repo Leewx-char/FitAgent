@@ -1,238 +1,411 @@
-"""
-用户上传文件
-  ↓
-handle_upload(file_bytes, filename)
-  ├── _validate_upload  →  验证MIME、大小、uuid重命名
-  ├── _save_temp        →  保存到 storage/uploads/
-  └── parse_health_doc  →  路由分发
-        ├── 图片 → parse_image → _extract_with_vl (千问VL)
-        └── PDF  → parse_pdf
-              ├── 加密 → 返回 {"status": "encrypted", ...}
-              ├── 文字≥200字 → _extract_with_llm (qwen3-max)
-              └── 文字<200字 → _pdf_to_images → _extract_with_vl (千问VL)
-"""
+"""解析健康文档，并将模型和接口输出统一为 code/messages/data。"""
+
+import base64
 import json
 import os
 import re
 import uuid
-import base64
 from pathlib import Path
+from typing import Any
+
 try:
     import magic
-except ImportError:
+except ImportError as exc:  # pragma: no cover - 取决于运行所在操作系统
     raise ImportError(
         "缺少 python-magic 依赖。\n"
-        "Windows 用户请执行：pip install python-magic-bin\n"
+        '请重新执行：python -m pip install -e ".[dev]"\n'
         "macOS 用户请执行：brew install libmagic\n"
         "Linux 用户请执行：apt install libmagic1"
-    )
-from pypdf import PdfReader
-from pdf2image import convert_from_path
+    ) from exc
+
 from langchain_core.messages import HumanMessage
+from pdf2image import convert_from_path
+from pydantic import ValidationError
+from pypdf import PdfReader
+
+from app.core.settings import get_settings
+from app.schemas import HealthDataSchema, HealthMetric
 from app.services.factory import get_chat_model, get_vl_model
-from app.utils.prompt_loader import load_health_extract_prompts
 from app.utils.logger_handler import logger
+from app.utils.prompt_loader import load_health_extract_prompts
 
 UPLOAD_DIR = Path("storage/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-MAX_FILE_SIZE = 10 * 1024 * 1024 # 10MB
+HEALTH_CODE_OK = 0
+HEALTH_CODE_UNRELATED = 1001
+HEALTH_CODE_PARSE_FAILED = 1002
+HEALTH_CODE_ENCRYPTED = 1003
+HEALTH_CODE_INVALID_INPUT = 1004
+
+MAX_FILE_SIZE = 10 * 1024 * 1024
+MAX_PDF_TEXT_CHARACTERS = 20_000
 ALLOWED_MIMES = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
 PDF_TEXT_THRESHOLD = 200
+METRIC_FIELDS = tuple(HealthDataSchema.model_fields)
+
+
+def _result(
+    code: int,
+    messages: list[str] | None = None,
+    metrics: HealthDataSchema | None = None,
+    conflicts: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """构造唯一的健康文档结果格式。"""
+
+    unique_messages = list(dict.fromkeys(message for message in messages or [] if message))
+    data = None
+    if metrics is not None:
+        data = {
+            "metrics": metrics.model_dump(exclude_none=True),
+            "conflicts": conflicts or {},
+        }
+    return {"code": code, "messages": unique_messages, "data": data}
+
 
 def _validate_upload(file_bytes: bytes, filename: str) -> tuple[str, str]:
-    # mime 文件的类型标识
-    mime = magic.from_buffer(file_bytes, mime=True) # 读文件头前几个字节判断真实类型
-    if mime not in ALLOWED_MIMES: # 不在白名单就直接拒绝
-        raise ValueError(f"不支持的文件类型：{mime}，仅支持图片（JPG/PNG/Webp）和PDF")
-    if len(file_bytes) > MAX_FILE_SIZE: # 大小超10MB拒绝
-        raise ValueError(f"文件大小超过限制（最大10MB），当前{len(file_bytes) / 1024 / 1024:.1f}MB")
-    # 取原始扩展名
-    ext = Path(filename).suffix or (".jpg" if mime.startswith("image") else ".pdf")
-    # 32位随机十六进制字符串做文件名
-    safe_name = f"{uuid.uuid4().hex}{ext}"
-    return mime, safe_name
+    """在使用随机文件名暂存前校验文件类型和大小。"""
+
+    mime = magic.from_buffer(file_bytes, mime=True)
+    if mime not in ALLOWED_MIMES:
+        raise ValueError(f"不支持的文件类型：{mime}，仅支持图片（JPG/PNG/WebP）和 PDF")
+    if len(file_bytes) > MAX_FILE_SIZE:
+        size_mb = len(file_bytes) / 1024 / 1024
+        raise ValueError(f"文件大小超过限制（最大 10MB，当前 {size_mb:.1f}MB）")
+
+    extension = Path(filename).suffix or (".jpg" if mime.startswith("image") else ".pdf")
+    return mime, f"{uuid.uuid4().hex}{extension}"
+
 
 def _save_temp(file_bytes: bytes, safe_name: str) -> Path:
-    """
-    解释：
-    - 把验证通过的文件内容写到 storage/uploads/ 目录
-    - 返回 Path 对象，后续解析需要读这个文件
-    - 解析完会在 finally 里删掉这个临时文件（安全措施，防止磁盘堆积）
-    """
+    """以生成后的安全文件名将上传文件写入临时目录。"""
+
     path = UPLOAD_DIR / safe_name
     path.write_bytes(file_bytes)
     return path
 
-# 从LLM返回中提取JSON
-def _parse_llm_json(content: str) -> dict:
-    # 第1层：提取 ```json...``` 代码块
-    json_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
-    if json_match:
-        content = json_match.group(1).strip()
-    # 第2层：直接尝试解析
+
+def _parse_llm_json(content: str) -> dict[str, Any]:
+    """从模型响应中提取一个 JSON 对象，绝不执行任意内容。"""
+
+    code_block = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
+    if code_block:
+        content = code_block.group(1).strip()
     try:
-        result = json.loads(content)
-        if isinstance(result, dict):
-            return result
+        parsed = json.loads(content)
+        if isinstance(parsed, dict):
+            return parsed
     except json.JSONDecodeError:
         pass
-    # 第3层：宽松匹配，找第一个 {到最后一个}
-    brace_match = re.search(r"\{[\s\S]*\}", content)
-    if brace_match:
+
+    object_match = re.search(r"\{[\s\S]*\}", content)
+    if object_match:
         try:
-            return json.loads(brace_match.group())
+            parsed = json.loads(object_match.group())
+            if isinstance(parsed, dict):
+                return parsed
         except json.JSONDecodeError:
             pass
-    return {"status": "parse_failed", "message": "AI返回结果无法解析为JSON"}
+    return _result(HEALTH_CODE_PARSE_FAILED, ["AI 返回结果无法解析为 JSON"])
 
-# 调用大模型（文字型用普通LLM）
-def _extract_with_llm(text: str) -> dict:
-    prompt = load_health_extract_prompts()
+
+def _response_content(response: Any) -> str:
+    """将 LangChain 响应内容统一转换为纯文本。"""
+
+    content = response.content
+    if isinstance(content, list):
+        return "".join(item if isinstance(item, str) else item.get("text", "") for item in content)
+    return str(content)
+
+
+def _extract_with_llm(text: str) -> dict[str, Any]:
+    """使用常规聊天模型从可选中的 PDF 文字中提取结构化字段。"""
+
     messages = [
-        {"role": "system", "content": prompt},
+        {"role": "system", "content": load_health_extract_prompts()},
         {"role": "user", "content": f"请从以下文档内容中提取健康数据：\n\n{text}"},
     ]
-    response = get_chat_model().invoke(messages)
-    content = response.content
-    if isinstance(content, list):
-        content = "".join(
-            item if isinstance(item, str) else item.get("text", "")
-            for item in content
-        )
-    return _parse_llm_json(content)
+    return _parse_llm_json(_response_content(get_chat_model().invoke(messages)))
 
-def _extract_with_vl(image_path: str) -> dict:
-    with open(image_path, "rb") as f: # 以二进制模式读图片文件
-        b64 = base64.b64encode(f.read()).decode() # 图片二进制 → base64 编码字符串。VL只接受 base64 编码的图片数据
 
-    ext = Path(image_path).suffix.lower()
-    # 根据扩展名确定图片 MIME 类型
-    mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
-    mime_type = mime_map.get(ext, "image/jpeg")
+def _extract_with_vl(image_path: str, tier: str) -> dict[str, Any]:
+    """使用指定层级的视觉模型提取单张页面。"""
 
-    prompt = load_health_extract_prompts()
-    # 千问 VL 使用 DashScope 格式，type 用 "image"，字段名用 "image"
+    with open(image_path, "rb") as image_file:
+        encoded_image = base64.b64encode(image_file.read()).decode()
+
+    image_mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+    mime_type = image_mime_types.get(Path(image_path).suffix.lower(), "image/jpeg")
     messages = [
-        HumanMessage(content=[
-            {"type": "text", "text": f"{prompt}\n\n请从以下健康文档图片中提取健康数据："},
-            {"type": "image", "image": f"data:{mime_type};base64,{b64}"},
-        ])
-    ]
-    response = get_vl_model().invoke(messages)
-    content = response.content
-    if isinstance(content, list):
-        content = "".join(
-            item if isinstance(item, str) else item.get("text", "")
-            for item in content
+        HumanMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": (
+                        f"{load_health_extract_prompts()}\n\n"
+                        "请从这张健康文档图片中提取数据。仅做指标提取，"
+                        "不要给出诊断或治疗建议。"
+                    ),
+                },
+                {"type": "image", "image": f"data:{mime_type};base64,{encoded_image}"},
+            ]
         )
-    return _parse_llm_json(content)
+    ]
+    return _parse_llm_json(_response_content(get_vl_model(tier).invoke(messages)))
 
-def _extract_text_from_pdf(pdf_path: str) -> str:
+
+def _normalise_messages(value: Any) -> list[str]:
+    """将模型消息字段规范为字符串列表。"""
+
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(message) for message in value if isinstance(message, (str, int, float))]
+    return []
+
+
+def _has_measurement(data: HealthDataSchema) -> bool:
+    """判断经校验的提取结果是否包含至少一个可用指标。"""
+
+    return any(
+        (metric := getattr(data, field)) is not None and metric.value is not None
+        for field in METRIC_FIELDS
+    )
+
+
+def _parse_model_result(result: dict[str, Any]) -> tuple[int, HealthDataSchema | None, list[str]]:
+    """校验统一模型结果并返回状态码、指标和消息。"""
+
     try:
-        # 打开 PDF 文件
-        reader = PdfReader(pdf_path)
-        text_parts = []
-        # 遍历每一页
-        for page in reader.pages:
-            t = page.extract_text()
-            if t:
-                text_parts.append(t.strip())
-        # 最终拼接所有页的文字，用换行符分隔
-        return "\n".join(text_parts)
-    except Exception as e:
-        error_msg = str(e)
-        if any(kw in error_msg.lower() for kw in ("encrypted", "password", "not been decrypted")):
-            raise ValueError("PDF文件已加密，请截图后以图片形式上传")
-        raise
+        code = int(result.get("code", HEALTH_CODE_PARSE_FAILED))
+    except (TypeError, ValueError):
+        code = HEALTH_CODE_PARSE_FAILED
+    messages = _normalise_messages(result.get("messages"))
+    if code != HEALTH_CODE_OK:
+        return code, None, messages or ["模型未返回可用结果"]
 
-# PDF转图片
-def _pdf_to_images(pdf_path: str) -> list[str]:
-    # pdf2image 的核心函数，底层调用系统安装的 poppler 把 PDF 每页渲染成 PIL Image 对象。dpi=200 是清晰度和文件大小的平衡
-    images = convert_from_path(pdf_path, dpi=200)
-    paths = []
-    for img in images[:3]: # 只取前3页,体检报告通常前几页就有核心数据,每页都要走 VL 调用，页数太多会很慢很贵
-        img_path = str(UPLOAD_DIR / f"{uuid.uuid4().hex}.png")
-        # PIL Image 保存为 PNG 到临时目录
-        img.save(img_path, "PNG")
-        paths.append(img_path)
-    return paths
+    try:
+        data = HealthDataSchema.model_validate(result.get("data"))
+    except ValidationError:
+        return HEALTH_CODE_PARSE_FAILED, None, ["模型返回数据不符合健康数据契约"]
+    if not _has_measurement(data):
+        return HEALTH_CODE_PARSE_FAILED, None, ["未识别到可确认的健康指标"]
+    return HEALTH_CODE_OK, data, messages
 
-# 清理临时文件
-def _cleanup_files(paths: list[str]):
-    for p in paths:
+
+def _extract_visual_page(
+    image_path: str,
+    tier: str,
+) -> tuple[int, HealthDataSchema | None, list[str]]:
+    """调用指定层级视觉模型并校验返回的统一结果。"""
+
+    try:
+        result = _extract_with_vl(image_path, tier)
+    except Exception:
+        logger.exception("健康文档%s视觉模型调用失败", "主" if tier == "primary" else "兜底")
+        return HEALTH_CODE_PARSE_FAILED, None, ["视觉模型调用失败"]
+    return _parse_model_result(result)
+
+
+def _extract_pdf_text_and_page_count(pdf_path: str) -> tuple[str, int]:
+    """不渲染 PDF，直接提取可选文本和页数。"""
+
+    reader = PdfReader(pdf_path)
+    if reader.is_encrypted:
+        raise ValueError("PDF 文件已加密，请截图后以图片形式上传")
+
+    text_parts = []
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text_parts.append(page_text.strip())
+    return "\n".join(text_parts), len(reader.pages)
+
+
+def _render_pdf_page(pdf_path: str, page: int, dpi: int) -> str:
+    """按指定分辨率将单页 PDF 渲染为临时 PNG。"""
+
+    images = convert_from_path(pdf_path, dpi=dpi, first_page=page, last_page=page)
+    if not images:
+        raise ValueError(f"PDF 第 {page} 页无法渲染")
+    image_path = UPLOAD_DIR / f"{uuid.uuid4().hex}.png"
+    images[0].save(image_path, "PNG")
+    return str(image_path)
+
+
+def _cleanup_files(paths: list[str | Path]) -> None:
+    """尽力删除上传文件和渲染页面等临时文件。"""
+
+    for path in paths:
         try:
-            if p and os.path.exists(p):
-                os.remove(p)
-        except Exception:
-            pass
+            if path and os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            logger.warning("未能清理健康文档临时文件：%s", path)
 
-# 解析图片入口
-def parse_image(image_path: str) -> dict:
-    try:
-        return _extract_with_vl(image_path)
-    except Exception as e:
-        logger.error(f"图片解析失败：{str(e)}", exc_info=True)
-        return {"status": "parse_failed", "message": f"图片解析失败：{str(e)}"}
 
-# 解析PDF入口
-def parse_pdf(pdf_path: str) -> dict:
-    # finally 里需要清理 image_paths，如果放在 try 里面，
-    # 赋值之前的异常会导致 image_paths 未定义，finally 里的
-    # _cleanup_files 就会报错。
-    image_paths = []
+def _merge_page_data(
+    extracted_pages: list[tuple[int, HealthDataSchema]],
+) -> tuple[HealthDataSchema, dict[str, list[dict[str, Any]]]]:
+    """合并无冲突的分页指标，并把冲突候选交给用户选择。"""
+
+    merged: dict[str, Any] = {}
+    selected: dict[str, tuple[int, HealthMetric]] = {}
+    conflicts: dict[str, list[dict[str, Any]]] = {}
+
+    for page, data in extracted_pages:
+        for field in METRIC_FIELDS:
+            metric = getattr(data, field)
+            if metric is None or metric.value is None:
+                continue
+            if field not in selected:
+                selected[field] = (page, metric)
+                merged[field] = metric.model_dump(exclude_none=True)
+                continue
+
+            existing_page, existing_metric = selected[field]
+            existing_payload = existing_metric.model_dump(exclude_none=True)
+            metric_payload = metric.model_dump(exclude_none=True)
+            if existing_payload == metric_payload:
+                continue
+            if field not in conflicts:
+                conflicts[field] = [{"page": existing_page, "metric": existing_payload}]
+                merged.pop(field, None)
+            conflicts[field].append({"page": page, "metric": metric_payload})
+
+    return HealthDataSchema.model_validate(merged), conflicts
+
+
+def _build_result(
+    page_codes: list[int],
+    extracted_pages: list[tuple[int, HealthDataSchema]],
+    messages: list[str],
+) -> dict[str, Any]:
+    """汇总分页提取结果并构造统一响应。"""
+
+    if extracted_pages:
+        data, conflicts = _merge_page_data(extracted_pages)
+        return _result(HEALTH_CODE_OK, messages, data, conflicts)
+    if page_codes and all(code == HEALTH_CODE_UNRELATED for code in page_codes):
+        return _result(HEALTH_CODE_UNRELATED, messages or ["文档与健康指标无关"])
+    return _result(HEALTH_CODE_PARSE_FAILED, messages or ["未能从文档中提取健康指标"])
+
+
+def _prefix_page_messages(page: int, messages: list[str]) -> list[str]:
+    """为分页处理消息补充页码，便于用户知道需要复核的位置。"""
+
+    return [f"第 {page} 页：{message}" for message in messages]
+
+
+def parse_image(image_path: str) -> dict[str, Any]:
+    """通过主模型识别图片；失败时使用兜底模型重试。"""
+
+    code, data, messages = _extract_visual_page(image_path, "primary")
+    if code == HEALTH_CODE_OK:
+        return _result(code, messages, data)
+    if code == HEALTH_CODE_UNRELATED:
+        return _result(code, messages)
+
+    retry_messages = messages + ["主模型识别失败，已使用兜底模型重试"]
+    code, data, fallback_messages = _extract_visual_page(image_path, "fallback")
+    return _result(code, retry_messages + fallback_messages, data)
+
+
+def parse_pdf(pdf_path: str) -> dict[str, Any]:
+    """解析 PDF；可选文本走聊天模型，扫描件按页走视觉模型。"""
+
     try:
-        text = _extract_text_from_pdf(pdf_path)
-    except ValueError as e:
-        # 加密PDF
-        return {"status": "encrypted", "message": str(e)}
-    except Exception as e:
-        logger.error(f"PDF文字提取异常：{str(e)}", exc_info=True)
-        return {"status": "parse_failed", "message": "PDF文件无法解析"}
+        text, page_count = _extract_pdf_text_and_page_count(pdf_path)
+    except ValueError as exc:
+        return _result(HEALTH_CODE_ENCRYPTED, [str(exc)])
+    except Exception:
+        logger.exception("PDF 文字提取失败")
+        return _result(HEALTH_CODE_PARSE_FAILED, ["PDF 文件无法解析"])
+
+    settings = get_settings()
+    if page_count > settings.health_document_max_pages:
+        return _result(
+            HEALTH_CODE_INVALID_INPUT,
+            [f"PDF 共 {page_count} 页，超过当前允许的 {settings.health_document_max_pages} 页上限"],
+        )
 
     if len(text.strip()) >= PDF_TEXT_THRESHOLD:
-        # 文字充足，走普通LLM
-        return _extract_with_llm(text)
+        if len(text) > MAX_PDF_TEXT_CHARACTERS:
+            return _result(
+                HEALTH_CODE_INVALID_INPUT,
+                [f"PDF 文字超过 {MAX_PDF_TEXT_CHARACTERS} 字符，请拆分文件后重新上传"],
+            )
+        try:
+            result = _extract_with_llm(text)
+        except Exception:
+            logger.exception("PDF 文本模型调用失败")
+            return _result(HEALTH_CODE_PARSE_FAILED, ["文本模型调用失败"])
+        code, data, messages = _parse_model_result(result)
+        return _result(code, messages, data)
 
-    # 文字不足，视为扫描件，走VL
-    try:
-        image_paths = _pdf_to_images(pdf_path)
-        return _extract_with_vl(image_paths[0])
-    except Exception as e:
-        logger.error(f"PDF转图片失败：{str(e)}", exc_info=True)
-        return {"status": "parse_failed", "message": "PDF扫描件解析失败"}
-    finally:
-        # 不论 _extract_with_vl 成功还是失败，PDF 转出的临时图片都要删掉。
-        _cleanup_files(image_paths)
+    page_codes: list[int] = []
+    extracted_pages: list[tuple[int, HealthDataSchema]] = []
+    messages: list[str] = []
+    for page in range(1, page_count + 1):
+        primary_path: str | None = None
+        fallback_path: str | None = None
+        try:
+            primary_path = _render_pdf_page(pdf_path, page, settings.health_document_render_dpi)
+            code, data, page_messages = _extract_visual_page(primary_path, "primary")
+            messages.extend(_prefix_page_messages(page, page_messages))
 
-# 统一入口
-def parse_health_doc(file_path: str, mime_type: str) -> dict:
+            if code not in {HEALTH_CODE_OK, HEALTH_CODE_UNRELATED}:
+                messages.append(f"第 {page} 页主模型识别失败，已使用高精度模型重试")
+                fallback_path = _render_pdf_page(
+                    pdf_path,
+                    page,
+                    settings.health_document_fallback_render_dpi,
+                )
+                code, data, fallback_messages = _extract_visual_page(fallback_path, "fallback")
+                messages.extend(_prefix_page_messages(page, fallback_messages))
+
+            page_codes.append(code)
+            if data is not None:
+                extracted_pages.append((page, data))
+        except Exception:
+            logger.exception("PDF 第 %s 页视觉解析失败", page)
+            page_codes.append(HEALTH_CODE_PARSE_FAILED)
+            messages.append(f"第 {page} 页渲染或识别失败")
+        finally:
+            _cleanup_files([path for path in (primary_path, fallback_path) if path])
+
+    return _build_result(page_codes, extracted_pages, messages)
+
+
+def parse_health_doc(file_path: str, mime_type: str) -> dict[str, Any]:
+    """将已校验的临时文件分派给对应解析器，并始终删除该文件。"""
+
     try:
         if mime_type.startswith("image"):
             return parse_image(file_path)
-        elif mime_type == "application/pdf":
+        if mime_type == "application/pdf":
             return parse_pdf(file_path)
-        else:
-            return {"status": "parse_failed", "message": f"不支持的文件类型：{mime_type}"}
+        return _result(HEALTH_CODE_INVALID_INPUT, [f"不支持的文件类型：{mime_type}"])
     finally:
-        # 无论解析成功还是失败，都删除上传的原始临时文件
         _cleanup_files([file_path])
 
-def handle_upload(file_bytes: bytes, filename: str) -> dict:
-    try:
-        # 验证 MIME + 大小
-        mime_type, safe_name = _validate_upload(file_bytes, filename)
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
 
-    # 保存到临时文件
+def handle_upload(file_bytes: bytes, filename: str) -> dict[str, Any]:
+    """校验、解析用户上传的健康文档，并始终清理临时文件。"""
+
+    try:
+        mime_type, safe_name = _validate_upload(file_bytes, filename)
+    except ValueError as exc:
+        return _result(HEALTH_CODE_INVALID_INPUT, [str(exc)])
+
     temp_path = _save_temp(file_bytes, safe_name)
     try:
-        # 解析提取
-        result = parse_health_doc(str(temp_path), mime_type)
-    except Exception as e:
-        logger.error(f"文档解析失败：{str(e)}", exc_info=True)
-        result = {"status": "parse_failed", "message": "解析过程出错"}
-    return result
-
-
+        return parse_health_doc(str(temp_path), mime_type)
+    except Exception:
+        logger.exception("健康文档解析过程失败")
+        return _result(HEALTH_CODE_PARSE_FAILED, ["解析过程出错"])

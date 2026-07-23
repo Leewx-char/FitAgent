@@ -3,6 +3,7 @@ from rank_bm25 import BM25Okapi
 from app.utils.logger_handler import logger
 import re
 
+
 class BM25Retriever:
     def __init__(self):
         self._index = None
@@ -15,8 +16,8 @@ class BM25Retriever:
     def _tokenize(text: str) -> list[str]:
         tokens = []
         # 正则匹配：连续的中文字符 / 连续的英文 /数字
-        for chunk in re.findall(r'[\u4e00-\u9fff]+|[a-z0-9]+', text.lower()):
-            if re.match(r'[\u4e00-\u9fff]', chunk):
+        for chunk in re.findall(r"[\u4e00-\u9fff]+|[a-z0-9]+", text.lower()):
+            if re.match(r"[\u4e00-\u9fff]", chunk):
                 # chunk 是中文，比如 “深蹲标准动作”
                 # 拆成单个字：["深", "蹲", "标", "准", "动", "作"]
                 tokens.extend(list(chunk))
@@ -32,7 +33,7 @@ class BM25Retriever:
 
     def build(self, documents: list):
         with self._lock:
-            self._docs = list(documents) # 保存原始 Document 对象，后面检索时需要返回
+            self._docs = list(documents)  # 保存原始 Document 对象，后面检索时需要返回
             tokenized = [self._tokenize(doc.page_content) for doc in documents]
             self._index = BM25Okapi(tokenized)
             self._doc_count_snapshot = len(documents)
@@ -47,9 +48,5 @@ class BM25Retriever:
         # scores 是一个 list[float]，长度 == len(self._docs), 顺序一一对应
 
         # 配对并排序
-        scored = sorted(
-            zip(self._docs, scores),
-            key=lambda x: x[1],
-            reverse=True
-        )
+        scored = sorted(zip(self._docs, scores), key=lambda x: x[1], reverse=True)
         return scored[:k]
