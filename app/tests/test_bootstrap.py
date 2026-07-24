@@ -1,12 +1,15 @@
 """模型配置契约启动校验测试。"""
 
+from types import SimpleNamespace
+
 from app.utils import bootstrap
 
 
 def test_runtime_validation_reports_missing_vision_model(monkeypatch, tmp_path):
     """应用启动前必须配置两个视觉模型层级。"""
 
-    monkeypatch.setattr(bootstrap.os, "getenv", lambda _key: "test-key")
+    settings = SimpleNamespace(dashscope_api_key="test-key")
+    monkeypatch.setattr(bootstrap, "get_settings", lambda: settings)
     main_prompt = tmp_path / "main.txt"
     report_prompt = tmp_path / "report.txt"
     data_path = tmp_path / "data"
@@ -21,10 +24,12 @@ def test_runtime_validation_reports_missing_vision_model(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         bootstrap,
-        "get_chroma_config",
+        "get_vector_store_config",
         lambda: {
-            "collection_name": "agent",
-            "persist_directory": "chroma",
+            "collection_alias": "rag_active",
+            "url": "http://qdrant",
+            "grpc_port": 6334,
+            "prefer_grpc": True,
             "data_path": str(data_path),
         },
     )

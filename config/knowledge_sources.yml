@@ -1,0 +1,53 @@
+# 外部知识源登记册：只有状态为 approved 且完成内容审核的条目，才允许转换后放入 data/。
+schema_version: 1
+sources:
+  - source_id: fitkg_cn_v1_1
+    domains: [健身知识, 运动营养]
+    language: zh-CN
+    source_kind: 可下载数据集
+    title: FitKG-CN 中文科学健身知识图谱
+    publisher: 北京体育大学团队（Zenodo 发布）
+    version: FitKG-CNv1.1.0
+    source_url: https://doi.org/10.5281/zenodo.14355004
+    acquisition_path: storage/rag/sources/fitkg-cn/FitKG-CNv1.1.0.zip
+    sha256: 4ba0c6a6e9c0c555bfde62de92199dbeed70e0c394a8ec10ef61ce10bf449605
+    license: CC-BY-4.0
+    attribution: "Du, S., Liu, Z. & Pan, B. FitKG-CN v1.1, Zenodo, DOI: 10.5281/zenodo.14355004"
+    status: approved_for_demo
+    formal_rag_import: true
+    review_requirements:
+      - 将图谱标注样本转换为面向检索的文档时保留出处与许可证声明
+      - 由运动专业人员抽样审核动作与营养相关断言，再扩展至更高风险场景
+      - 不将训练数据自动表述为医疗或个性化处方
+
+  - source_id: sport_admin_scientific_fitness_safety
+    domains: [运动防护]
+    language: zh-CN
+    source_kind: 权威网页
+    title: 科学健身指导——让我们的运动更安全
+    publisher: 国家体育总局
+    source_url: https://www.sport.gov.cn/n20001280/n20745751/n20767239/c21748515/content.html
+    acquisition_path: storage/rag/sources/review-only/sport-general-administration-scientific-fitness-safety.html
+    sha256: 4df13876cb6a10bba3e9c4ddf417b04e1dd92a1f9ffa506ed5f181cc9700b7f7
+    license: 未声明开放再利用许可
+    status: review_only
+    formal_rag_import: false
+    review_requirements:
+      - 确认转载、切分和向量化的授权边界
+      - 由运动医学专业人员核验风险分层与建议的适用人群
+
+  - source_id: nhc_adult_sarcopenia_dietary_guideline_2026
+    domains: [运动营养, 运动防护]
+    language: zh-CN
+    source_kind: 权威指南
+    title: 成人肌少症食养指南（2026 年版）
+    publisher: 国家卫生健康委办公厅
+    source_url: https://www.nhc.gov.cn/sps/c100087/202604/a69d2fce21e040dc96cbc40b923a06d3/files/%E9%99%84%E4%BB%B65.%E6%88%90%E4%BA%BA%E8%82%8C%E5%B0%91%E7%97%87%E9%A3%9F%E5%85%BB%E6%8C%87%E5%8D%97%EF%BC%882026%E5%B9%B4%E7%89%88%EF%BC%89.pdf
+    acquisition_path: storage/rag/sources/review-only/nhc-adult-sarcopenia-dietary-guideline-2026.pdf
+    sha256: 34290dde6d23d60de647a6c459ade11d9ddce1eaa2c564c9d185f074866a22b3
+    license: 未声明开放再利用许可
+    status: review_only
+    formal_rag_import: false
+    review_requirements:
+      - 仅用于成人肌少症相关营养与抗阻运动主题，不外推至普通人群或疾病诊疗
+      - 确认授权范围，并由营养师或临床专家审核

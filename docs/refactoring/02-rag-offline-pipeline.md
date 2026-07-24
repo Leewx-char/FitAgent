@@ -1,489 +1,248 @@
-# 02 - RAG 离线管线重构方案
+# 02 - RAG 离线知识管线
 
-> **状态**: 待实施  
-> **优先级**: P0（直接影响检索质量和性能）  
-> **预计工时**: 4-5 天
+> 状态：代码已完成；执行一次索引构建后，当前 Qdrant 才会切换到包含本方案能力的新 revision。
+>
+> 本文描述当前实现，而非待选技术方案。旧版 Chroma、启动时自愈写入和在线重建均不再属于本架构。
 
----
+## 1. 目标与边界
 
-## 一、现状诊断 vs 理想离线管线
+本项目是健身知识 RAG Demo。离线管线的目标是用可重复构建、可验证和可回滚的方式，将本地知识资料发布为 Qdrant 中的活动索引。
 
-### 1.1 离线管线完整对照表
+本阶段已经实现：
 
-| 环节 | 理想流程 | 当前实现 | 差距评估 |
-|------|---------|---------|---------|
-| **数据加载** | 支持多种格式（txt/pdf/docx/markdown/html），支持批量/增量 | 仅 txt + pdf (`file_handler.py:53-57`) | 缺少 docx/markdown/html/json 支持 |
-| **文档解析** | 结构化解析（标题/段落/表格/列表），保留层级信息 | PyPDFLoader + TextLoader 原始加载，无结构识别 | 丢失文档结构信息，切分质量差 |
-| **结构识别** | 识别标题层级、段落、表格、列表、代码块 | **无** | 切分可能把一个问题切成两半 |
-| **清洗** | 去噪（页码/页眉页脚/乱码）、去重（全量+段级）、统一编码 | 仅基本清洗（BOM/空白/换行），无去重 (`file_handler.py:59-77`) | 脏数据影响向量质量 |
-| **文本切分** | 语义感知切分（按段落/句子边界）、父子切片（parent-child）、自适应 chunk size | RecursiveCharacterTextSplitter 按字符切分，无语义感知 | 切分破坏语义完整性 |
-| **元数据增强** | 生成摘要、提取关键词/实体、标记文档类型/日期/作者 | 仅 source/chunk_index/source_type (`vector_store.py:209-212`) | 缺少摘要/关键词，无法做结构化过滤 |
-| **文本向量化** | 批量 embedding、异步、错误重试 | DashScopeEmbeddings 同步逐条 (`factory.py:23`) | 无批量优化，大文档加载慢 |
-| **构建索引** | 多索引并存（向量+关键词+图），增量更新 | 仅 ChromaDB 向量索引 + 内存 BM25，MD5 增量 | BM25 内存索引重启丢失 |
-| **向量数据保存与持久化** | 支持快照/备份/恢复，版本管理 | ChromaDB 自动持久化，manifest 文件管理 | 无备份恢复、无版本回滚 |
+- Qdrant 不可变 revision 集合与 `rag_active` 原子别名切换；
+- TXT、Markdown、PDF 加载，以及 Markdown 标题感知切分；
+- 深度去噪、精确去重、SimHash 近重复去重；
+- 父子切片：子切片检索，父段作为 RAG 上下文；
+- 本地规则摘要与主题标签；
+- Dense Qdrant 检索与离线 BM25 工件的混合检索；
+- 写入数量校验、构建进度、失败清理和发布清单。
 
-### 1.2 当前代码位置
+本阶段不实现：DOCX / JSON / HTML 自动加载、Qdrant 原生 sparse、集群、快照策略和 LLM 元数据生成。它们的触发条件见第 10 节。
 
-| 模块 | 文件 | 行号 | 职责 |
-|------|------|------|------|
-| 数据加载 | `app/utils/file_handler.py` | 36-57 | `listdir_with_allowed_type`, `txt_loader`, `pdf_loader` |
-| 文档清洗 | `app/utils/file_handler.py` | 59-91 | `clean_text`, `normalize_documents` |
-| QA切分 | `app/utils/file_handler.py` | 93-126 | `split_qa_documents` |
-| 文本切分 | `app/services/vector_store.py` | 52-65 | `_build_splitter`, `_get_splitter` |
-| MD5去重 | `app/services/vector_store.py` | 67-70, 76-88 | `_build_chunk_id`, `_load_manifest`, `_save_manifest` |
-| 加载入口 | `app/services/vector_store.py` | 154-231 | `load_document` |
-| 陈旧清理 | `app/services/vector_store.py` | 99-139 | `_delete_documents_by_source`, `_cleanup_stale_documents` |
-| 自愈重建 | `app/services/rag_service.py` | 73-81 | `_repair_vector_store` |
+## 2. 架构
 
----
+```text
+data/（TXT / MD / PDF）
+  │
+  ├─ 文件 SHA256、加载、基础规范化、FAQ 拆分
+  ├─ Markdown 标题切分 / 大窗口父段切分
+  ├─ 深度去噪、子切片、内容去重
+  ├─ 本地摘要与标签增强
+  ├─ DashScope 批量 embedding
+  └─ 写入 Qdrant revision 集合并校验数量
+       │
+       ├─ 原子切换 rag_active 别名
+       ├─ storage/rag/index_manifest.json
+       └─ storage/rag/bm25_documents.json
 
-## 二、分步骤重构方案
-
-### 步骤 1：数据加载增强 — 多格式支持
-
-**当前问题**：仅支持 txt 和 pdf，无法加载 Markdown 文档、Word 文档、JSON 数据字典。
-
-**方案**：在 `file_handler.py` 添加格式分发器：
-
-```python
-# app/utils/file_handler.py 新增
-
-from langchain_community.document_loaders import (
-    PyPDFLoader, TextLoader, UnstructuredMarkdownLoader,
-    Docx2txtLoader, JSONLoader
-)
-
-LOADER_MAP = {
-    ".txt": TextLoader,
-    ".pdf": PyPDFLoader,
-    ".md": UnstructuredMarkdownLoader,
-    ".docx": Docx2txtLoader,
-    # JSON 格式需要 jq 表达式，暂不纳入自动加载，手动导入
-}
-
-def smart_loader(filepath: str) -> list[Document]:
-    """根据文件后缀自动选择加载器"""
-    ext = os.path.splitext(filepath)[1].lower()
-    loader_cls = LOADER_MAP.get(ext)
-    if loader_cls is None:
-        logger.warning(f"不支持的文件格式：{ext}，文件 {filepath} 被跳过")
-        return []
-    if ext == ".pdf":
-        return loader_cls(filepath).load()
-    return loader_cls(filepath, encoding="utf-8").load()
+在线请求
+  ├─ Dense：查询 embedding → Qdrant 子切片命中 → 返回父段
+  ├─ BM25：子切片关键词命中 → 返回父段
+  └─ RRF 融合、去重、返回 Top-K 上下文
 ```
 
-同时更新 `config/chroma.yml` 的 `allow_knowledge_file_type`:
+在线 RAG 只读活动别名和 BM25 工件，绝不在 API 请求中导入资料、重建索引或切换 revision。
+
+## 3. 关键目录与职责
+
+| 位置 | 职责 |
+|---|---|
+| `app/services/knowledge_indexer.py` | 离线构建入口、revision 发布、构建校验 |
+| `app/services/knowledge_enrichment.py` | 深度清洗、内容去重、摘要、标签 |
+| `app/services/vector_repository.py` | Qdrant 集合、别名、向量写入与检索适配 |
+| `app/services/vector_store.py` | 在线 dense 查询服务 |
+| `app/services/bm25_retriever.py` | 离线 BM25 工件加载与查询 |
+| `app/services/rag_service.py` | Dense/BM25 融合和上下文组装 |
+| `config/vector_store.yml` | 切片、Qdrant、去重与增强参数 |
+| `config/knowledge_sources.yml` | 数据来源、许可和纳入状态 |
+| `storage/rag/` | 运行时 manifest、BM25 工件和评测报告，默认不提交 Git |
+
+## 4. 离线构建流程
+
+入口命令：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.services.knowledge_indexer
+```
+
+### 4.1 加载与版本输入
+
+构建器递归扫描 `data/`，目前允许 `.txt`、`.md`、`.pdf`。每个来源文件先计算 SHA256，再加载并做基础空白规范化；识别为 FAQ 的文本会拆成独立问答文档。
+
+revision 由以下内容计算：来源文件 SHA256、切片参数、父段参数、去重阈值、摘要/标签参数、embedding 模型名称与索引 schema 版本。任一项变化都会生成新的 `rag_<revision 前 12 位>` 集合。
+
+这保证“同一份来源 + 同一套配置”产生可预期的版本，而不是覆盖旧集合。
+
+### 4.2 父子切片
+
+Markdown 先按 `#`、`##` 切出章节；没有章节标题的文档前言不单独入库。TXT 和 PDF 直接按递归分隔符切分。
+
+接着使用两层窗口：
+
+| 类型 | 默认参数 | 用途 |
+|---|---:|---|
+| 父段 | 1200 字符，重叠 160 | 保留更完整的上下文，交给 RAG/LLM |
+| 子切片 | 500 字符，重叠 80 | 生成向量和 BM25 索引，用于精准命中 |
+
+每个父段有稳定 `parent_id`。每个子切片保存 `parent_id` 与 `parent_text`：命中向量的仍是子文本，但返回给上层的是父段。原始命中子文本保留为 `child_text`，用于审计与调试。
+
+### 4.3 深度去噪与内容级去重
+
+`DeepTextCleaner` 在父段和子切片两个阶段运行，处理：
+
+- Unicode NFKC、BOM、零宽字符、换行和空白；
+- 单独页码、`第 X 页`、URL；
+- 常见网页导航、版权声明、免责声明和分隔线；
+- 相邻重复行。
+
+去重器在本次构建的全部子切片范围内运行：
+
+1. 去掉空白与标点后计算 SHA256，过滤精确重复；
+2. 对其余文本按中文连续字符三元组计算 64 位 SimHash；
+3. 用四个 16 位 band 缩小候选集合，再计算汉明距离；
+4. 距离不大于 `near_duplicate_hamming_distance`（默认 3）时，过滤为近重复。
+
+这是一条保守规则，不等价于“语义完全相同”。短文本或大幅同义改写仍需要评测集来观察误判与漏判。
+
+### 4.4 摘要与标签
+
+每个子切片在离线阶段生成：
+
+- `summary`：移除 Markdown 标题后截取前 160 字符；
+- `tags`：根据标题和正文中的关键词打上动作、营养、防护、上肢、下肢、核心等标签，最多 4 个。
+
+此实现不调用 LLM，因此构建不会因摘要/标签增加外部 API 成本。标签目前用于展示、排障和后续 payload 过滤；它们尚未进入检索打分，也不是医学或运动学分类标准。
+
+### 4.5 写入、校验与发布
+
+构建器先用首个 embedding 确定向量维度，再创建新的 revision 集合和 `source_id` payload 索引。随后按 `batch_size`（默认 32）批量 embedding、写入并每约 5% 输出进度。
+
+全部写入后，构建器以 Qdrant 精确计数校验 `points_count == chunk_count`。通过后才将 `rag_active` 别名原子切到新集合，并写出：
+
+```text
+storage/rag/index_manifest.json     # revision、集合名、来源校验和、内容处理统计
+storage/rag/bm25_documents.json     # revision、子切片文本及父段元数据
+```
+
+如果构建在别名切换前失败，新集合会自动删除，旧 `rag_active` 不受影响。即使“服务端已创建集合、但客户端在响应前超时”，构建器也会确认并清理该未发布集合。如果别名已切换后写工件发生异常，系统不会自动删除新集合，避免误删正在提供服务的索引；日志会明确提示需要人工检查工件与别名状态。
+
+## 5. 索引数据契约
+
+Qdrant point 的向量来自子切片 `text`。payload 的核心字段如下：
+
+| 字段 | 说明 |
+|---|---|
+| `chunk_id` | 子切片的稳定 UUID |
+| `source_id` | 相对 `data/` 的来源路径 |
+| `source_revision` | 来源文件 SHA256 |
+| `index_revision` | 本次索引 revision |
+| `parent_id` | 父段稳定 UUID |
+| `parent_text` | 命中后返回给 RAG 的完整父段 |
+| `summary` | 本地生成的短摘要 |
+| `tags` | 逗号分隔的主题标签 |
+| `文档标题` / `章节标题` | Markdown 结构元数据（存在时） |
+
+`parent_text` 会在在线读取时从通用 metadata 中取出并作为 `Document.page_content` 返回；`child_text` 则保留在 metadata 中，表示实际命中的证据片段。
+
+## 6. 在线检索行为
+
+1. `VectorStoreService` 对查询文本生成 dense 向量；
+2. `QdrantVectorRepository.search()` 查询 `rag_active`，依据子切片得分排序；
+3. repository 用 `parent_text` 替换返回文档的正文，并保留 `child_text`；
+4. BM25 从同 revision 的离线工件中以子切片建立索引，命中后做相同的父段提升；
+5. `RagSummarizeService` 只在 BM25 revision 与 Qdrant 活动 revision 一致时执行 RRF 融合；
+6. 融合结果按文本相似度去重后取 Top-K，组装为模型上下文和来源引用。
+
+若 BM25 工件与活动 Qdrant revision 不一致，系统降级为 dense 检索并记录警告，而不是混用两个版本的数据。
+
+## 7. 配置与本地运行
+
+`config/vector_store.yml` 的关键项：
+
 ```yaml
-allow_knowledge_file_type: ["txt", "pdf", "md", "docx"]
+url: http://localhost:6333
+grpc_port: 6334
+prefer_grpc: true
+qdrant_timeout_seconds: 60
+collection_alias: rag_active
+collection_prefix: rag
+chunk_size: 500
+chunk_overlap: 80
+parent_chunk_size: 1200
+parent_chunk_overlap: 160
+near_duplicate_hamming_distance: 3
+summary_max_chars: 160
+max_tags: 4
+batch_size: 32
 ```
 
-### 步骤 2：结构识别 — 保留文档层级
+`.env` 中至少需要：
 
-**当前问题**：`RecursiveCharacterTextSplitter` 不理解文档结构，只能按字符数切分。一个标题和它的正文可能被切开。
-
-**方案**：引入 `MarkdownHeaderTextSplitter`（对 md 文件）和自定义标题识别（对 txt 文件）：
-
-```python
-# app/services/vector_store.py 新增方法
-
-from langchain_text_splitters import MarkdownHeaderTextSplitter
-
-HEADERS_TO_SPLIT_ON = [
-    ("#", "h1"),
-    ("##", "h2"),
-    ("###", "h3"),
-]
-
-def _structure_aware_split(self, documents: list[Document], file_ext: str) -> list[Document]:
-    """结构感知切分：对 markdown 使用标题切分，对 txt 使用递归切分"""
-    if file_ext == ".md":
-        md_splitter = MarkdownHeaderTextSplitter(
-            headers_to_split_on=HEADERS_TO_SPLIT_ON,
-            strip_headers=False,
-        )
-        result = []
-        for doc in documents:
-            md_splits = md_splitter.split_text(doc.page_content)
-            for split in md_splits:
-                split.metadata.update(doc.metadata)
-            result.extend(md_splits)
-        return result
-    
-    # txt/pdf 使用 RecursiveCharacterTextSplitter
-    return self._get_splitter(f".{file_ext}").split_documents(documents)
+```dotenv
+DASHSCOPE_API_KEY=你的密钥
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=本地随机强密钥
 ```
 
-### 步骤 3：文档清洗增强 — 去噪+去重
+先启动 Qdrant：
 
-**当前问题**：`clean_text` 只做基础空白清理，不去除页码/页眉页脚/乱码，不去重。
-
-**方案**：增加清洗规则配置和内容级去重：
-
-```python
-# app/utils/file_handler.py 新增
-
-import hashlib
-
-# 页码/页眉页脚模式
-_NOISE_PATTERNS = [
-    re.compile(r"^\d{1,4}\s*$", re.MULTILINE),   # 单独的数字行（页码）
-    re.compile(r"^第\s*\d+\s*页\s*$", re.MULTILINE),  # "第X页"
-    re.compile(r"^\s*版权所有.*$", re.MULTILINE),  # 版权声明
-]
-
-def deep_clean(text: str) -> str:
-    """深度清洗：去噪 + 统一格式 + 质量评分"""
-    if not text:
-        return ""
-    
-    # 基础清洗（原有逻辑）
-    cleaned = clean_text(text)
-    
-    # 去除噪声行
-    for pattern in _NOISE_PATTERNS:
-        cleaned = pattern.sub("", cleaned)
-    
-    # 重新压缩空行
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    
-    return cleaned.strip()
-
-def deduplicate_documents(documents: list[Document]) -> list[Document]:
-    """文档级去重：基于内容 MD5 去除完全相同的文档"""
-    seen = set()
-    unique = []
-    for doc in documents:
-        content_hash = hashlib.md5(doc.page_content.encode("utf-8")).hexdigest()
-        if content_hash not in seen:
-            seen.add(content_hash)
-            unique.append(doc)
-    if len(unique) < len(documents):
-        logger.info(f"文档去重：{len(documents)} → {len(unique)}")
-    return unique
+```powershell
+docker compose up -d qdrant
+docker compose ps qdrant
 ```
 
-### 步骤 4：文本切分优化 — 语义切分 + 父子切片
+Qdrant 仅绑定本机 `127.0.0.1`；本地 HTTP 使用 API Key 时客户端的“insecure connection”警告属于预期提示。当前客户端优先使用 gRPC `6334`，以规避本机 Docker Desktop REST 代理偶发的 502。
 
-**当前问题**：固定 `chunk_size=240` 太小（约 120 汉字），破坏语义完整性。无重叠上下文容易丢失边界信息。
+构建完成后可验证：
 
-**方案**：
-
-**4.1 增加语义切分器**
-
-```python
-# app/services/vector_store.py 新增
-
-from langchain_text_splitters import SentenceTransformersTokenTextSplitter
-
-def _build_semantic_splitter(self) -> RecursiveCharacterTextSplitter:
-    """语义切分器：以句子边界为分割点，避免切断语义"""
-    return RecursiveCharacterTextSplitter(
-        chunk_size=chroma_conf.get("semantic_chunk_size", 512),     # 增加到 512
-        chunk_overlap=chroma_conf.get("semantic_chunk_overlap", 80),
-        separators=["\n\n", "\n", "。", "！", "？", ".", "!", "?", "；", ";", "，", ",", " ", ""],
-        length_function=len,
-    )
+```powershell
+docker compose logs qdrant --tail 100
+curl.exe -H "api-key: <QDRANT_API_KEY>" http://localhost:6333/collections
 ```
 
-**4.2 引入父子切片（Parent-Child Chunking）**
+不要把真实 `.env`、`storage/` 或 `data/` 中的大型资料提交到 Git。
 
-> 核心思路：检索用小块（精准命中），返回给 LLM 用大块（完整上下文）
+## 8. 可观测性与故障处理
 
-```
-┌─────────────────────────────────────────┐
-│  Parent Chunk (1024 tokens)              │
-│  ┌──────────────────────┐                │
-│  │ Child Chunk (256 tok) │  ← 检索命中   │
-│  └──────────────────────┘                │
-│  上下文上下文上下文上下文上下文上下文      │
-└─────────────────────────────────────────┘
-```
+构建日志会记录 revision、总切片数、批次数、约每 5% 的进度和总耗时。manifest 中的 `content_processing` 记录空切片、精确重复与近重复的过滤数量。
 
-```python
-# app/services/vector_store.py 新增 ParentChildSplitter
+常见失败处理：
 
-class ParentChildSplitter:
-    """父子切片：小粒度 chunk 做向量检索，大粒度 chunk 返回 LLM"""
-    
-    def __init__(self, parent_size=1024, child_size=256, overlap=50):
-        self.parent_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=parent_size, chunk_overlap=overlap,
-            separators=["\n\n", "\n", "。", ".", " ", ""],
-        )
-        self.child_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=child_size, chunk_overlap=overlap,
-            separators=["\n\n", "\n", "。", ".", " ", ""],
-        )
-    
-    def split(self, documents: list[Document]) -> tuple[list[Document], list[Document]]:
-        """返回 (parent_docs, child_docs)，child_docs 携带 parent_id 元数据"""
-        parent_docs = self.parent_splitter.split_documents(documents)
-        child_docs = []
-        
-        for p_idx, parent in enumerate(parent_docs):
-            parent_id = f"parent_{p_idx}"
-            parent.metadata["parent_id"] = parent_id
-            children = self.child_splitter.split_documents([parent])
-            for child in children:
-                child.metadata["parent_id"] = parent_id
-            child_docs.extend(children)
-        
-        return parent_docs, child_docs
+| 现象 | 处理 |
+|---|---|
+| `ProxyError` / 无法连接代理 | 检查或清除当前终端的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 后重试 |
+| DashScope 无法访问 | 检查网络、`DASHSCOPE_API_KEY` 和代理配置 |
+| Qdrant 502 | 确认 Docker Desktop 与 Qdrant 容器正常；当前构建会优先走 gRPC |
+| 写入校验数量不一致 | 新 revision 不会被激活，检查 Qdrant 日志后重新构建 |
+| 构建中断 | 若未激活别名，未发布集合会被自动清理；旧索引保持可用 |
+
+## 9. 验证门禁
+
+代码改动后至少执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest app/tests -q
+.\.venv\Scripts\python.exe -m ruff check app/services app/tests
 ```
 
-检索时：用 child_docs 向量检索命中 → 根据 `parent_id` 返回对应的 parent_doc 给 LLM。
+本轮针对清洗、精确去重、标签、父子关系、BM25 父段提升和 Qdrant repository 的单元测试已覆盖。真正发布前还应执行一次完整索引构建，并检查：
 
-### 步骤 5：元数据增强 — 摘要+关键词
+- 新 manifest 的 revision 与 Qdrant 活动 revision 一致；
+- `chunk_count` 与 Qdrant points count 一致；
+- `content_processing` 的去重数量符合预期；
+- 动作、营养、防护问题各至少抽样一次，确认返回正文是父段且 metadata 有 `child_text`；
+- BM25 revision 一致时混合检索可用，不一致时能降级为 dense。
 
-**当前问题**：元数据只有 `source`/`chunk_index`/`source_type`，无法按主题/关键词做结构化过滤。
+## 10. 后续演进触发条件
 
-**方案**：在文档加载入库时，为每个 chunk 生成摘要和关键词：
+| 能力 | 何时实现 |
+|---|---|
+| DOCX / JSON / HTML 自动加载 | 确认具体来源、JSON schema、版权和正文提取规则后 |
+| 更深的来源级去噪 | 接入网页、扫描 PDF 或发现清洗统计/评测存在明显噪声后 |
+| LLM 摘要、实体或专业标签 | 本地规则标签无法满足过滤/展示需求，且接受重建成本与质量审核后 |
+| Qdrant 原生 sparse | BM25 + dense 的评测证明词法召回不足，且融合增益可量化后 |
+| Qdrant 快照 | 有明确 RPO/RTO 或不可接受“从源资料重建”的恢复时间后 |
+| 集群与副本 | 有多节点、高可用或单机容量需求后 |
 
-```python
-# app/services/vector_store.py 新增
-
-def _enrich_metadata(self, documents: list[Document]) -> list[Document]:
-    """
-    为每个文档 chunk 增强元数据：
-    - 自动生成摘要（前50字）
-    - 提取可能的标签（基于关键词字典匹配）
-    - 记录创建时间
-    """
-    from datetime import datetime
-    
-    tags_map = {
-        "深蹲": "下肢训练",
-        "卧推": "上肢训练",
-        "硬拉": "下肢训练",
-        "减脂": "减脂",
-        "增肌": "增肌",
-        "营养": "营养学",
-        "蛋白": "营养学",
-        "热身": "训练安全",
-        "拉伸": "训练安全",
-        "损伤": "运动防护",
-    }
-    
-    for doc in documents:
-        content = doc.page_content
-        
-        # 摘要：取前 50 个字符
-        doc.metadata["summary"] = content[:50]
-        
-        # 标签：关键词匹配
-        tags = set()
-        for kw, tag in tags_map.items():
-            if kw in content:
-                tags.add(tag)
-        doc.metadata["tags"] = list(tags)
-        
-        # 字符数
-        doc.metadata["char_count"] = len(content)
-        
-        # 时间戳
-        doc.metadata["indexed_at"] = datetime.now().isoformat()
-    
-    return documents
-```
-
-### 步骤 6：向量化优化 — 批量+异步
-
-**当前问题**：`vector_store.add_documents` 分批写入但 embedding 是逐条调用的，大文档加载慢。
-
-**方案**：
-
-```python
-# app/services/vector_store.py 优化 load_document
-
-def load_document(self):
-    # ... 文件扫描逻辑保持不变 ...
-
-    for path in allowed_files_path:
-        # ... MD5 去重逻辑保持不变 ...
-        
-        # 新增：结构感知切分
-        file_ext = os.path.splitext(path)[1].lower()
-        split_docs = self._structure_aware_split(documents, file_ext)
-        
-        # 新增：语义切分（作为二次切分，处理超大段落）
-        semantic_splitter = self._build_semantic_splitter()
-        split_docs = semantic_splitter.split_documents(split_docs)
-        
-        # 新增：元数据增强
-        split_docs = self._enrich_metadata(split_docs)
-        
-        # 优化：增大批次大小，减少 embedding API 调用轮次
-        batch_size = 50  # 从 10 提升到 50
-        for i in range(0, len(split_docs), batch_size):
-            self.vector_store.add_documents(
-                split_docs[i:i + batch_size],
-                ids=ids[i:i + batch_size],
-            )
-```
-
-### 步骤 7：BM25 索引持久化
-
-**当前问题**：BM25 索引在内存中构建，服务重启后需要从 ChromaDB 全量拉取重建，耗时。
-
-**方案**：添加磁盘缓存，避免重启后重建：
-
-```python
-# app/services/bm25_retriever.py 新增
-
-import pickle
-from app.utils.path_tool import get_abs_path
-
-class BM25Retriever:
-    def __init__(self, cache_dir: str = "chroma_db"):
-        self._index = None
-        self._docs = []
-        self._lock = threading.Lock()
-        self._doc_count_snapshot = 0
-        self._cache_path = get_abs_path(f"{cache_dir}/bm25_index.pkl")
-        self._load_cache()
-    
-    def _load_cache(self):
-        """尝试从磁盘加载缓存的 BM25 索引"""
-        if not os.path.exists(self._cache_path):
-            return
-        try:
-            with open(self._cache_path, "rb") as f:
-                data = pickle.load(f)
-                self._index = data["index"]
-                self._docs = data["docs"]
-                self._doc_count_snapshot = data["count"]
-            logger.info(f"BM25索引从缓存加载成功，共 {self._doc_count_snapshot} 篇文档")
-        except Exception as e:
-            logger.warning(f"BM25索引缓存加载失败：{str(e)}，将在首次查询时重建")
-    
-    def _save_cache(self):
-        """将 BM25 索引序列化到磁盘"""
-        try:
-            with open(self._cache_path, "wb") as f:
-                pickle.dump({
-                    "index": self._index,
-                    "docs": self._docs,
-                    "count": self._doc_count_snapshot,
-                }, f)
-        except Exception as e:
-            logger.warning(f"BM25索引缓存保存失败：{str(e)}")
-    
-    def build(self, documents: list):
-        with self._lock:
-            self._docs = list(documents)
-            tokenized = [self._tokenize(doc.page_content) for doc in documents]
-            self._index = BM25Okapi(tokenized)
-            self._doc_count_snapshot = len(documents)
-            self._save_cache()  # ← 新增：构建完成后保存到磁盘
-            logger.info(f"BM25索引构建完成，共 {len(documents)} 篇文档")
-```
-
-### 步骤 8：索引备份与版本管理
-
-**当前问题**：无快照机制，索引损坏只能全量重建（耗时）。
-
-**方案**：添加简单的版本号管理：
-
-```python
-# app/services/vector_store.py 新增
-
-VERSION_FILE = "chroma_db/.vector_version"
-
-def _get_current_version(self) -> int:
-    """读取当前向量库版本号"""
-    try:
-        with open(self.persist_directory + "/.vector_version", "r") as f:
-            return int(f.read().strip())
-    except (FileNotFoundError, ValueError):
-        return 0
-
-def _bump_version(self) -> int:
-    """版本号 +1"""
-    version = self._get_current_version() + 1
-    with open(self.persist_directory + "/.vector_version", "w") as f:
-        f.write(str(version))
-    logger.info(f"向量库版本：V{version}")
-    return version
-```
-
----
-
-## 三、离线管线重构后完整流程
-
-```
-应用启动 / 知识库文件变更
-│
-├── 1. 数据加载 ─────────────────────────────────────────────
-│   ├── 扫描 data/ 目录（支持 txt/pdf/md/docx）
-│   ├── 为每个文件选择对应 Loader
-│   └── 返回原始 Document 列表
-│
-├── 2. 文档解析 & 结构识别 ──────────────────────────────────
-│   ├── md 文件：MarkdownHeaderTextSplitter 提取标题层级
-│   ├── txt 文件：正则识别章节标题（#/第X章/一、二、等模式）
-│   └── 保留层级信息到 metadata["header_hierarchy"]
-│
-├── 3. 清洗 ─────────────────────────────────────────────────
-│   ├── 基础清洗：BOM/空白/换行符统一
-│   ├── 去噪：页码/页眉页脚/版权声明
-│   ├── 文档级去重：基于内容 MD5
-│   └── QA 识别：FAQ 格式 → 独立 Q-A 对
-│
-├── 4. 文本切分 ─────────────────────────────────────────────
-│   ├── 一级切分（structure-aware）：按章节/标题边界
-│   ├── 二级切分（semantic）：按段落/句子边界
-│   ├── 父子切片：大 window 返回 LLM，小 window 做检索
-│   └── chunk 元数据：source/chunk_index/summary/tags/char_count
-│
-├── 5. 元数据增强 ───────────────────────────────────────────
-│   ├── 生成摘要（首 50 字）
-│   ├── 关键词标签匹配
-│   └── 索引时间戳
-│
-├── 6. 文本向量化 ───────────────────────────────────────────
-│   ├── 批量 embedding（batch_size=50）
-│   ├── 异常重试（DashScope API 抖动）
-│   └── 稳定 ID 生成（source:index:md5）
-│
-├── 7. 构建索引 ────────────────────────────────────────────
-│   ├── ChromaDB 向量索引写入
-│   ├── BM25 关键词索引构建 + 磁盘缓存
-│   ├── manifest 记录（文件 MD5 → 版本映射）
-│   └── 版本号递增
-│
-└── 8. 向量数据持久化 ──────────────────────────────────────
-    ├── ChromaDB 自动持久化（chroma.sqlite3）
-    ├── BM25 索引 pickle 缓存（bm25_index.pkl）
-    ├── manifest 文件（knowledge_manifest.json）
-    └── 版本号文件（.vector_version）
-```
-
----
-
-## 四、实施检查清单
-
-- [ ] 1. `file_handler.py` 添加 md/docx/json 格式加载器
-- [ ] 2. `config/chroma.yml` 扩展 `allow_knowledge_file_type`
-- [ ] 3. `vector_store.py` 添加 `_structure_aware_split` 方法
-- [ ] 4. `vector_store.py` 添加 `_build_semantic_splitter`（更大 chunk + 更好分隔符）
-- [ ] 5. `vector_store.py` 实现 `ParentChildSplitter`
-- [ ] 6. `file_handler.py` 添加 `deep_clean`（去噪）+ `deduplicate_documents`（去重）
-- [ ] 7. `vector_store.py` 添加 `_enrich_metadata`（摘要+标签+时间戳）
-- [ ] 8. `vector_store.py` `load_document` 增大 batch_size 到 50
-- [ ] 9. `bm25_retriever.py` 添加磁盘缓存持久化
-- [ ] 10. `vector_store.py` 添加版本号管理
-- [ ] 11. `config/chroma.yml` 补充新参数（semantic_chunk_size 等）
-- [ ] 12. 编写对应单元测试
-
----
-
-## 五、验收标准
-
-1. 支持 txt/pdf/md/docx 四种格式的文档加载
-2. Markdown 文件按标题层级切分，保留 `h1/h2/h3` 元数据
-3. 语义切分 chunk_size 512，overlap 80，不在句子中间切断
-4. 每个文档有 `summary`/`tags`/`char_count` 增强元数据
-5. 文档去重后不重复入库
-6. BM25 索引重启后从磁盘缓存加载，无需重新构建
-7. 10MB 知识库加载时间从 ~5 分钟降到 ~1 分钟（批量 embedding 优化）
+在这些条件出现前，保持当前单机 Qdrant、离线 revision 与源文件可重建的模式，既能演示生产演进路径，也不会为 Demo 引入没有验证价值的运维复杂度。

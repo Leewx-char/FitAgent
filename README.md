@@ -8,6 +8,7 @@
 |------|------|------|
 | Python | 3.11+ | |
 | Node.js | 20+ | |
+| Docker Compose | v2+ | Qdrant demo 容器 |
 | MySQL | 8.0+ | 需提前安装并启动服务 |
 | [Windows] poppler | 最新版 | pdf2image 依赖,[下载地址](https://github.com/oschwartz10612/poppler-windows/releases),将 `bin/` 加入系统 PATH |
 
@@ -20,7 +21,7 @@
 | 认证 | JWT (python-jose) + bcrypt |
 | LLM | DashScope (deepseek-v4-pro / text-embedding-v4) |
 | Agent | LangGraph + LangChain |
-| 向量数据库 | ChromaDB |
+| 向量数据库 | Qdrant（单节点 Docker，生产演进 demo） |
 | 关键词检索 | rank-bm25 (BM25) |
 | 文档处理 | PyPDF + pdf2image + python-magic + Pillow |
 | 前端框架 | Vue 3 + Vite + Pinia + Naive UI |
@@ -47,10 +48,14 @@ python -m pip install -e ".[dev]"
 python -c "from app.core.database import ensure_database_exists; ensure_database_exists()"
 alembic upgrade head
 
-# 4. 确保 MySQL 服务已启动，然后启动后端
+# 4. 启动 Qdrant，并构建知识库索引（首次或知识文件变更后执行）
+docker compose up -d qdrant
+python -m app.services.knowledge_indexer
+
+# 5. 确保 MySQL 服务已启动，然后启动后端
 uvicorn app.main:app --reload --port 8000
 
-# 5. 启动前端（新终端）
+# 6. 启动前端（新终端）
 cd frontend
 npm install
 npm run dev
@@ -71,10 +76,14 @@ python -m pip install -e ".[dev]"
 python -c "from app.core.database import ensure_database_exists; ensure_database_exists()"
 alembic upgrade head
 
-# 4. 确保 MySQL 服务已启动，然后启动后端
+# 4. 启动 Qdrant，并构建知识库索引
+docker compose up -d qdrant
+python -m app.services.knowledge_indexer
+
+# 5. 确保 MySQL 服务已启动，然后启动后端
 uvicorn app.main:app --reload --port 8000
 
-# 5. 启动前端
+# 6. 启动前端
 cd frontend && npm install && npm run dev
 ```
 
@@ -118,8 +127,10 @@ FitAgent/
 │   │   ├── react_agent.py      # LangGraph ReAct Agent
 │   │   ├── agent_tools.py      # 工具定义
 │   │   ├── middleware.py       # Agent 中间件
-│   │   ├── rag_service.py      # RAG 检索服务
-│   │   ├── vector_store.py     # ChromaDB 向量库
+│   │   ├── rag_service.py      # RAG 检索与 RRF 融合
+│   │   ├── vector_repository.py # Qdrant 仓储边界
+│   │   ├── vector_store.py     # Qdrant 查询服务
+│   │   ├── knowledge_indexer.py # 离线索引构建入口
 │   │   ├── bm25_retriever.py   # BM25 关键词检索
 │   │   └── doc_parser.py       # 多模态文档解析
 │   └── utils/                  # 工具函数
@@ -128,7 +139,7 @@ FitAgent/
 │       ├── file_handler.py
 │       ├── prompt_loader.py
 │       └── bootstrap.py
-├── config/                     # YAML 配置
+├── config/                     # YAML 配置（含 vector_store.yml）
 ├── prompts/                    # 系统提示词
 ├── data/                       # 知识库（txt）
 ├── frontend/                   # Vue 3 前端
@@ -140,7 +151,7 @@ FitAgent/
 ├── alembic/                     # 数据库迁移
 ├── alembic.ini
 ├── storage/uploads/            # 上传文件临时目录
-└── chroma_db/                  # ChromaDB 持久化存储
+└── docker-compose.yml           # Qdrant 单节点演示部署
 ```
 
 ## RAG 检索流程
@@ -149,7 +160,7 @@ FitAgent/
 用户提问
   ├── 查询处理：归一化（口语→术语）+ 同义词扩展
   ├── 双路并行检索：
-  │   ├── ChromaDB 向量检索（语义,余弦相似度 + 阈值过滤）
+  │   ├── Qdrant 向量检索（语义、来源过滤）
   │   └── BM25 关键词检索（字级分词 + TF-IDF + 长度归一化）
   ├── RRF 排名融合
   ├── Jaccard 去重（阈值 0.8）
@@ -157,6 +168,17 @@ FitAgent/
 ```
 
 更多设计决策和技术细节请查看 [docs/decisions.md](./docs/decisions.md)。
+
+## Qdrant 演进 Demo
+
+演示采用单 collection、单层切片和离线构建：`data/` 中的知识文件经过
+`knowledge_indexer` 生成带 revision 的 Qdrant collection，校验完成后才切换 `rag_active`
+别名。在线 API 只读检索，绝不自动导入或重建索引。
+
+- `GET /api/health/rag`：检查当前 Qdrant collection 是否可读。
+- `python -m app.services.knowledge_indexer`：知识文件更新后显式构建并激活新 revision。
+- BM25 文档工件随离线构建生成；缺失时系统自动降级为 dense 检索，不会在请求中全量同步。
+- 索引发布后重启后端，使常驻的 BM25 工件与新的 Qdrant revision 一致。
 
 ## License
 

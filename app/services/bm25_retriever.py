@@ -1,7 +1,10 @@
 import threading
+import json
+from pathlib import Path
 from rank_bm25 import BM25Okapi
 from app.utils.logger_handler import logger
 import re
+from langchain_core.documents import Document
 
 
 class BM25Retriever:
@@ -39,7 +42,35 @@ class BM25Retriever:
             self._doc_count_snapshot = len(documents)
             logger.info(f"BM25索引构建完成，共 {len(documents)} 篇文档")
 
-    def search(self, query: str, k: int = 15) -> list[tuple]:
+    def load_artifact(self, artifact_path: str) -> str | None:
+        """加载离线产出的文档工件；请求期间绝不从 Qdrant 重建。"""
+        path = Path(artifact_path)
+        if not path.exists():
+            logger.warning(f"BM25 工件不存在，当前仅使用向量检索：{artifact_path}")
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            raw_documents = data.get("documents", [])
+            documents = [
+                Document(
+                    page_content=item["page_content"],
+                    metadata=item.get("metadata", {}),
+                )
+                for item in raw_documents
+                if item.get("page_content")
+            ]
+            if not documents:
+                logger.warning("BM25 工件没有有效文档，当前仅使用向量检索")
+                return None
+            self.build(documents)
+            return data.get("index_revision")
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            logger.warning(f"BM25 工件加载失败，当前仅使用向量检索：{error}")
+            return None
+
+    def search(
+        self, query: str, k: int = 15, source_filter: list[str] | None = None
+    ) -> list[tuple]:
         if self._index is None:
             return []
 
@@ -49,4 +80,20 @@ class BM25Retriever:
 
         # 配对并排序
         scored = sorted(zip(self._docs, scores), key=lambda x: x[1], reverse=True)
-        return scored[:k]
+        if source_filter:
+            allowed_sources = set(source_filter)
+            scored = [
+                (doc, score)
+                for doc, score in scored
+                if doc.metadata.get("source_id", doc.metadata.get("source")) in allowed_sources
+            ]
+        return [
+            (
+                Document(
+                    page_content=str(doc.metadata.get("parent_text") or doc.page_content),
+                    metadata={**doc.metadata, "child_text": doc.page_content},
+                ),
+                score,
+            )
+            for doc, score in scored[:k]
+        ]

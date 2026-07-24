@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     health_document_max_pages: int = Field(default=20, ge=1, le=100)
     health_document_render_dpi: int = Field(default=200, ge=100, le=400)
     health_document_fallback_render_dpi: int = Field(default=300, ge=100, le=400)
+    dashscope_api_key: str = ""
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
 
     @property
     def database_url(self) -> str:

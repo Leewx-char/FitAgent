@@ -22,8 +22,8 @@ def get_models_config() -> dict:
 
 
 @lru_cache(maxsize=1)
-def get_chroma_config() -> dict:
-    return _load_yaml("config/chroma.yml")
+def get_vector_store_config() -> dict:
+    return _load_yaml("config/vector_store.yml")
 
 
 @lru_cache(maxsize=1)

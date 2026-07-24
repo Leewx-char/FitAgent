@@ -14,10 +14,11 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.response import success_response
+from app.api.response import error_response, success_response
 from app.schemas import ApiResponse
 from app.api.exception_handlers import register_exception_handlers
 from app.utils.bootstrap import validate_runtime
+from app.services.vector_store import VectorStoreService
 from app.api.routers.chat import router as chat_router
 from app.api.routers.auth import router as auth_router
 from app.api.routers.sessions import router as sessions_router
@@ -87,3 +88,12 @@ async def request_id_middleware(request: Request, call_next):
 @app.get("/api/health", response_model=ApiResponse[dict[str, str]])
 def health_check():
     return success_response({"status": "ok"})
+
+
+@app.get("/api/health/rag", response_model=ApiResponse[dict[str, object]])
+def rag_health_check():
+    """检查 Qdrant 就绪状态，不触发文档导入或索引修复。"""
+    try:
+        return success_response(VectorStoreService().health())
+    except Exception:
+        return error_response("RAG 服务暂不可用。", status_code=503)

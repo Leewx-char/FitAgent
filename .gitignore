@@ -25,7 +25,9 @@ env/
 .env.*
 !.env.example
 
-# Database
+# Vector index and generated RAG artifacts
+qdrant_data/
+storage/rag/
 chroma_db/
 *.sqlite3
 

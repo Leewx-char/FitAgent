@@ -1,0 +1,24 @@
+backend: qdrant
+url: http://localhost:6333
+grpc_port: 6334
+prefer_grpc: true
+qdrant_timeout_seconds: 60
+collection_alias: rag_active
+collection_prefix: rag
+data_path: data
+manifest_path: storage/rag/index_manifest.json
+bm25_artifact_path: storage/rag/bm25_documents.json
+
+k: 6
+candidate_k: 15
+min_relevance_score: 0.0
+allow_knowledge_file_type: ["txt", "md", "pdf"]
+chunk_size: 500
+chunk_overlap: 80
+parent_chunk_size: 1200
+parent_chunk_overlap: 160
+batch_size: 32
+near_duplicate_hamming_distance: 3
+summary_max_chars: 160
+max_tags: 4
+separators: ["\n\n", "\n", "。", "！", "？", ".", "!", "?", " ", ""]

@@ -1,5 +1,6 @@
 import os
-from app.utils.config_handler import get_prompts_config, get_chroma_config, get_models_config
+from app.core.settings import get_settings
+from app.utils.config_handler import get_models_config, get_prompts_config, get_vector_store_config
 from app.utils.path_tool import get_abs_path
 
 
@@ -7,14 +8,14 @@ def validate_runtime() -> list[str]:
     issues = []
 
     # 检查 1: API KEY
-    if not os.getenv("DASHSCOPE_API_KEY"):
-        issues.append("缺少环境变量 DASHSCOPE_API_KEY，请现在运行环境中配置后再启动应用。")
+    if not get_settings().dashscope_api_key.strip():
+        issues.append("缺少 .env 配置 DASHSCOPE_API_KEY，请配置后再启动应用。")
 
     # 检查 2：关键文件路径
     required_paths = [
         ("主提示词", get_prompts_config().get("main_prompt_path")),
         ("报告提示词", get_prompts_config().get("report_prompt_path")),
-        ("知识库目录", get_chroma_config().get("data_path")),
+        ("知识库目录", get_vector_store_config().get("data_path")),
     ]
     for label, relative_path in required_paths:
         if not relative_path:
@@ -35,8 +36,8 @@ def validate_runtime() -> list[str]:
             issues.append(f"模型配置缺失：{key}")
 
     # 检查 4: 向量库配置
-    for key in ("collection_name", "persist_directory", "data_path"):
-        if not get_chroma_config().get(key):
+    for key in ("url", "grpc_port", "prefer_grpc", "collection_alias", "data_path"):
+        if not get_vector_store_config().get(key):
             issues.append(f"向量库配置缺失：{key}")
 
     # 检查 5: 提示词编码
