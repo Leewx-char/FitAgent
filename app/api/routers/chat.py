@@ -9,7 +9,7 @@ SSE 格式：每块数据以 "data: <文本>\n\n" 发送，前端 EventSource �
 
 import json
 import asyncio
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -161,13 +161,12 @@ async def chat(
 ):
     # 0. 输入校验：防 token 炸弹 + 空消息
     if not payload.message or not payload.message.strip():
-        return {"code": 400, "message": "消息不能为空", "data": None}
+        raise HTTPException(status_code=400, detail="消息不能为空")
     if len(payload.message) > 4000:
-        return {
-            "code": 400,
-            "message": f"消息过长（{len(payload.message)}字符），请精简后重试（上限4000字符）",
-            "data": None,
-        }
+        raise HTTPException(
+            status_code=400,
+            detail=f"消息过长（{len(payload.message)}字符），请精简后重试（上限4000字符）",
+        )
 
     # 1. 如果没有 session_id，自动创建新会话
     if payload.session_id:
@@ -177,7 +176,7 @@ async def chat(
             .first()
         )
         if not session:
-            return {"code": 404, "message": "会话不存在", "data": None}
+            raise HTTPException(status_code=404, detail="会话不存在")
         session_id = session.id
     else:
         session_id = uuid.uuid4().hex[:32]

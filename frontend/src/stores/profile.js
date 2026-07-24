@@ -9,7 +9,7 @@ export const useProfileStore = defineStore('profile', () => {
   async function fetchProfile() {
     try {
       const res = await getProfile()
-      profile.value = res.data
+      profile.value = res.data.data
       hasProfile.value = true
     } catch (err) {
       if (err.response?.status === 404) {
@@ -24,10 +24,10 @@ export const useProfileStore = defineStore('profile', () => {
   async function saveProfile(data) {
     if (hasProfile.value) {
       const res = await updateProfile(data)
-      profile.value = res.data
+      profile.value = res.data.data
     } else {
       const res = await createProfile(data)
-      profile.value = res.data
+      profile.value = res.data.data
       hasProfile.value = true
     }
   }

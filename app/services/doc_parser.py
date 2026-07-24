@@ -1,4 +1,4 @@
-"""解析健康文档，并将模型和接口输出统一为 code/messages/data。"""
+"""解析健康文档；内部状态码只用于控制识别流程，不暴露给 HTTP 接口。"""
 
 import base64
 import json

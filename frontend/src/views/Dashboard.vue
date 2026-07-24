@@ -84,6 +84,7 @@ import * as echarts from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { getErrorMessage } from '@/api'
 import { syncFitness, getDailyMetrics, getSleepData, getActivities } from '@/api/fitness'
 
 echarts.use([GridComponent, TooltipComponent, LegendComponent, LineChart, BarChart, CanvasRenderer])
@@ -244,15 +245,15 @@ async function loadData() {
       getSleepData(4),
       getActivities(),
     ])
-    dailyMetrics.value = dailyRes.data
-    sleepRecords.value = sleepRes.data
-    activities.value = actRes.data
+    dailyMetrics.value = dailyRes.data.data
+    sleepRecords.value = sleepRes.data.data
+    activities.value = actRes.data.data
     await nextTick()
     buildTloadHrvChart()
     buildSleepChart()
-  } catch (e) {
-    console.error('加载运动数据失败:', e)
-    message.error('加载运动数据失败，请稍后重试')
+  } catch (error) {
+    console.error('加载运动数据失败:', error)
+    message.error(getErrorMessage(error, '加载运动数据失败，请稍后重试'))
   } finally {
     loading.value = false
   }
@@ -263,9 +264,9 @@ async function handleSync() {
   try {
     await syncFitness()
     await loadData()
-  } catch (e) {
-    console.error('同步失败:', e)
-    message.error('同步失败，请稍后重试')
+  } catch (error) {
+    console.error('同步失败:', error)
+    message.error(getErrorMessage(error, '同步失败，请稍后重试'))
   } finally {
     syncing.value = false
   }

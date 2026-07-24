@@ -54,6 +54,7 @@ import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
 import { useProfileStore } from '@/stores/profile'
+import { getErrorMessage } from '@/api'
 
 const router = useRouter()
 const message = useMessage()
@@ -92,8 +93,7 @@ async function handleLogin() {
       router.push('/')
     }
   } catch (err) {
-    const msg = err.response?.data?.detail || '登录失败，请检查用户名和密码'
-    message.error(msg)
+    message.error(getErrorMessage(err, '登录失败，请检查用户名和密码'))
   } finally {
     loading.value = false
   }

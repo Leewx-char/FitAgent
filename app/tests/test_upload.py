@@ -16,10 +16,10 @@ class TestUploadHealthDoc:
             "/api/upload/health-doc",
             files={"file": ("test.txt", fake_txt, "text/plain")},
         )
-        assert response.status_code == 200
+        assert response.status_code == 400
         data = response.json()
         assert set(data) == {"code", "messages", "data"}
-        assert data["code"] == 1004
+        assert data["code"] == response.status_code
         assert "不支持" in data["messages"][0]
 
     def test_upload_image_success(self, client, image_file, mock_health_data):
@@ -32,7 +32,7 @@ class TestUploadHealthDoc:
         assert response.status_code == 200
         data = response.json()
         assert set(data) == {"code", "messages", "data"}
-        assert data["code"] == 0
+        assert data["code"] == response.status_code
         assert data["data"]["metrics"]["height_cm"]["value"] == 175.0
         assert data["data"]["metrics"]["weight_kg"]["value"] == 70.0
         assert data["data"]["metrics"]["bmi"]["value"] == 22.9
@@ -47,7 +47,8 @@ class TestUploadHealthDoc:
                 )
         assert response.status_code == 200
         data = response.json()
-        assert data["code"] == 0
+        assert data["code"] == response.status_code
+        assert data["data"] is not None
 
     def test_upload_encrypted_pdf(self, client, encrypted_pdf):
         with open(encrypted_pdf, "rb") as f:
@@ -55,7 +56,8 @@ class TestUploadHealthDoc:
                 "/api/upload/health-doc",
                 files={"file": ("encrypted.pdf", f, "application/pdf")},
             )
-        assert response.status_code == 200
+        assert response.status_code == 422
         data = response.json()
-        assert data["code"] == 1003
+        assert data["code"] == response.status_code
+        assert data["data"] is None
         assert "加密" in data["messages"][0]

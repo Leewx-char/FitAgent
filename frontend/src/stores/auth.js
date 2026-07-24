@@ -17,13 +17,13 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(username, password) {
     const res = await loginApi(username, password)
-    const { access_token } = res.data
+    const { access_token } = res.data.data
     localStorage.setItem('token', access_token)
     token.value = access_token
 
     const userRes = await getCurrentUser()
-    user.value = userRes.data
-    localStorage.setItem('user', JSON.stringify(userRes.data))
+    user.value = userRes.data.data
+    localStorage.setItem('user', JSON.stringify(userRes.data.data))
   }
 
   async function register(username, password) {
@@ -41,8 +41,8 @@ export const useAuthStore = defineStore('auth', () => {
     if (!token.value) return
     try {
       const res = await getCurrentUser()
-      user.value = res.data
-      localStorage.setItem('user', JSON.stringify(res.data))
+      user.value = res.data.data
+      localStorage.setItem('user', JSON.stringify(res.data.data))
     } catch {
       logout()
     }

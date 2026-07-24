@@ -51,7 +51,7 @@ class TestAudit:
 
     def test_session_delete_audited(self, auth_client, audit_records):
         """删除会话 → 审计 action=session_delete，记下 session_id"""
-        sid = auth_client.post("/api/sessions", json={"title": "待删除"}).json()["id"]
+        sid = auth_client.post("/api/sessions", json={"title": "待删除"}).json()["data"]["id"]
         auth_client.delete(f"/api/sessions/{sid}")
         dels = [r for r in audit_records if r["action"] == "session_delete"]
         assert dels and dels[-1]["session_id"] == sid

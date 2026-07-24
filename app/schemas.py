@@ -14,9 +14,19 @@
 
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field, field_validator
+
+ResponseData = TypeVar("ResponseData")
+
+
+class ApiResponse(BaseModel, Generic[ResponseData]):
+    """普通 HTTP JSON 接口统一使用的响应信封。"""
+
+    code: int
+    messages: list[str] = Field(default_factory=list)
+    data: ResponseData | None = None
 
 
 class UserRegister(BaseModel):
@@ -198,14 +208,6 @@ class HealthDocumentData(BaseModel):
 
     metrics: HealthDataSchema
     conflicts: dict[str, list[HealthMetricCandidate]] = Field(default_factory=dict)
-
-
-class HealthDocUploadResponse(BaseModel):
-    """健康文档模型和上传接口共用的统一响应信封。"""
-
-    code: int
-    messages: list[str] = Field(default_factory=list)
-    data: HealthDocumentData | None = None
 
 
 ProfileUpdate.model_rebuild()

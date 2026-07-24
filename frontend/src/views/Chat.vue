@@ -63,7 +63,7 @@
         <span class="confirm-close" @click="uploadResult = null">✕</span>
       </div>
 
-      <div v-if="uploadResult.code === HEALTH_DOCUMENT_SUCCESS_CODE" class="confirm-body">
+      <div v-if="uploadResult.data" class="confirm-body">
         <p class="health-disclaimer">识别结果仅供健康信息整理，不构成医疗诊断；请核对后再保存。</p>
         <div class="field-grid">
           <div
@@ -99,10 +99,9 @@
       <div v-else class="confirm-body confirm-error">
         <div class="error-icon">⚠️</div>
         <div class="error-text">{{ uploadResult.messages?.join('；') || '文档解析失败，请重试' }}</div>
-        <div v-if="uploadResult.code === HEALTH_DOCUMENT_ENCRYPTED_CODE" class="error-hint">请截图后以图片形式重新上传</div>
       </div>
 
-      <div class="confirm-actions" v-if="uploadResult.code === HEALTH_DOCUMENT_SUCCESS_CODE">
+      <div class="confirm-actions" v-if="uploadResult.data">
         <n-button @click="uploadResult = null">取消</n-button>
         <n-button type="primary" :disabled="hasUnresolvedConflicts" @click="confirmHealthData">确认保存到画像</n-button>
       </div>
@@ -158,6 +157,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
+import { getErrorMessage } from '@/api'
 import { updateProfile, uploadHealthDoc } from '@/api/profile'
 
 marked.setOptions({ breaks: true, gfm: true })
@@ -177,8 +177,6 @@ const editableHealthData = ref({})
 const thinking = ref(false)
 const toolChain = ref([])
 
-const HEALTH_DOCUMENT_SUCCESS_CODE = 0
-const HEALTH_DOCUMENT_ENCRYPTED_CODE = 1003
 const messages = computed(() => chatStore.messages)
 
 const fieldLabels = {
@@ -267,7 +265,7 @@ function sendMessage(text) {
       session_id: sessionId || undefined,
     }),
   })
-    .then((response) => {
+    .then(async (response) => {
       if (response.status === 401) {
         streaming.value = false
         authStore.logout()
@@ -277,7 +275,14 @@ function sendMessage(text) {
       }
       if (!response.ok) {
         streaming.value = false
-        message.error(`请求失败 (${response.status})`)
+        let errorMessage = `请求失败 (${response.status})`
+        try {
+          const payload = await response.json()
+          if (payload.messages?.length) errorMessage = payload.messages.join('；')
+        } catch {
+          // 非 JSON 响应保留 HTTP 状态提示。
+        }
+        message.error(errorMessage)
         return null
       }
       const sid = response.headers.get('X-Session-Id')
@@ -383,11 +388,14 @@ async function handleFileSelect(e) {
   try {
     const res = await uploadHealthDoc(file)
     uploadResult.value = res.data
-    if (res.data.code === HEALTH_DOCUMENT_SUCCESS_CODE) {
+    if (res.data.data) {
       prepareEditableHealthData(res.data.data.metrics)
     }
   } catch (err) {
-    uploadResult.value = { code: -1, messages: ['上传失败，请检查网络连接'], data: null }
+    uploadResult.value = {
+      messages: [getErrorMessage(err, '上传失败，请检查网络连接')],
+      data: null,
+    }
   } finally {
     uploading.value = false
     e.target.value = ''
@@ -404,8 +412,8 @@ async function confirmHealthData() {
     uploadResult.value = null
     editableHealthData.value = {}
     message.success('健康数据已保存到档案')
-  } catch (err) {
-    message.error('保存失败，请重试')
+  } catch (error) {
+    message.error(getErrorMessage(error, '保存失败，请重试'))
   }
 }
 

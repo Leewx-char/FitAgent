@@ -11,10 +11,11 @@ class TestAuth:
                 "password": "newpass123",
             },
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 201
         data = resp.json()
-        assert "id" in data
-        assert data["username"] == username
+        assert set(data) == {"code", "messages", "data"}
+        assert data["code"] == resp.status_code
+        assert data["data"]["username"] == username
 
     def test_register_duplicate(self, anon_client):
         username = f"dupuser_{int(time.time() * 1000)}"
@@ -34,7 +35,7 @@ class TestAuth:
             },
         )
         assert resp.status_code == 400
-        assert "已存在" in resp.json()["message"]
+        assert "已存在" in resp.json()["messages"][0]
 
     def test_login_success(self, anon_client):
         username = f"loginuser_{int(time.time() * 1000)}"
@@ -54,8 +55,10 @@ class TestAuth:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert "access_token" in data
-        assert data["token_type"] == "bearer"
+        assert set(data) == {"code", "messages", "data"}
+        assert data["code"] == resp.status_code
+        assert "access_token" in data["data"]
+        assert data["data"]["token_type"] == "bearer"
 
     def test_login_wrong_password(self, anon_client):
         username = f"wrongpw_{int(time.time() * 1000)}"
@@ -74,7 +77,7 @@ class TestAuth:
             },
         )
         assert resp.status_code == 401
-        assert "错误" in resp.json()["message"]
+        assert "错误" in resp.json()["messages"][0]
 
     def test_me_without_token(self, anon_client):
         resp = anon_client.get("/api/auth/me")
@@ -84,4 +87,4 @@ class TestAuth:
         resp = auth_client.get("/api/auth/me")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["username"].startswith("testuser_")
+        assert data["data"]["username"].startswith("testuser_")

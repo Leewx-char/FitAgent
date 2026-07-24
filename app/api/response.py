@@ -1,26 +1,43 @@
-"""
-统一响应格式 —— 所有 API 端点返回一致的结构。
+"""普通 HTTP JSON 接口统一响应格式。"""
 
-格式: {"code": HTTP状态码, "message": "人类可读消息", "data": 业务数据}
-
-提供两个主动响应函数：success_response（操作成功）、error_response（操作失败）。
-路由函数主动判断业务结果后调用它们 —— 你控制什么情况下返回什么。
-"""
-
-from typing import Any
+from typing import TypeVar
 
 from fastapi.responses import JSONResponse
 
+from app.schemas import ApiResponse
 
-def success_response(message: str = "操作成功", data: Any = None, code: int = 200) -> JSONResponse:
+ResponseData = TypeVar("ResponseData")
+
+
+def success_response(
+    data: ResponseData | None = None,
+    messages: list[str] | None = None,
+    *,
+    status_code: int = 200,
+) -> ApiResponse[ResponseData]:
+    """构造成功响应；code 与实际 HTTP 状态码保持一致。"""
+
+    return ApiResponse(code=status_code, messages=messages or [], data=data)
+
+
+def error_response(
+    messages: object,
+    *,
+    status_code: int,
+) -> JSONResponse:
+    """构造失败响应；响应体 code 与 HTTP 状态码保持一致。"""
+
+    if isinstance(messages, str):
+        normalized_messages = [messages]
+    elif isinstance(messages, list):
+        normalized_messages = [str(message) for message in messages]
+    else:
+        normalized_messages = [str(messages)]
     return JSONResponse(
-        status_code=code,
-        content={"code": code, "message": message, "data": data},
-    )
-
-
-def error_response(message: str = "操作失败", data: Any = None, code: int = 400) -> JSONResponse:
-    return JSONResponse(
-        status_code=code,
-        content={"code": code, "message": message, "data": data},
+        status_code=status_code,
+        content={
+            "code": status_code,
+            "messages": normalized_messages,
+            "data": None,
+        },
     )

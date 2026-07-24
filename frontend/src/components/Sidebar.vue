@@ -73,6 +73,7 @@ import { useMessage } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
 import { useProfileStore } from '@/stores/profile'
 import { useChatStore } from '@/stores/chat'
+import { getErrorMessage } from '@/api'
 import { getSessions, createSession, deleteSession, getMessages } from '@/api/chat'
 
 const router = useRouter()
@@ -94,9 +95,9 @@ function onSessionScroll() {
 async function loadSessions() {
   try {
     const res = await getSessions()
-    chatStore.sessions = res.data
-  } catch {
-    message.error('加载会话列表失败')
+    chatStore.sessions = res.data.data
+  } catch (error) {
+    message.error(getErrorMessage(error, '加载会话列表失败'))
   }
 }
 
@@ -105,7 +106,7 @@ async function switchSession(sessionId) {
   chatStore.currentSessionId = sessionId
   try {
     const res = await getMessages(sessionId)
-    chatStore.setMessages(res.data)
+    chatStore.setMessages(res.data.data)
   } catch {
     chatStore.clearMessages()
   }
@@ -115,12 +116,12 @@ async function switchSession(sessionId) {
 async function newSession() {
   try {
     const res = await createSession()
-    chatStore.sessions.unshift(res.data)
-    chatStore.currentSessionId = res.data.id
+    chatStore.sessions.unshift(res.data.data)
+    chatStore.currentSessionId = res.data.data.id
     chatStore.clearMessages()
     router.push('/')
-  } catch {
-    message.error('创建会话失败')
+  } catch (error) {
+    message.error(getErrorMessage(error, '创建会话失败'))
   }
 }
 
@@ -132,8 +133,8 @@ async function handleDeleteSession(sessionId) {
       chatStore.currentSessionId = null
       chatStore.clearMessages()
     }
-  } catch {
-    message.error('删除失败')
+  } catch (error) {
+    message.error(getErrorMessage(error, '删除失败'))
   }
 }
 

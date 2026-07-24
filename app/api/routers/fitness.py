@@ -6,9 +6,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.dialects.mysql import insert as mysql_upsert
 from app.core.deps import get_db, get_coros
 from app.models import User, FitnessData
-from app.schemas import FitnessSyncRequest, FitnessDataResponse
+from app.schemas import ApiResponse, FitnessDataResponse, FitnessSyncRequest
 from app.core.auth import get_current_user
 from app.services.coros_client import CorosClient
+from app.api.response import success_response
 
 router = APIRouter(prefix="/api/fitness", tags=["fitness"])
 
@@ -31,7 +32,7 @@ def _upsert_fitness(db: Session, user_id: int, date_str: str, data_type: str, da
     db.execute(stmt)
 
 
-@router.post("/sync")
+@router.post("/sync", response_model=ApiResponse[dict[str, int]])
 def sync_fitness(
     body: FitnessSyncRequest,
     db: Session = Depends(get_db),
@@ -87,18 +88,18 @@ def sync_fitness(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"同步活动数据失败：{str(e)}")
 
-    return {"message": "同步完成", "upserted": upserted}
+    return success_response({"upserted": upserted}, messages=["同步完成"])
 
 
 # 查当前用户近4周的每日指标
-@router.get("/daily", response_model=list[FitnessDataResponse])
+@router.get("/daily", response_model=ApiResponse[list[FitnessDataResponse]])
 def get_daily_data(
     weeks: int = 4,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     since = datetime.now().date() - timedelta(weeks=weeks)
-    return (
+    records = (
         db.query(FitnessData)
         .filter(
             FitnessData.user_id == current_user.id,
@@ -108,16 +109,17 @@ def get_daily_data(
         .order_by(FitnessData.date.desc())
         .all()
     )
+    return success_response([FitnessDataResponse.model_validate(record) for record in records])
 
 
-@router.get("/sleep", response_model=list[FitnessDataResponse])
+@router.get("/sleep", response_model=ApiResponse[list[FitnessDataResponse]])
 def get_sleep_data(
     weeks: int = 4,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     since = datetime.now().date() - timedelta(weeks=weeks)
-    return (
+    records = (
         db.query(FitnessData)
         .filter(
             FitnessData.user_id == current_user.id,
@@ -127,9 +129,10 @@ def get_sleep_data(
         .order_by(FitnessData.date.desc())
         .all()
     )
+    return success_response([FitnessDataResponse.model_validate(record) for record in records])
 
 
-@router.get("/activities", response_model=list[FitnessDataResponse])
+@router.get("/activities", response_model=ApiResponse[list[FitnessDataResponse]])
 def get_activities(
     start_day: str = "",
     end_day: str = "",
@@ -146,4 +149,5 @@ def get_activities(
         query = query.filter(FitnessData.date >= datetime.strptime(start_day, "%Y%m%d").date())
     if end_day:
         query = query.filter(FitnessData.date <= datetime.strptime(end_day, "%Y%m%d").date())
-    return query.order_by(FitnessData.date.desc()).all()
+    records = query.order_by(FitnessData.date.desc()).all()
+    return success_response([FitnessDataResponse.model_validate(record) for record in records])

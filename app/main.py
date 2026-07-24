@@ -14,6 +14,8 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from app.api.response import success_response
+from app.schemas import ApiResponse
 from app.api.exception_handlers import register_exception_handlers
 from app.utils.bootstrap import validate_runtime
 from app.api.routers.chat import router as chat_router
@@ -23,7 +25,7 @@ from app.api.routers.messages import router as messages_router
 from app.api.routers.profile import router as profile_router
 from app.api.routers.upload import router as upload_router
 from app.api.routers.fitness import router as fitness_router
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 from app.core.request_context import request_id_var
@@ -64,7 +66,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.state.limiter = limiter
-app.add_exception_handler(429, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 
@@ -83,6 +84,6 @@ async def request_id_middleware(request: Request, call_next):
     return response
 
 
-@app.get("/api/health")
+@app.get("/api/health", response_model=ApiResponse[dict[str, str]])
 def health_check():
-    return {"status": "ok"}
+    return success_response({"status": "ok"})

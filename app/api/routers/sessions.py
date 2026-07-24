@@ -3,14 +3,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.deps import get_db
 from app.models import Session as SessionModel, User
-from app.schemas import SessionCreate, SessionResponse
+from app.schemas import ApiResponse, SessionCreate, SessionResponse
 from app.core.auth import get_current_user
+from app.api.response import success_response
 from app.utils.audit import audit_log
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
-@router.get("", response_model=list[SessionResponse])
+@router.get("", response_model=ApiResponse[list[SessionResponse]])
 def list_sessions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     sessions = (
         db.query(SessionModel)
@@ -18,10 +19,10 @@ def list_sessions(db: Session = Depends(get_db), current_user: User = Depends(ge
         .order_by(SessionModel.updated_at.desc())
         .all()
     )
-    return sessions
+    return success_response([SessionResponse.model_validate(session) for session in sessions])
 
 
-@router.post("", response_model=SessionResponse)
+@router.post("", response_model=ApiResponse[SessionResponse], status_code=201)
 def create_session(
     body: SessionCreate,
     db: Session = Depends(get_db),
@@ -35,10 +36,10 @@ def create_session(
     db.add(new_session)
     db.commit()
     db.refresh(new_session)
-    return new_session
+    return success_response(SessionResponse.model_validate(new_session), status_code=201)
 
 
-@router.delete("/{session_id}")
+@router.delete("/{session_id}", response_model=ApiResponse[None])
 def delete_session(
     session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ):
@@ -52,10 +53,10 @@ def delete_session(
     db.delete(session)
     db.commit()
     audit_log("session_delete", user_id=current_user.id, session_id=session_id)
-    return {"message": "会话已删除"}
+    return success_response(messages=["会话已删除"])
 
 
-@router.patch("/{session_id}", response_model=SessionResponse)
+@router.patch("/{session_id}", response_model=ApiResponse[SessionResponse])
 def update_session(
     session_id: str,
     body: SessionCreate,
@@ -72,4 +73,4 @@ def update_session(
     session.title = body.title
     db.commit()
     db.refresh(session)
-    return session
+    return success_response(SessionResponse.model_validate(session))

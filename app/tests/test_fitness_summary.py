@@ -16,14 +16,14 @@ class TestFitnessSummary:
     def test_no_data(self, auth_client):
         """有 user_id 但无运动数据 → 引导同步"""
         me = auth_client.get("/api/auth/me").json()
-        _user_context.set({"user_id": me["id"]})
+        _user_context.set({"user_id": me["data"]["id"]})
         result = get_fitness_summary.invoke({})
         assert "暂无运动数据" in result or "引导" in result
 
     def test_daily_metrics_summary(self, auth_client):
         """有 daily_metrics → 摘要含静息心率、HRV、训练负荷、VO2max"""
         me = auth_client.get("/api/auth/me").json()
-        user_id = me["id"]
+        user_id = me["data"]["id"]
         _user_context.set({"user_id": user_id})
 
         db = SessionLocal()
@@ -82,7 +82,7 @@ class TestFitnessSummary:
     def test_all_data_types(self, auth_client):
         """三种数据类型齐全 → 日指标+睡眠+运动三段都有"""
         me = auth_client.get("/api/auth/me").json()
-        user_id = me["id"]
+        user_id = me["data"]["id"]
         _user_context.set({"user_id": user_id})
 
         db = SessionLocal()
@@ -137,7 +137,7 @@ class TestFitnessSummary:
     def test_rhr_label(self, auth_client):
         """低静息心率(<60) → 标注'偏低，恢复良好'"""
         me = auth_client.get("/api/auth/me").json()
-        user_id = me["id"]
+        user_id = me["data"]["id"]
         _user_context.set({"user_id": user_id})
 
         db = SessionLocal()

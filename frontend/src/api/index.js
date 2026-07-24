@@ -28,4 +28,9 @@ api.interceptors.response.use(
   },
 )
 
+export function getErrorMessage(error, fallback = '请求失败，请稍后重试') {
+  const messages = error.response?.data?.messages
+  return Array.isArray(messages) && messages.length > 0 ? messages.join('；') : fallback
+}
+
 export default api

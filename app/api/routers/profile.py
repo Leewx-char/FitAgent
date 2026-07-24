@@ -3,21 +3,22 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.deps import get_db
 from app.models import User, UserProfile
-from app.schemas import ProfileCreate, ProfileUpdate, ProfileResponse
+from app.schemas import ApiResponse, ProfileCreate, ProfileResponse, ProfileUpdate
 from app.core.auth import get_current_user
+from app.api.response import success_response
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 
-@router.get("", response_model=ProfileResponse)
+@router.get("", response_model=ApiResponse[ProfileResponse])
 def get_profile(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="用户画像不存在，请先创建")
-    return profile
+    return success_response(ProfileResponse.model_validate(profile))
 
 
-@router.post("", response_model=ProfileResponse, status_code=201)  # 创建资源标准状态码是 201
+@router.post("", response_model=ApiResponse[ProfileResponse], status_code=201)
 def create_profile(
     body: ProfileCreate,
     db: Session = Depends(get_db),
@@ -44,10 +45,10 @@ def create_profile(
     db.add(profile)
     db.commit()
     db.refresh(profile)
-    return profile
+    return success_response(ProfileResponse.model_validate(profile), status_code=201)
 
 
-@router.put("", response_model=ProfileResponse)
+@router.put("", response_model=ApiResponse[ProfileResponse])
 def update_profile(
     body: ProfileUpdate,
     db: Session = Depends(get_db),
@@ -77,4 +78,4 @@ def update_profile(
 
     db.commit()
     db.refresh(profile)
-    return profile
+    return success_response(ProfileResponse.model_validate(profile))

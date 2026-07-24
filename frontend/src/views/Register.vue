@@ -62,6 +62,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
+import { getErrorMessage } from '@/api'
 
 const router = useRouter()
 const message = useMessage()
@@ -105,8 +106,7 @@ async function handleRegister() {
     message.success('注册成功，请登录')
     router.push('/login')
   } catch (err) {
-    const msg = err.response?.data?.detail || '注册失败'
-    message.error(msg)
+    message.error(getErrorMessage(err, '注册失败'))
   } finally {
     loading.value = false
   }

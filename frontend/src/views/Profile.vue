@@ -163,6 +163,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { getErrorMessage } from '@/api'
 import { useProfileStore } from '@/stores/profile'
 
 const message = useMessage()
@@ -235,9 +236,9 @@ async function loadProfile() {
   try {
     await profileStore.fetchProfile()
     profile.value = profileStore.profile
-  } catch (e) {
-    console.error('加载 profile 失败:', e)
-    message.error('加载档案失败')
+  } catch (error) {
+    console.error('加载 profile 失败:', error)
+    message.error(getErrorMessage(error, '加载档案失败'))
     profile.value = null
   } finally {
     loading.value = false
@@ -285,8 +286,8 @@ async function saveEdit() {
     profile.value = profileStore.profile
     editing.value = false
     message.success('画像更新成功')
-  } catch (err) {
-    message.error('更新失败')
+  } catch (error) {
+    message.error(getErrorMessage(error, '更新失败'))
   } finally {
     saving.value = false
   }

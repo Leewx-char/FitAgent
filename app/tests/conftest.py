@@ -94,7 +94,7 @@ def auth_client():
     username = f"testuser_{int(time.time() * 1000)}"  # 唯一用户名避免冲突
     client.post("/api/auth/register", json={"username": username, "password": "testpass123"})
     res = client.post("/api/auth/login", data={"username": username, "password": "testpass123"})
-    token = res.json()["access_token"]
+    token = res.json()["data"]["access_token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
     yield client
     app.dependency_overrides.clear()
@@ -134,7 +134,7 @@ def seed_fitness_data(auth_client):
     用 today-N 动态日期，保证数据始终在近 4 周内（daily 端点默认查近 4 周）。
     teardown 时清理，避免垃圾数据累积。"""
     me = auth_client.get("/api/auth/me").json()
-    user_id = me["id"]
+    user_id = me["data"]["id"]
     db = SessionLocal()
     today = date.today()
     records = [

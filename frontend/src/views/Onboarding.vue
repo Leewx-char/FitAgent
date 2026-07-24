@@ -165,6 +165,7 @@ import { ref, reactive, computed, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { useProfileStore } from '@/stores/profile'
+import { getErrorMessage } from '@/api'
 
 const router = useRouter()
 const message = useMessage()
@@ -270,7 +271,7 @@ async function handleSubmit() {
     message.success('档案创建成功！')
     router.push('/')
   } catch (err) {
-    message.error(err.response?.data?.detail || '提交失败，请重试')
+    message.error(getErrorMessage(err, '提交失败，请重试'))
   } finally {
     submitting.value = false
   }

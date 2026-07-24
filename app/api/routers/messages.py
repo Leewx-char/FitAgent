@@ -2,13 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.deps import get_db
 from app.models import Session as SessionModel, Message, User
-from app.schemas import MessageResponse
+from app.schemas import ApiResponse, MessageResponse
 from app.core.auth import get_current_user
+from app.api.response import success_response
 
 router = APIRouter(prefix="/api/sessions/{session_id}/messages", tags=["messages"])
 
 
-@router.get("", response_model=list[MessageResponse])
+@router.get("", response_model=ApiResponse[list[MessageResponse]])
 def list_messages(
     session_id: str,
     skip: int = 0,
@@ -33,4 +34,4 @@ def list_messages(
         .limit(limit)
         .all()
     )
-    return messages
+    return success_response([MessageResponse.model_validate(message) for message in messages])

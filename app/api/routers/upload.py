@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, File, Request, UploadFile
+from app.api.response import error_response, success_response
 from app.core.auth import get_current_user
 from app.models import User
-from app.schemas import HealthDocUploadResponse
+from app.schemas import ApiResponse, HealthDocumentData
 from app.services.doc_parser import HEALTH_CODE_INVALID_INPUT, HEALTH_CODE_OK, handle_upload
 from app.utils.audit import audit_log
 from slowapi import Limiter
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/api/upload", tags=["upload"])
 
 # 前端上传文件 → 后端AI提取 → 返回提取结果给前端 → 用户确认 → 调PUT /api/profile保存
 # 上传接口
-@router.post("/health-doc", response_model=HealthDocUploadResponse)
+@router.post("/health-doc", response_model=ApiResponse[HealthDocumentData])
 @limiter.limit("5/minute")
 async def upload_health_doc(
     request: Request,
@@ -22,10 +23,7 @@ async def upload_health_doc(
     current_user: User = Depends(get_current_user),
 ):
     if not file.filename:
-        return HealthDocUploadResponse(
-            code=HEALTH_CODE_INVALID_INPUT,
-            messages=["文件名不能为空"],
-        )
+        return error_response("文件名不能为空", status_code=400)
 
     file_bytes = await file.read()
 
@@ -39,4 +37,8 @@ async def upload_health_doc(
         result="success" if result_code == HEALTH_CODE_OK else "fail",
         doc_code=result_code,
     )
-    return HealthDocUploadResponse.model_validate(result)
+    if result_code != HEALTH_CODE_OK:
+        status_code = 400 if result_code == HEALTH_CODE_INVALID_INPUT else 422
+        return error_response(result.get("messages", []), status_code=status_code)
+
+    return success_response(HealthDocumentData.model_validate(result.get("data")))
