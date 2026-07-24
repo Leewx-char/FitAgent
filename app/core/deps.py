@@ -10,22 +10,16 @@
 路由函数通过 FastAPI 的 Depends() 注入这些依赖。
 """
 
-from app.core.database import SessionLocal
+from app.core.database import get_db_session
 from app.services.react_agent import ReactAgent
 from functools import lru_cache
 from app.services.coros_client import CorosClient
 
 
 def get_db():
-    db = SessionLocal()
-    try:
+    """为每个 HTTP 请求提供独立的数据库事务会话。"""
+    with get_db_session() as db:
         yield db
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
 
 
 def get_agent():

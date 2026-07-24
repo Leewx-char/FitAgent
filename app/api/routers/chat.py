@@ -19,7 +19,10 @@ from app.core.deps import get_db, get_agent
 from app.core.auth import get_current_user, decode_access_token
 from app.models import Session as SessionModel, Message, User
 from app.services.react_agent import ReactAgent
-from app.services.agent_tools import _user_context
+from app.services.agent_trace import AgentTrace
+from app.services.session_facts import extract_session_facts
+from app.repositories.agent_trace_repository import AgentTraceRepository
+from app.core.database import get_db_session
 from app.utils.logger_handler import logger
 import uuid
 import re
@@ -78,10 +81,12 @@ async def sse_generator(
             return _SENTINEL
 
     # 把 gen 创建为能传递 user_id/city 的闭包
-    session_facts = ReactAgent._extract_session_facts(messages)
+    session_facts = extract_session_facts(messages)
     user_id = current_user.id
     city = session_facts.get("city", "") or ""
-    gen = iter(agent.execute_stream(messages, user_id=user_id, city=city))
+    trace = AgentTrace()
+    gen = iter(agent.execute_stream(messages, user_id=user_id, city=city, trace=trace))
+    stream_failed = False
     try:
         while True:
             chunk = await loop.run_in_executor(None, _next_chunk, gen)
@@ -104,6 +109,13 @@ async def sse_generator(
                 # 工具调用通知：把英文名翻译成中文显示给用户
                 payload = {"type": "tool", "name": event.get("name", "")}
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            elif event.get("type") == "evidence":
+                # 证据卡片属于检索结果的一部分，原样转发给前端与回答中的 [证据:N] 对应。
+                payload = {
+                    "type": "evidence",
+                    "items": event.get("items", []),
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
             elif event.get("type") == "text":
                 # 文本增量：只有新增的部分
                 content = _redact_sensitive(event.get("content", ""))
@@ -111,6 +123,7 @@ async def sse_generator(
                 payload = {"type": "text", "content": content}
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
     except Exception as e:
+        stream_failed = True
         # 捕获所有异常（API Key 无效、额度不足、超时等），给用户友好的中文提示
         logger.error(f"Agent流式响应异常：{str(e)}", exc_info=True)  # ← 加这行
         error_msg = str(e)
@@ -127,6 +140,15 @@ async def sse_generator(
         else:
             error_msg = "服务暂时不可用，请稍后重试"
         yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
+    trace.finish("failed" if stream_failed else "succeeded")
+    try:
+        with get_db_session() as trace_db:
+            AgentTraceRepository.save(
+                trace_db, trace, session_id=session_id, user_id=current_user.id
+            )
+    except Exception:
+        # 轨迹表尚未迁移或单独写入失败时，不得影响用户已经得到的流式回答。
+        logger.exception("Agent 执行轨迹写入失败：request_id=%s", trace.request_id)
     # 流式结束后：存 assistant 消息到数据库
     db.add(
         Message(
@@ -204,14 +226,11 @@ async def chat(
         .all()
     )
     all_messages = [{"role": m.role, "content": m.content} for m in history_messages]
-    # 从对话中提取城市等上下文信息（用全量消息，保证提取准确）
-    session_facts = ReactAgent._extract_session_facts(all_messages)
     # 滑动窗口：只保留最近 20 轮（40 条消息），防止长对话 token 爆炸
     MAX_ROUNDS = 20
     messages = (
         all_messages[-(MAX_ROUNDS * 2) :] if len(all_messages) > MAX_ROUNDS * 2 else all_messages
     )
-    _user_context.set({"user_id": current_user.id, "city": session_facts.get("city", "") or ""})
     # 4. 流式响应
     return StreamingResponse(
         sse_generator(agent, messages, db, session_id, payload.message, current_user),

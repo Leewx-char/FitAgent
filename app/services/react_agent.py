@@ -1,5 +1,5 @@
-import re
 import json
+import time
 from typing import Iterable
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessageChunk, ToolMessage
@@ -8,6 +8,8 @@ from app.services.factory import get_chat_model
 from app.utils.prompt_loader import load_system_prompts
 from app.services.agent_tools import (
     rag_summarize,
+    _get_rag_service,
+    build_evidence_cards,
     get_weather,
     get_user_location,
     get_user_id,
@@ -17,6 +19,9 @@ from app.services.agent_tools import (
     get_fitness_summary,
 )
 from app.services.middleware import monitor_tool, log_before_model, report_prompt_switch
+from app.services.agent_trace import AgentTrace
+from app.services.session_facts import extract_session_facts
+from app.core.settings import get_settings
 
 TOOL_DISPLAY = {
     "get_user_profile": "获取用户画像",
@@ -31,59 +36,56 @@ TOOL_DISPLAY = {
 
 
 class ReactAgent:
-    COMMON_CITIES = [
-        "北京",
-        "上海",
-        "广州",
-        "深圳",
-        "杭州",
-        "苏州",
-        "南京",
-        "成都",
-        "重庆",
-        "天津",
-        "武汉",
-        "西安",
-        "长沙",
-        "青岛",
-        "宁波",
-        "厦门",
-        "郑州",
-        "合肥",
-        "福州",
-        "济南",
-    ]
+    """面向多工具场景的 Agent，并为明确知识问答提供单次模型的 RAG 快速路径。"""
 
-    INVALID_CITY_VALUES = {"哪个城市", "什么城市", "哪座城市", "哪个市", "哪里", "哪儿"}
-
-    # 训练目标关键词（规则提取，固定类型少）
-    _GOAL_KEYWORDS = {
-        "增肌": ["增肌", "长肌肉", "变大", "变壮", "增重"],
-        "减脂": ["减脂", "减肥", "减重", "瘦身", "瘦下来", "掉秤"],
-        "塑形": ["塑形", "塑型", "线条", "紧致", "马甲线", "腹肌"],
-        "耐力": ["耐力", "体能", "心肺", "有氧"],
-    }
-
-    # 伤病关键词（规则提取，常见部位）
-    _INJURY_KEYWORDS = {
-        "膝盖伤": ["膝盖", "膝关节"],
-        "腰伤": ["腰", "腰椎", "腰间盘"],
-        "肩伤": ["肩", "肩关节", "肩袖"],
-        "手腕伤": ["手腕", "腕关节"],
-        "踝伤": ["脚踝", "踝关节", "崴脚"],
-        "颈椎": ["颈椎", "脖子"],
-    }
-
-    # 饮食偏好关键词
-    _DIET_KEYWORDS = {
-        "素食": ["素食", "吃素", "不吃肉"],
-        "低碳水": ["低碳水", "低碳", "生酮", "戒碳水"],
-        "高蛋白": ["高蛋白", "多吃肉", "多吃蛋"],
-    }
+    _KNOWLEDGE_TERMS = (
+        "深蹲",
+        "硬拉",
+        "卧推",
+        "引体",
+        "跑步",
+        "动作",
+        "训练",
+        "热身",
+        "拉伸",
+        "增肌",
+        "减脂",
+        "蛋白",
+        "营养",
+        "饮食",
+        "膝",
+        "肩",
+        "腰",
+        "疼痛",
+        "受伤",
+        "恢复",
+    )
+    _PERSONALIZATION_TERMS = (
+        "我的",
+        "我自己",
+        "结合我",
+        "根据我",
+        "给我制定",
+        "我的画像",
+        "我的体重",
+        "我的身高",
+        "我的目标",
+        "我的伤",
+        "训练记录",
+        "运动数据",
+        "体检",
+        "报告",
+        "天气",
+        "户外",
+    )
 
     def __init__(self):
+        settings = get_settings()
+        self.model = get_chat_model()
+        self.max_steps = settings.agent_max_steps
+        self.max_tool_calls = settings.agent_max_tool_calls
         self.agent = create_agent(
-            model=get_chat_model(),
+            model=self.model,
             system_prompt=load_system_prompts(),
             tools=[
                 rag_summarize,
@@ -110,79 +112,113 @@ class ReactAgent:
         return normalized
 
     @classmethod
-    def _extract_session_facts(cls, messages: list[dict]) -> dict:
-        facts = {}
+    def _should_use_direct_rag(cls, messages: list[dict]) -> bool:
+        """只让非个性化、明确的健身知识问题跳过首次 Agent 工具决策。
 
-        for message in messages:
-            content = (message.get("content") or "").strip()
-            if not content:
-                continue
+        任何要求结合用户自身数据、天气或报告的请求仍由完整 Agent 编排，
+        防止快速路径遗漏必须读取的个性化信息。
+        """
+        if not messages or messages[-1].get("role") != "user":
+            return False
+        query = str(messages[-1].get("content", "")).strip()
+        return (
+            bool(query)
+            and not any(term in query for term in cls._PERSONALIZATION_TERMS)
+            and any(term in query for term in cls._KNOWLEDGE_TERMS)
+        )
 
-            # 城市提取
-            for city in cls.COMMON_CITIES:
-                if city in content:
-                    facts["city"] = city
-
-            city_match = re.search(
-                r"(?:在|住在|来自|位于)([^\s，。！？,.!?]{2,12}(?:市|"
-                r"县|区|北京|上海|广州|深圳|杭州|苏州|南京|"
-                r"成都|重庆|天津|武汉|西安|长沙|青岛|宁波|厦门"
-                r"|郑州|合肥|福州|济南))",
-                content,
+    @staticmethod
+    def _content_to_text(content: object) -> str:
+        if isinstance(content, list):
+            return "".join(
+                item.get("text", "") if isinstance(item, dict) else str(item) for item in content
             )
-            if city_match:
-                candidate_city = city_match.group(1)
-                if candidate_city not in cls.INVALID_CITY_VALUES:
-                    facts["city"] = candidate_city
+        return str(content or "")
 
-            # 训练目标提取
-            for goal, keywords in cls._GOAL_KEYWORDS.items():
-                for kw in keywords:
-                    if kw in content:
-                        facts["training_goal"] = goal
-                        break
-                if facts.get("training_goal") == goal:
-                    break
+    def _execute_direct_rag(self, messages: list[dict], trace: AgentTrace | None = None):
+        """检索一次后只调用一次模型生成答案，仍保留原始证据编号与 SSE 事件。"""
+        query = str(messages[-1]["content"])
+        history = messages[:-1][-6:]
+        yield (
+            json.dumps({"type": "tool", "name": TOOL_DISPLAY["rag_summarize"]}, ensure_ascii=False)
+            + "\n"
+        )
+        started_at = time.perf_counter()
+        try:
+            rag_context = _get_rag_service().build_context(query, history=history)
+        except Exception:
+            if trace:
+                trace.record_tool(
+                    tool_name="rag_summarize",
+                    argument_shape={"query": "str", "source": "str"},
+                    status="error",
+                    elapsed_ms=round((time.perf_counter() - started_at) * 1000),
+                    detail="internal_error",
+                )
+            raise
+        if trace:
+            trace.record_tool(
+                tool_name="rag_summarize",
+                argument_shape={"query": "str", "source": "str"},
+                status="success",
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000),
+            )
+        cards = build_evidence_cards(rag_context.result)
+        if cards:
+            yield json.dumps({"type": "evidence", "items": cards}, ensure_ascii=False) + "\n"
 
-            # 伤病史提取
-            for injury, keywords in cls._INJURY_KEYWORDS.items():
-                for kw in keywords:
-                    if kw in content:
-                        facts.setdefault("injuries", []).append(injury)
-                        break
+        direct_prompt = (
+            "下面的知识库证据已经完成检索。请只依据这些证据回答用户，"
+            "不要调用工具、不要提及检索过程；采用证据时保留对应 [证据:N] 标记。\n\n"
+            f"用户问题：{query}\n\n知识库证据：\n{rag_context.content}"
+        )
+        for chunk in self.model.stream(
+            [("system", load_system_prompts()), ("human", direct_prompt)]
+        ):
+            content = self._content_to_text(getattr(chunk, "content", chunk))
+            if content:
+                yield json.dumps({"type": "text", "content": content}, ensure_ascii=False) + "\n"
 
-            # 饮食偏好提取
-            for diet, keywords in cls._DIET_KEYWORDS.items():
-                for kw in keywords:
-                    if kw in content:
-                        facts["diet_pref"] = diet
-                        break
-                if "diet_pref" in facts:
-                    break
-
-        # 去重 injuries
-        if "injuries" in facts:
-            facts["injuries"] = list(set(facts["injuries"]))
-
-        return facts
-
-    def execute_stream(self, messages: list[dict], user_id: int | None = None, city: str = ""):
+    def execute_stream(
+        self,
+        messages: list[dict],
+        user_id: int | None = None,
+        city: str = "",
+        trace: AgentTrace | None = None,
+    ):
         normalized_messages = self._normalize_messages(messages)
-        session_facts = self._extract_session_facts(normalized_messages)
+        session_facts = extract_session_facts(normalized_messages)
         input_dict = {"messages": normalized_messages}
 
-        run_context = {"report": False, "session_facts": session_facts}
+        run_context = {
+            "report": False,
+            "session_facts": session_facts,
+            "tool_call_limit": self.max_tool_calls,
+            "tool_call_count": 0,
+            "agent_trace": trace,
+        }
+        # 当前消息由工具参数携带；检索器只需要最近历史来消解“那个动作”等指代。
+        run_context["retrieval_history"] = normalized_messages[:-1][-6:]
         if user_id:
             run_context["user_id"] = user_id
         if city:
             run_context["city"] = city
+
+        if self._should_use_direct_rag(normalized_messages):
+            if trace:
+                trace.mode = "direct_rag"
+            yield from self._execute_direct_rag(normalized_messages, trace)
+            return
 
         seen_tool_ids = set()  # 记录已见过的工具调用ID，用于去重和判断"是否调过工具"
         last_tool_step = None  # 记录最后一个 ToolMessage 所在的 step 编号
         # None 表示：还没执行完所有工具调用（还在调工具阶段）
 
         for msg_chunk, metadata in self.agent.stream(
-            input_dict, stream_mode="messages", context=run_context
+            input_dict,
+            stream_mode="messages",
+            context=run_context,
+            config={"recursion_limit": self.max_steps},
         ):
             if isinstance(msg_chunk, AIMessageChunk):
                 tool_call_chunks = getattr(msg_chunk, "tool_call_chunks", None) or []
@@ -218,6 +254,13 @@ class ReactAgent:
                         )
             elif isinstance(msg_chunk, ToolMessage):
                 last_tool_step = metadata.get("langgraph_step", 0)
+                evidence = run_context.get("rag_evidence", [])
+                if evidence and not run_context.get("rag_evidence_emitted", False):
+                    run_context["rag_evidence_emitted"] = True
+                    yield (
+                        json.dumps({"type": "evidence", "items": evidence}, ensure_ascii=False)
+                        + "\n"
+                    )
 
 
 if __name__ == "__main__":

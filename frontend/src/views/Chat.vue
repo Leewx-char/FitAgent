@@ -28,6 +28,25 @@
     >
       <div class="message-bubble" :class="msg.role">
         <div v-html="renderMarkdown(msg.content)" />
+        <section v-if="msg.role === 'assistant' && msg.evidence?.length" class="evidence-panel">
+          <button class="evidence-toggle" type="button" @click="toggleEvidence(index)">
+            <span>证据来源（{{ msg.evidence.length }}）</span>
+            <span>{{ expandedEvidence[index] ? '收起' : '展开' }}</span>
+          </button>
+          <div v-if="expandedEvidence[index]" class="evidence-list">
+            <article v-for="item in msg.evidence" :key="item.evidence_id" class="evidence-card">
+              <div class="evidence-card-header">
+                <strong>[证据:{{ item.rank }}]</strong>
+                <span>{{ item.source_id }}</span>
+              </div>
+              <p>{{ item.snippet }}</p>
+              <div class="evidence-card-meta">
+                <span>{{ item.evidence_id }}</span>
+                <span v-if="item.tags">{{ item.tags }}</span>
+              </div>
+            </article>
+          </div>
+        </section>
       </div>
     </div>
 
@@ -176,6 +195,7 @@ const fileInputRef = ref(null)
 const editableHealthData = ref({})
 const thinking = ref(false)
 const toolChain = ref([])
+const expandedEvidence = ref({})
 
 const messages = computed(() => chatStore.messages)
 
@@ -221,6 +241,10 @@ const quickActions = [
 function renderMarkdown(text) {
   if (!text) return ''
   return DOMPurify.sanitize(marked.parse(text))
+}
+
+function toggleEvidence(index) {
+  expandedEvidence.value[index] = !expandedEvidence.value[index]
 }
 
 async function scrollToBottom() {
@@ -289,6 +313,7 @@ function sendMessage(text) {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let assistantMsg = ''
+      let evidenceCards = []
       let msgAdded = false
       let sseBuffer = ''
 
@@ -335,6 +360,15 @@ function sendMessage(text) {
                 continue
               }
 
+              if (event.type === 'evidence') {
+                evidenceCards = Array.isArray(event.items) ? event.items : []
+                if (msgAdded) {
+                  const lastMessage = chatStore.messages.at(-1)
+                  if (lastMessage?.role === 'assistant') lastMessage.evidence = evidenceCards
+                }
+                continue
+              }
+
               if (event.type === 'error') {
                 thinking.value = false
                 toolChain.value = []
@@ -350,7 +384,7 @@ function sendMessage(text) {
                 toolChain.value = []
                 assistantMsg += event.content || ''
                 if (!msgAdded) {
-                  chatStore.addMessage({ role: 'assistant', content: assistantMsg })
+                  chatStore.addMessage({ role: 'assistant', content: assistantMsg, evidence: evidenceCards })
                   msgAdded = true
                 } else {
                   chatStore.updateLastAssistantMessage(event.content || '')
@@ -576,6 +610,63 @@ watch(toolChain, () => {
 .message-bubble :deep(pre code) { background: none; padding: 0; }
 .message-bubble :deep(ul) { padding-left: 20px; }
 .message-bubble :deep(li) { margin: 4px 0; }
+
+.evidence-panel {
+  margin-top: 12px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 10px;
+}
+
+.evidence-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+}
+
+.evidence-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.evidence-card {
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.evidence-card-header,
+.evidence-card-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.evidence-card-header span,
+.evidence-card-meta {
+  color: var(--text-secondary);
+}
+
+.evidence-card p {
+  margin: 6px 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.evidence-card-meta {
+  flex-wrap: wrap;
+  word-break: break-all;
+}
 
 .thinking-wrapper {
   display: flex;

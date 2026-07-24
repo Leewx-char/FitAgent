@@ -11,6 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from collections import Counter
 
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
@@ -44,20 +45,53 @@ class IndexBuildResult:
     chunk_count: int
 
 
+@dataclass(frozen=True)
+class IndexPreflightResult:
+    """不依赖 embedding 或 Qdrant 的索引发布前质量检查结果。"""
+
+    revision: str
+    chunks: list[IndexedChunk]
+    source_checksums: dict[str, str]
+    source_document_counts: dict[str, int]
+    source_chunk_counts: dict[str, int]
+    content_processing: dict[str, int]
+    rules: dict[str, int]
+    warnings: tuple[str, ...]
+
+    def report(self) -> dict:
+        """返回可写入 JSON、可与 index manifest 一起审计的安全摘要。"""
+        return {
+            "status": "passed_with_warnings" if self.warnings else "passed",
+            "rules": self.rules,
+            "source_count": len(self.source_document_counts),
+            "chunk_count": len(self.chunks),
+            "sources": {
+                source: {
+                    "sha256": self.source_checksums[source],
+                    "document_count": self.source_document_counts[source],
+                    "chunk_count": self.source_chunk_counts.get(source, 0),
+                }
+                for source in sorted(self.source_checksums)
+            },
+            "content_processing": self.content_processing,
+            "warnings": list(self.warnings),
+        }
+
+
 class KnowledgeIndexer:
     """完全离线地构建新版本，校验通过后再将其激活。"""
 
-    def __init__(self, repository: QdrantVectorRepository | None = None) -> None:
+    def __init__(
+        self,
+        repository: QdrantVectorRepository | None = None,
+        *,
+        initialize_repository: bool = True,
+    ) -> None:
         self.config = get_vector_store_config()
-        settings = get_settings()
-        self.repository = repository or QdrantVectorRepository(
-            collection_name=self.config["collection_alias"],
-            url=settings.qdrant_url or self.config["url"],
-            api_key=settings.qdrant_api_key or None,
-            grpc_port=self.config["grpc_port"],
-            prefer_grpc=self.config["prefer_grpc"],
-            timeout_seconds=self.config["qdrant_timeout_seconds"],
-        )
+        self._settings = get_settings()
+        self.repository = repository
+        if initialize_repository and self.repository is None:
+            self.repository = self._create_repository()
         self.recursive_splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.config["chunk_size"],
             chunk_overlap=self.config["chunk_overlap"],
@@ -75,21 +109,27 @@ class KnowledgeIndexer:
             strip_headers=False,
         )
         self.cleaner = DeepTextCleaner()
-        self.enricher = MetadataEnricher(
-            summary_max_chars=self.config["summary_max_chars"],
-            max_tags=self.config["max_tags"],
-        )
+        self.enricher = MetadataEnricher(max_tags=self.config["max_tags"])
         self._last_build_stats: dict[str, int] = {}
+
+    def _create_repository(self) -> QdrantVectorRepository:
+        return QdrantVectorRepository(
+            collection_name=self.config["collection_alias"],
+            url=self._settings.qdrant_url or self.config["url"],
+            api_key=self._settings.qdrant_api_key or None,
+            grpc_port=self.config["grpc_port"],
+            prefer_grpc=self.config["prefer_grpc"],
+            timeout_seconds=self.config["qdrant_timeout_seconds"],
+        )
 
     def build_and_activate(self) -> IndexBuildResult:
         """从源文件创建、校验并激活一个完整的索引版本。"""
-        source_documents, source_checksums = self._load_source_documents()
-        chunks = self._build_chunks(source_documents, source_checksums)
-        if not chunks:
-            raise RuntimeError("知识库没有可索引的有效文本，未创建 Qdrant collection。")
-
-        revision = self._build_revision(source_checksums)
-        chunks = self._attach_index_revision(chunks, revision)
+        if self.repository is None:
+            self.repository = self._create_repository()
+        preflight = self.preflight()
+        revision = preflight.revision
+        source_checksums = preflight.source_checksums
+        chunks = self._attach_index_revision(preflight.chunks, revision)
         collection_name = f"{self.config['collection_prefix']}_{revision[:12]}"
         embedding_model = get_embedding_model()
         collection_created = False
@@ -134,7 +174,7 @@ class KnowledgeIndexer:
 
             self.repository.activate_alias(self.config["collection_alias"], collection_name)
             index_activated = True
-            self._write_artifacts(revision, collection_name, chunks, source_checksums)
+            self._write_artifacts(revision, collection_name, chunks, source_checksums, preflight)
             logger.info(
                 "知识库索引已发布：revision=%s，collection=%s，切片=%s，用时 %.1f 秒",
                 revision[:12],
@@ -159,6 +199,68 @@ class KnowledgeIndexer:
             message = self._build_failure_message(error)
             logger.error(message, exc_info=True)
             raise RuntimeError(message) from error
+
+    def preflight(self) -> IndexPreflightResult:
+        """读取、清洗和切片知识源，阻止明显异常的数据集进入昂贵的构建阶段。"""
+        source_documents, source_checksums = self._load_source_documents()
+        source_document_counts = {source: len(documents) for source, documents in source_documents}
+        chunks = self._build_chunks(source_documents, source_checksums)
+        source_chunk_counts = Counter(str(chunk.metadata.get("source_id", "")) for chunk in chunks)
+        warnings = self._validate_preflight(
+            source_checksums=source_checksums,
+            chunks=chunks,
+            source_chunk_counts=source_chunk_counts,
+        )
+        rules = {
+            "min_source_count": int(self.config.get("min_source_count", 1)),
+            "min_chunk_count": int(self.config.get("min_chunk_count", 1)),
+        }
+        return IndexPreflightResult(
+            revision=self._build_revision(source_checksums),
+            chunks=chunks,
+            source_checksums=source_checksums,
+            source_document_counts=source_document_counts,
+            source_chunk_counts=dict(source_chunk_counts),
+            content_processing=dict(getattr(self, "_last_build_stats", {})),
+            rules=rules,
+            warnings=tuple(warnings),
+        )
+
+    def _validate_preflight(
+        self,
+        *,
+        source_checksums: dict[str, str],
+        chunks: list[IndexedChunk],
+        source_chunk_counts: Counter[str],
+    ) -> list[str]:
+        """校验发布必须满足的不变量，并标记可由人工确认的来源告警。"""
+        min_source_count = int(self.config.get("min_source_count", 1))
+        min_chunk_count = int(self.config.get("min_chunk_count", 1))
+        if len(source_checksums) < min_source_count:
+            raise RuntimeError(
+                "知识库预检失败：有效来源数不足，"
+                f"要求至少 {min_source_count} 个，实际 {len(source_checksums)} 个。"
+            )
+        if len(chunks) < min_chunk_count:
+            raise RuntimeError(
+                "知识库预检失败：有效切片数不足，"
+                f"要求至少 {min_chunk_count} 个，实际 {len(chunks)} 个。"
+            )
+
+        chunk_ids = [chunk.chunk_id for chunk in chunks]
+        if len(chunk_ids) != len(set(chunk_ids)):
+            raise RuntimeError("知识库预检失败：检测到重复 chunk_id，未创建 Qdrant collection。")
+        unknown_sources = sorted(set(source_chunk_counts).difference(source_checksums))
+        if unknown_sources:
+            raise RuntimeError(
+                "知识库预检失败：切片引用了未登记来源：" + ", ".join(unknown_sources)
+            )
+
+        return [
+            f"来源 {source} 已加载但在清洗/去重后没有保留切片，请确认是否符合预期。"
+            for source in sorted(source_checksums)
+            if source_chunk_counts.get(source, 0) == 0
+        ]
 
     @staticmethod
     def _build_failure_message(error: Exception) -> str:
@@ -286,8 +388,7 @@ class KnowledgeIndexer:
                         "ordinal": len(chunks),
                         "parent_id": parent_id,
                         "parent_text": parent_text,
-                        "summary": enriched.summary,
-                        "tags": enriched.tags,
+                        "tags": ",".join(enriched.tags),
                     }
                     for key, value in child_document.metadata.items():
                         if key == "source":
@@ -306,14 +407,13 @@ class KnowledgeIndexer:
 
     def _build_revision(self, source_checksums: dict[str, str]) -> str:
         revision_input = {
-            "schema": 2,
+            "schema": 3,
             "sources": source_checksums,
             "chunk_size": self.config["chunk_size"],
             "chunk_overlap": self.config["chunk_overlap"],
             "parent_chunk_size": self.config["parent_chunk_size"],
             "parent_chunk_overlap": self.config["parent_chunk_overlap"],
             "near_duplicate_hamming_distance": self.config["near_duplicate_hamming_distance"],
-            "summary_max_chars": self.config["summary_max_chars"],
             "max_tags": self.config["max_tags"],
             "embedding_model": get_models_config()["embedding_model_name"],
         }
@@ -326,6 +426,7 @@ class KnowledgeIndexer:
         collection_name: str,
         chunks: list[IndexedChunk],
         source_checksums: dict[str, str],
+        preflight: IndexPreflightResult,
     ) -> None:
         manifest = {
             "index_revision": revision,
@@ -333,6 +434,7 @@ class KnowledgeIndexer:
             "chunk_count": len(chunks),
             "source_checksums": source_checksums,
             "content_processing": self._last_build_stats,
+            "preflight": preflight.report(),
             "built_at": datetime.now(timezone.utc).isoformat(),
         }
         self._write_json(self.config["manifest_path"], manifest)
@@ -345,6 +447,15 @@ class KnowledgeIndexer:
                 ],
             },
         )
+
+    def write_preflight_report(self, result: IndexPreflightResult) -> None:
+        """保存只读预检报告，供构建前人工复核或 CI 门禁使用。"""
+        report = {
+            "index_revision": result.revision,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            **result.report(),
+        }
+        self._write_json(self.config["preflight_report_path"], report)
 
     @staticmethod
     def _write_json(relative_path: str, content: dict) -> None:

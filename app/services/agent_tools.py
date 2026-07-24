@@ -11,18 +11,46 @@ from functools import lru_cache, wraps
 from langchain_core.tools import tool
 from app.services.rag_service import RagSummarizeService
 from app.utils.logger_handler import logger
-from app.core.database import SessionLocal
+from app.core.database import get_db_session
 from app.models import UserProfile, FitnessData
 
 
 @lru_cache(maxsize=1)
 def _get_rag_service() -> RagSummarizeService:
-    """首次实际检索时再初始化 RAG，避免导入路由时连接外部模型。"""
+    """复用已加载 BM25 工件的 RAG 服务；构造过程不执行 embedding 或 Qdrant 查询。"""
 
     return RagSummarizeService()
 
 
 _user_context: ContextVar[dict] = ContextVar("user_context", default={})
+
+
+def warm_rag_retriever() -> str | None:
+    """在应用启动阶段加载 BM25 工件，消除首个 RAG 请求的本地建索引延迟。"""
+    service = _get_rag_service()
+    logger.info("RAG 预热完成：BM25 revision=%s", service.bm25_revision or "unavailable")
+    return service.bm25_revision
+
+
+def build_evidence_cards(result) -> list[dict[str, str | int | float | None]]:
+    """将命中证据裁剪为适合 SSE 传输和前端展示的非敏感卡片数据。"""
+    if result is None:
+        return []
+
+    cards = []
+    for hit in result.hits:
+        snippet = " ".join(hit.child_text.split())
+        cards.append(
+            {
+                "rank": hit.rank,
+                "evidence_id": hit.evidence_id,
+                "source_id": hit.source_id,
+                "snippet": snippet[:240] + ("…" if len(snippet) > 240 else ""),
+                "tags": str(hit.metadata.get("tags", "")),
+                "score": hit.rerank_score if hit.rerank_score is not None else hit.score,
+            }
+        )
+    return cards
 
 
 _NETWORK_ERRORS = (URLError, ConnectionError, TimeoutError, OSError)
@@ -165,7 +193,14 @@ SOURCE_MAP = {
 @_with_retry()
 def rag_summarize(query: str, source: str = "") -> str:
     source_filter = SOURCE_MAP.get(source) if source else None
-    return _get_rag_service().rag_summarize(query, source_filter)
+    context = _user_context.get()
+    rag_context = _get_rag_service().build_context(
+        query,
+        source_filter,
+        context.get("retrieval_history", []),
+    )
+    context["rag_evidence"] = build_evidence_cards(rag_context.result)
+    return rag_context.content
 
 
 @tool(description="获取指定城市的实时天气信息，返回温度、体感温度、降水、风速等数据")
@@ -270,7 +305,7 @@ def get_current_month():
 
 
 @tool(
-    description="获取当前用户的完整健身画像，包括性别、年龄、身高、体重、健身目标、训练经验、伤病史、饮食限制等信息。每位用户首次提问时建议主动调用一次。"
+    description="获取当前用户的完整健身画像。仅当用户明确要求结合其个人情况、画像、目标、体重、伤病史、训练记录来给建议时调用；通用动作、营养或防护知识问答禁止调用。"
 )
 def get_user_profile():
     ctx = _user_context.get()
@@ -278,8 +313,7 @@ def get_user_profile():
     if not user_id:
         return "未获取到用户信息，请让用户先登录。"
 
-    db = SessionLocal()
-    try:
+    with get_db_session() as db:
         profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
         if not profile:
             return "用户尚未填写健身画像，请引导用户完善个人健身信息（年龄、身高、体重、目标等）。"
@@ -311,8 +345,6 @@ def get_user_profile():
             f"- 饮食限制：{', '.join(diet_restrict) if diet_restrict else '无'}\n"
             f"- 偏好：{preferences or '未填写'}"
         )
-    finally:
-        db.close()
 
 
 @tool(
@@ -325,9 +357,8 @@ def get_fitness_summary() -> str:
     if not user_id:
         return "未获取到用户信息，请让用户先登录。"
 
-    # 手动开 DB 会话：工具函数在 LangChain Agent 内部调用，不走 FastAPI Depends 注入
-    db = SessionLocal()
-    try:
+    # Agent 工具不走 FastAPI Depends，改用与 HTTP 请求相同的事务边界。
+    with get_db_session() as db:
         # 查近4周所有健身数据
         since = date.today() - timedelta(weeks=4)
         records = (
@@ -428,8 +459,6 @@ def get_fitness_summary() -> str:
                 lines.append(f"- 总运动时长：{total_sec / 3600:.1f}小时")
 
         return "\n".join(lines)
-    finally:
-        db.close()
 
 
 @tool(

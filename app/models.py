@@ -41,6 +41,9 @@ class User(Base):
     profile = relationship(
         "UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+    agent_runs = relationship(
+        "AgentRun", back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
 
 
 class UserProfile(Base):
@@ -78,6 +81,9 @@ class Session(Base):
 
     user = relationship("User", back_populates="sessions")
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
+    agent_runs = relationship(
+        "AgentRun", back_populates="session", cascade="all, delete-orphan", passive_deletes=True
+    )
 
 
 class Message(Base):
@@ -90,6 +96,52 @@ class Message(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     session = relationship("Session", back_populates="messages")
+
+
+class AgentRun(Base):
+    """一轮 Agent 执行的无敏感轨迹摘要。"""
+
+    __tablename__ = "agent_runs"
+
+    id = Column(CHAR(32), primary_key=True)
+    request_id = Column(String(32), nullable=False, index=True)
+    session_id = Column(CHAR(32), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    mode = Column(String(20), nullable=False)  # agent / direct_rag
+    status = Column(String(20), nullable=False)  # succeeded / failed
+    elapsed_ms = Column(Integer, nullable=False)
+    tool_call_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, server_default=func.now())
+
+    user = relationship("User", back_populates="agent_runs")
+    session = relationship("Session", back_populates="agent_runs")
+    tool_calls = relationship(
+        "AgentToolCall",
+        back_populates="agent_run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="AgentToolCall.sequence",
+    )
+
+
+class AgentToolCall(Base):
+    """Agent 运行中单次工具调用的安全审计信息。"""
+
+    __tablename__ = "agent_tool_calls"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_run_id = Column(CHAR(32), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False)
+    sequence = Column(Integer, nullable=False)
+    tool_name = Column(String(80), nullable=False)
+    argument_shape = Column(Text, nullable=False, default="{}")
+    status = Column(String(20), nullable=False)
+    elapsed_ms = Column(Integer, nullable=False)
+    detail = Column(String(120), nullable=False, default="")
+    created_at = Column(DateTime, server_default=func.now())
+
+    agent_run = relationship("AgentRun", back_populates="tool_calls")
+
+    __table_args__ = (Index("ix_agent_tool_calls_run_sequence", "agent_run_id", "sequence"),)
 
 
 class FitnessData(Base):

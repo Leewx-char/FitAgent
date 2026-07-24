@@ -64,7 +64,7 @@ alembic upgrade head
 
 ```yaml
 chat_model_name: deepseek-v4-pro
-embedding_model_name: text-embedding-v4
+embedding_model_name: text-embedding-v1
 vl_primary_model_name: qwen-vl-plus
 vl_fallback_model_name: qwen-vl-max
 ```

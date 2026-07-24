@@ -14,7 +14,7 @@
 - TXT、Markdown、PDF 加载，以及 Markdown 标题感知切分；
 - 深度去噪、精确去重、SimHash 近重复去重；
 - 父子切片：子切片检索，父段作为 RAG 上下文；
-- 本地规则摘要与主题标签；
+- 本地规则主题标签；
 - Dense Qdrant 检索与离线 BM25 工件的混合检索；
 - 写入数量校验、构建进度、失败清理和发布清单。
 
@@ -28,7 +28,7 @@ data/（TXT / MD / PDF）
   ├─ 文件 SHA256、加载、基础规范化、FAQ 拆分
   ├─ Markdown 标题切分 / 大窗口父段切分
   ├─ 深度去噪、子切片、内容去重
-  ├─ 本地摘要与标签增强
+  ├─ 本地标签增强
   ├─ DashScope 批量 embedding
   └─ 写入 Qdrant revision 集合并校验数量
        │
@@ -49,7 +49,7 @@ data/（TXT / MD / PDF）
 | 位置 | 职责 |
 |---|---|
 | `app/services/knowledge_indexer.py` | 离线构建入口、revision 发布、构建校验 |
-| `app/services/knowledge_enrichment.py` | 深度清洗、内容去重、摘要、标签 |
+| `app/services/knowledge_enrichment.py` | 深度清洗、内容去重、标签规则 |
 | `app/services/vector_repository.py` | Qdrant 集合、别名、向量写入与检索适配 |
 | `app/services/vector_store.py` | 在线 dense 查询服务 |
 | `app/services/bm25_retriever.py` | 离线 BM25 工件加载与查询 |
@@ -70,7 +70,7 @@ data/（TXT / MD / PDF）
 
 构建器递归扫描 `data/`，目前允许 `.txt`、`.md`、`.pdf`。每个来源文件先计算 SHA256，再加载并做基础空白规范化；识别为 FAQ 的文本会拆成独立问答文档。
 
-revision 由以下内容计算：来源文件 SHA256、切片参数、父段参数、去重阈值、摘要/标签参数、embedding 模型名称与索引 schema 版本。任一项变化都会生成新的 `rag_<revision 前 12 位>` 集合。
+revision 由以下内容计算：来源文件 SHA256、切片参数、父段参数、去重阈值、标签参数、embedding 模型名称与索引 schema 版本。任一项变化都会生成新的 `rag_<revision 前 12 位>` 集合。
 
 这保证“同一份来源 + 同一套配置”产生可预期的版本，而不是覆盖旧集合。
 
@@ -105,14 +105,11 @@ Markdown 先按 `#`、`##` 切出章节；没有章节标题的文档前言不�
 
 这是一条保守规则，不等价于“语义完全相同”。短文本或大幅同义改写仍需要评测集来观察误判与漏判。
 
-### 4.4 摘要与标签
+### 4.4 标签元数据
 
-每个子切片在离线阶段生成：
+每个子切片在离线阶段根据标题和正文中的关键词生成 `tags`，包括动作、营养、防护、上肢、下肢、核心等标签，最多 4 个。
 
-- `summary`：移除 Markdown 标题后截取前 160 字符；
-- `tags`：根据标题和正文中的关键词打上动作、营养、防护、上肢、下肢、核心等标签，最多 4 个。
-
-此实现不调用 LLM，因此构建不会因摘要/标签增加外部 API 成本。标签目前用于展示、排障和后续 payload 过滤；它们尚未进入检索打分，也不是医学或运动学分类标准。
+此实现不调用 LLM，因此构建不会因标签增加外部 API 成本。在线检索会用同一套规则识别查询标签，并以小幅分数加成提升同标签候选；它不是强制过滤，也不是医学或运动学分类标准。没有消费者的 `summary` 字段不再生成或写入索引。
 
 ### 4.5 写入、校验与发布
 
@@ -139,7 +136,6 @@ Qdrant point 的向量来自子切片 `text`。payload 的核心字段如下：
 | `index_revision` | 本次索引 revision |
 | `parent_id` | 父段稳定 UUID |
 | `parent_text` | 命中后返回给 RAG 的完整父段 |
-| `summary` | 本地生成的短摘要 |
 | `tags` | 逗号分隔的主题标签 |
 | `文档标题` / `章节标题` | Markdown 结构元数据（存在时） |
 
@@ -172,7 +168,6 @@ chunk_overlap: 80
 parent_chunk_size: 1200
 parent_chunk_overlap: 160
 near_duplicate_hamming_distance: 3
-summary_max_chars: 160
 max_tags: 4
 batch_size: 32
 ```

@@ -112,3 +112,59 @@ def test_indexer_cleans_unpublished_collection_when_batch_embedding_fails(monkey
 
     assert repository.created == ["rag_aaaaaaaaaaaa"]
     assert repository.deleted == ["rag_aaaaaaaaaaaa"]
+
+
+def test_preflight_blocks_dataset_that_does_not_meet_chunk_gate():
+    indexer = object.__new__(KnowledgeIndexer)
+    indexer.config = {"min_source_count": 1, "min_chunk_count": 2}
+    indexer._last_build_stats = {"indexed_chunks": 1}
+    indexer._load_source_documents = lambda: (
+        [("动作.md", [Document(page_content="## 深蹲\n保持脊柱中立。")])],
+        {"动作.md": "source-sha"},
+    )
+    indexer._build_chunks = lambda _documents, _checksums: [
+        IndexedChunk("chunk-1", "保持脊柱中立。", {"source_id": "动作.md"})
+    ]
+
+    with pytest.raises(RuntimeError, match="有效切片数不足"):
+        indexer.preflight()
+
+
+def test_preflight_mode_does_not_initialize_qdrant_client(monkeypatch):
+    def fail_if_created(*_args, **_kwargs):
+        raise AssertionError("预检不应创建 Qdrant 客户端")
+
+    monkeypatch.setattr(knowledge_indexer, "QdrantVectorRepository", fail_if_created)
+
+    indexer = KnowledgeIndexer(initialize_repository=False)
+
+    assert indexer.repository is None
+
+
+def test_preflight_report_contains_source_level_counts_and_warnings():
+    indexer = object.__new__(KnowledgeIndexer)
+    indexer.config = {"min_source_count": 1, "min_chunk_count": 1}
+    indexer._last_build_stats = {
+        "indexed_chunks": 1,
+        "dropped_empty_chunks": 0,
+        "exact_duplicate_chunks": 0,
+        "near_duplicate_chunks": 1,
+    }
+    indexer._load_source_documents = lambda: (
+        [
+            ("动作.md", [Document(page_content="## 深蹲")]),
+            ("重复.md", [Document(page_content="## 重复")]),
+        ],
+        {"动作.md": "action-sha", "重复.md": "duplicate-sha"},
+    )
+    indexer._build_chunks = lambda _documents, _checksums: [
+        IndexedChunk("chunk-1", "保持脊柱中立。", {"source_id": "动作.md"})
+    ]
+    indexer._build_revision = lambda _checksums: "a" * 64
+
+    report = indexer.preflight().report()
+
+    assert report["status"] == "passed_with_warnings"
+    assert report["sources"]["动作.md"]["chunk_count"] == 1
+    assert report["sources"]["重复.md"]["chunk_count"] == 0
+    assert "重复.md" in report["warnings"][0]

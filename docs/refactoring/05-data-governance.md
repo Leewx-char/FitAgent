@@ -1,558 +1,90 @@
-# 05 - 数据治理与数据库重构方案
+# 05 - 数据治理与运行边界
 
-> **状态**: 待实施  
-> **优先级**: P1（影响数据一致性和长期维护）  
-> **预计工时**: 3-4 天
+> **状态**：为面试 Demo 保留可追溯、可重建、可验证的最小数据治理；重型运维能力按明确条件演进。
 
----
+## 1. 当前数据边界
 
-## 一、数据架构现状诊断
+| 数据 | 权威来源与写入方 | 在线读取方 | 当前保障 |
+|---|---|---|---|
+| 账户、画像、会话、消息 | MySQL；各自 API 路由 | API、Agent 工具 | SQLAlchemy 模型、Pydantic API Schema、Alembic 迁移、请求/工具统一事务边界。|
+| 高驰运动数据 | `fitness` 同步路由 | `get_fitness_summary` | 用户、日期和数据类型的幂等写入；近 4 周聚合测试。|
+| 中文健身知识源 | `data/` 下经审核的 Markdown / TXT / PDF | 离线索引器 | 来源文件 SHA256、来源元数据、标题感知切分、内容去重。|
+| Qdrant 向量索引 | `knowledge_indexer` 显式构建 | `RagSummarizeService` | revision collection + `rag_active` alias；发布前校验，在线只读。|
+| BM25 工件 | 与同一 revision 一同离线生成 | `RagSummarizeService` | 启动预加载；工件缺失时降级为 Dense 检索。|
+| 上传的健康文档 | 上传接口临时处理 | 文档解析服务 | MIME 校验、用户确认后才写入画像。|
 
-### 1.1 数据全景
+> Agent 执行轨迹由聊天 SSE 收尾时的独立事务写入，在线通过会话轨迹只读接口查询。轨迹只保留请求 ID、模式、状态、耗时、工具名与参数类型；不保存问题、参数值、回复原文或异常原文。
 
-| 数据类型 | 存储位置 | 格式 | 写入方 | 读取方 | 质量保证 |
-|---------|---------|------|--------|--------|---------|
-| 用户账户 | MySQL `users` | 结构化列 | `auth.py` | `auth.py`, `agent_tools.py` | 唯一索引 |
-| 用户画像 | MySQL `user_profiles` | 混合（列 + JSON TEXT） | `profile.py` | `agent_tools.py`, `chat.py` | 无 |
-| 会话消息 | MySQL `sessions` + `messages` | 结构化列 | `chat.py` | `chat.py` | 外键级联 |
-| 运动数据 | MySQL `fitness_data` | 混合（列 + JSON TEXT） | `fitness.py` | `agent_tools.py` | 唯一索引 |
-| 知识库 | `data/*.txt` 文件 | 纯文本 | 人工 | `vector_store.py`, `rag_service.py` | MD5 manifest |
-| 向量索引 | ChromaDB `chroma.sqlite3` | 向量 + 元数据 | `vector_store.py` | `rag_service.py` | HNSW 自检 |
-| BM25 索引 | 内存（重启丢失） | Python 对象 | `bm25_retriever.py` | `rag_service.py` | 无 |
-| 上传文件 | `storage/uploads/` | 图片/PDF | `upload.py` | `doc_parser.py` | MIME 校验 |
-| 日志 | `logs/*.log` | 文本 | `logger_handler.py` | 运维人员 | 按天轮转 |
-| 审计日志 | `logs/audit_*.log` | JSON 行 | `audit.py` | 安全审计 | 无 |
+## 2. 当前已完成的治理能力
 
-### 1.2 问题清单
+### 2.1 可重建的知识索引
 
-| 问题 | 位置 | 严重程度 | 说明 |
-|------|------|---------|------|
-| **数据契约缺失** | 全局 | 高 | `fitness_data.data` 存 JSON 字符串，无 schema 约束，写入方和读取方靠口头约定 |
-| **JSON 字段过度使用** | `models.py:44-46,82` | 中 | `injuries`, `diet_restrict`, `preferences`, `health_data`, `data` 都是 TEXT 列存 JSON |
-| **数据一致性无保障** | `fitness.py` | 高 | 运动数据同步时无幂等保证，重复同步可能产生脏数据 |
-| **数据清理缺失** | 全局 | 中 | 上传临时文件、过期会话、旧日志无自动清理 |
-| **后续数据迁移策略待完善** | 全局 | 低 | 01 已引入 Alembic；JSON 类型变更、回填和迁移演练仍待治理 |
-| **测试数据管理** | `app/tests/conftest.py` | 低 | 测试数据库依赖真实 MySQL 连接，非隔离 |
-| **向量库版本追溯** | `vector_store.py` | 中 | 知识库更新后无法回滚到上一个版本 |
-| **Coros 子进程管理** | `coros_client.py` | 中 | 子进程异常退出或僵尸进程无自动恢复机制 |
-| **模型与 Schema 分离** | `models.py` + `schemas.py` | 低 | 两个文件分别定义同一实体的不同表示，部分字段未对齐 |
+索引不是运行时副作用。知识文件变更后执行：
 
----
-
-## 二、分步骤重构方案
-
-### 步骤 1：数据契约定义
-
-**目标**：每个 active dataset 都有明确的写入方、读取方、格式约束和质量检查。
-
-**方案**：创建 `app/core/data_contracts.py`：
-
-```python
-# app/core/data_contracts.py (新文件)
-
-"""
-数据契约：定义每个数据集的 schema、写入方、读取方和质量检查规则。
-
-遵循 AGENTS.md 数据门禁要求：
-- 每个 active dataset 有 contract + writer + collect
-- resource_id 与 registry 一致
-- 质量检查覆盖空写、重复写、时间边界、幂等
-"""
-
-from datetime import date, datetime
-from typing import Any
-from pydantic import BaseModel, Field
-
-# ==================== fitness_data 数据契约 ====================
-
-class DailyMetricsItem(BaseModel):
-    """日指标数据契约（对应 coros get_daily_metrics 返回的单条记录）"""
-    date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
-    rhr: int | None = Field(None, ge=30, le=200)   # 静息心率 30-200
-    avg_sleep_hrv: int | None = Field(None, ge=0, le=200)
-    training_load: float | None = Field(None, ge=0)
-    training_load_ratio: float | None = Field(None, ge=0, le=5.0)
-    tired_rate: float | None = Field(None, ge=0, le=100)
-    vo2max: float | None = Field(None, ge=20, le=80)
-
-class SleepItem(BaseModel):
-    """睡眠数据契约"""
-    date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
-    total_duration_minutes: int = Field(..., ge=60, le=1440)
-    phases: dict = Field(default_factory=dict)
-
-class ActivityItem(BaseModel):
-    """运动记录契约"""
-    name: str = ""
-    sport_name: str = ""
-    duration_seconds: int = Field(0, ge=0, le=86400)
-    start_time: str = ""
-
-# ==================== 数据集注册表 ====================
-
-DATA_REGISTRY = {
-    "user_profiles": {
-        "resource_id": "mysql://zhitong/user_profiles",
-        "writer": "app.api.routers.profile",
-        "reader": ["app.services.agent_tools.get_user_profile"],
-        "contract": "ProfileCreate",
-        "quality_checks": {
-            "no_empty_age": lambda r: r.age is not None and r.age > 0,
-            "no_empty_weight": lambda r: r.weight is not None and r.weight > 0,
-            "valid_goal": lambda r: r.goal in ("减脂", "增肌", "塑形", "耐力提升", "健康维护", ""),
-        },
-    },
-    "fitness_daily_metrics": {
-        "resource_id": "mysql://zhitong/fitness_data?type=daily_metrics",
-        "writer": "app.api.routers.fitness.sync_from_coros",
-        "reader": ["app.services.agent_tools.get_fitness_summary"],
-        "contract": "DailyMetricsItem",
-        "quality_checks": {
-            "no_empty_data": lambda r: r.rhr is not None or r.training_load is not None,
-            "date_in_range": lambda r: date.fromisoformat(r.date) >= date.today().replace(year=date.today().year - 1),
-        },
-    },
-    "knowledge_base": {
-        "resource_id": "chromadb://chroma_db/agent",
-        "writer": "app.services.vector_store.load_document",
-        "reader": ["app.services.rag_service.retriever_docs"],
-        "contract": "KnowledgeChunk",
-        "quality_checks": {
-            "min_chunk_size": lambda c: len(c["content"]) >= 20,
-            "has_source": lambda c: bool(c.get("metadata", {}).get("source")),
-        },
-    },
-}
+```powershell
+docker compose up -d qdrant
+.\.venv\Scripts\python.exe -m app.services.knowledge_indexer
 ```
 
-### 步骤 2：混合存储策略优化
+索引器将文件版本、切分与去重配置共同计算为 revision，生成新的 collection；写入和校验通过后才切换 `rag_active`。旧 collection 没有被在线服务覆盖，因此问题可回溯到当时的知识版本。
 
-**当前问题**：`injuries`, `diet_restrict`, `preferences`, `health_data` 都存为 JSON TEXT 列，无法利用数据库的查询能力。
+在调用 embedding 前，可先运行不访问 Qdrant 的数据预检：
 
-**方案**：保持当前的混合存储策略（动机正确：这些字段结构多变，不适宜用固定列），但增加以下改进：
-
-**2.1 JSON 列使用 MySQL 原生的 JSON 类型（MySQL 5.7.8+）**
-
-```python
-# app/models.py 修改
-
-from sqlalchemy import JSON  # SQLAlchemy 2.0+ 原生支持
-
-class UserProfile(Base):
-    # 将 Text 改为 JSON 类型
-    injuries = Column(JSON, default=list)        # 原：Text, default="[]"
-    diet_restrict = Column(JSON, default=list)   # 原：Text, default="[]"
-    preferences = Column(JSON, default=dict)      # 原：Text, default="{}"
-    health_data = Column(JSON, default=dict)      # 原：Text, default="{}"
-
-class FitnessData(Base):
-    data = Column(JSON, default=dict)             # 原：Text, default="{}"
+```powershell
+.\.venv\Scripts\python.exe -m app.services.knowledge_preflight
 ```
 
-优点：
-- SQLAlchemy 自动 JSON 序列化/反序列化，无需手动 `json.loads` / `json.dumps`
-- 可以利用 MySQL 的 JSON 查询函数（`JSON_EXTRACT`, `JSON_CONTAINS`）
-- `schemas.py` 中的 `@field_validator` 可以简化
+预检复用正式索引器的读取、清洗、去重和切片逻辑，检查最小来源数、最小切片数、`chunk_id` 唯一性和切片来源引用；报告写入 Git 忽略的 `storage/rag/index_preflight_report.json`。正式构建也会执行同一门禁，并把来源级文档数、切片数、清洗统计和告警写入 index manifest。它不调用 embedding、不会创建 collection 或切换 alias。
 
-**2.2 同步简化 schemas.py 中的 JSON 解析**
+### 2.2 数据库变更入口
 
-```python
-# app/schemas.py 简化（如果 models 使用 JSON 类型）
+关系型模型的变更通过 Alembic 迁移，而不是由路由启动时自动改表：
 
-# 不再需要这些 validator（SQLAlchemy JSON 类型已自动处理）
-# @field_validator("injuries", "diet_restrict", mode="before")
-# @classmethod
-# def parse_json_list(cls, v): ...
-```
-
-### 步骤 3：数据幂等写入保障
-
-**当前问题**：运动数据同步时使用 `INSERT ... ON DUPLICATE KEY UPDATE`（依赖唯一索引），但没有数据版本号，无法判断是否需要更新。
-
-**方案**：
-
-```python
-# app/api/routers/fitness.py 修改
-
-def _upsert_fitness_data(db, user_id, date_val, data_type, data_dict):
-    """幂等写入：已存在且数据相同则跳过"""
-    existing = (
-        db.query(FitnessData)
-        .filter(
-            FitnessData.user_id == user_id,
-            FitnessData.date == date_val,
-            FitnessData.data_type == data_type,
-        )
-        .with_for_update()  # 行锁，防止并发覆盖
-        .first()
-    )
-    
-    if existing:
-        # 比对数据是否变更
-        existing_data = existing.data if isinstance(existing.data, dict) else json.loads(existing.data)
-        if existing_data == data_dict:
-            logger.debug(f"数据未变更，跳过：user={user_id} date={date_val} type={data_type}")
-            return existing, False  # False 表示未更新
-        
-        # 数据有变更，更新
-        existing.data = data_dict
-        db.flush()
-        logger.info(f"数据已更新：user={user_id} date={date_val} type={data_type}")
-        return existing, True
-    else:
-        # 新数据，插入
-        record = FitnessData(
-            user_id=user_id, date=date_val,
-            data_type=data_type, data=data_dict,
-        )
-        db.add(record)
-        db.flush()
-        logger.info(f"数据已插入：user={user_id} date={date_val} type={data_type}")
-        return record, True
-```
-
-### 步骤 4：数据清理策略
-
-**方案**：添加定时清理任务（在 lifespan 中注册）：
-
-```python
-# app/core/maintenance.py (新文件)
-
-import os
-import time
-from datetime import datetime, timedelta
-from app.core.database import SessionLocal
-from app.models import Session
-from app.utils.logger_handler import logger
-
-def cleanup_expired_sessions(days: int = 30):
-    """清理超过 N 天未活动的会话"""
-    cutoff = datetime.now() - timedelta(days=days)
-    db = SessionLocal()
-    try:
-        deleted = (
-            db.query(Session)
-            .filter(Session.updated_at < cutoff)
-            .delete()
-        )
-        db.commit()
-        if deleted:
-            logger.info(f"清理过期会话：{deleted} 条（截止 {cutoff.isoformat()}）")
-    except Exception as e:
-        db.rollback()
-        logger.error(f"清理过期会话失败：{str(e)}")
-    finally:
-        db.close()
-
-def cleanup_upload_temp_files(hours: int = 24):
-    """清理超过 N 小时的临时上传文件"""
-    upload_dir = "storage/uploads"
-    if not os.path.exists(upload_dir):
-        return
-    
-    cutoff = time.time() - hours * 3600
-    cleaned = 0
-    for filename in os.listdir(upload_dir):
-        filepath = os.path.join(upload_dir, filename)
-        if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff:
-            try:
-                os.remove(filepath)
-                cleaned += 1
-            except OSError:
-                pass
-    
-    if cleaned:
-        logger.info(f"清理临时上传文件：{cleaned} 个")
-
-def cleanup_old_logs(days: int = 30):
-    """清理超过 N 天的日志文件"""
-    log_dir = "logs"
-    if not os.path.exists(log_dir):
-        return
-    
-    cutoff = time.time() - days * 3600
-    cleaned = 0
-    for filename in os.listdir(log_dir):
-        if filename.endswith(".log"):
-            filepath = os.path.join(log_dir, filename)
-            if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff:
-                try:
-                    os.remove(filepath)
-                    cleaned += 1
-                except OSError:
-                    pass
-    
-    if cleaned:
-        logger.info(f"清理旧日志文件：{cleaned} 个")
-
-def run_maintenance():
-    """执行所有维护任务"""
-    logger.info("开始执行定期维护任务...")
-    cleanup_expired_sessions(days=30)
-    cleanup_upload_temp_files(hours=24)
-    cleanup_old_logs(days=30)
-    logger.info("定期维护任务完成")
-```
-
-在 `main.py` 的 lifespan 中注册：
-
-```python
-import asyncio
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # ... 现有启动逻辑 ...
-    
-    # 启动维护任务调度器
-    import threading
-    def maintenance_loop():
-        while True:
-            time.sleep(3600)  # 每小时执行一次
-            try:
-                run_maintenance()
-            except Exception:
-                logger.error("维护任务异常", exc_info=True)
-    
-    maintenance_thread = threading.Thread(target=maintenance_loop, daemon=True)
-    maintenance_thread.start()
-    
-    yield
-```
-
-### 步骤 5：数据库迁移完善
-
-> Alembic 基础设施与空开发数据库初始迁移已前置到 01。此阶段只负责后续数据类型变更、回填和迁移演练。
-
-**现状**：`alembic/`、`alembic.ini` 与空开发数据库的初始迁移已在 01 完成。应用启动不再调用
-`Base.metadata.create_all()`；首次建表统一执行 `alembic upgrade head`。
-
-**本阶段方案**：针对 JSON 类型替换、数据回填或其他已部署表的变更，先在可还原的
-开发数据库演练升级与降级，再提交一个独立迁移：
-
-```bash
-alembic revision --autogenerate -m "add_column_to_user_profiles"
+```powershell
+alembic revision --autogenerate -m "describe_change"
 alembic upgrade head
 ```
 
-迁移必须包含数据兼容策略、回滚评估与备份方案；不要在 05 再次初始化 Alembic 或重建
-01 的初始 schema。
+新增或修改 API 字段时，必须同步检查 ORM 模型、Pydantic schema、迁移和相关测试；前端不直接依赖数据库字段结构。
 
-### 步骤 6：Coros 子进程管理器
+Agent 轨迹对应迁移 `20260724_02_agent_traces`。部署新版本后执行 `alembic upgrade head`；它只创建 `agent_runs` 与 `agent_tool_calls` 两张表，不影响 Qdrant revision，也不需要重建索引。
 
-**当前问题**：子进程崩溃后无自动恢复，调用方直接抛异常。
+### 2.3 运行检查
 
-**方案**：
+- `GET /api/health/rag` 验证当前 `rag_active` revision 可读；
+- Qdrant 容器通过 `docker compose ps qdrant` 查看健康状态；
+- `RAG_RETRIEVAL` 日志记录本次检索使用的 revision、候选数与耗时；
+- 在线接口不触发知识库导入、向量重建或 BM25 全量构建。
 
-```python
-# app/services/coros_client.py 修改
+### 2.4 可重复的检索基线
 
-import time
+仓库内已有 24 条覆盖动作、营养、防护、训练计划和基础知识的中文检索用例：
+`app/evaluation/retrieval_cases.json`。评测不调用回答模型，只验证 Top-6 中是否召回预期来源和关键证据，因此同一 revision 的结果可以比较。
 
-class CorosClient:
-    _MAX_RETRIES = 3
-    _RETRY_DELAY = 2.0
-    
-    def _ensure_process_alive(self):
-        """检查子进程存活，崩溃则重启"""
-        if self.proc.poll() is not None:
-            logger.warning(f"coros-mcp 子进程已退出(rc={self.proc.returncode})，尝试重启...")
-            self._restart_process()
-    
-    def _restart_process(self):
-        """重启子进程"""
-        if self.proc:
-            try:
-                self.proc.terminate()
-                self.proc.wait(timeout=5)
-            except Exception:
-                try:
-                    self.proc.kill()
-                except Exception:
-                    pass
-        
-        for attempt in range(self._MAX_RETRIES):
-            try:
-                env = os.environ.copy()
-                env.setdefault("COROS_EMAIL", os.getenv("COROS_EMAIL", ""))
-                env.setdefault("COROS_PASSWORD", os.getenv("COROS_PASSWORD", ""))
-                
-                self.proc = subprocess.Popen(
-                    ["coros-mcp", "serve"],
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE, text=True, env=env,
-                )
-                self._req_id = 0
-                self._initialize()
-                logger.info("coros-mcp 子进程重启成功")
-                return
-            except Exception as e:
-                logger.error(f"coros-mcp 重启失败（第{attempt+1}次）：{str(e)}")
-                time.sleep(self._RETRY_DELAY)
-        
-        raise RuntimeError(f"coros-mcp 子进程重启失败，已尝试 {self._MAX_RETRIES} 次")
-    
-    def _send(self, method: str, params: dict | None = None) -> dict:
-        self._ensure_process_alive()  # ← 新增：发送前检查存活
-        # ... 原有逻辑 ...
+```powershell
+.\.venv\Scripts\python.exe -m app.evaluation.retrieval_evaluator
 ```
 
-### 步骤 7：测试数据隔离
+报告写入被 Git 忽略的 `storage/rag/retrieval_evaluation_report.json`，包含 `Recall@6`、Top-1 来源正确率、证据支持率、每条用例的命中 evidence ID，以及本次在线排序配置快照。运行需要 Qdrant 与 DashScope embedding 服务可访问。
 
-**当前问题**：测试依赖真实 MySQL 连接，测试数据可能污染开发数据。
+## 3. 不把“治理”误做成无效复杂度
 
-**方案**：
+以下能力适合生产系统，但当前 Demo 没有触发条件，故不提前实现：
 
-**7.1 使用 SQLite 内存数据库做测试**
+| 能力 | 为什么现在不做 | 何时必须做 |
+|---|---|---|
+| 将所有 JSON TEXT 拆成多张表 | 当前动态字段没有稳定的跨用户查询需求，过早拆表会让 schema 和页面更复杂。 | 出现高频筛选、统计或强约束查询，且字段已稳定。|
+| 定时清理任务 | 需要明确保留期、审计要求和失败告警；“自动删除”不可逆。 | 有可量化的文件/日志增长和经确认的保留策略。|
+| Qdrant 快照与跨主机恢复演练 | 单机 Demo 的源 Markdown 和显式索引命令已可重建。 | 数据不能从源重建、多个环境或有 RPO/RTO 要求。|
+| Docker 化 MySQL、测试容器矩阵 | 会提高本地启动与 CI 成本。 | 团队协作、CI 不稳定或需要可重复的集成环境。|
+| Coros 守护进程 / 自动重试编排 | 当前连接器是受控的按需外部依赖。 | 外部同步成为核心链路且失败率、队列积压可观测。|
 
-在 `app/tests/conftest.py` 中：
+## 4. 后续演进顺序
 
-```python
-import pytest
-from sqlalchemy import create_engine
-from app.core.database import Base, get_db
+1. 使用当前 24 条中文检索评测集形成 revision 基线，用 Recall@6、来源正确率和证据覆盖率判断问题；
+2. 对知识源变更先运行预检，再构建并比较检索基线；预检失败不发起昂贵的向量化；
+3. 若数据模型的真实查询需求稳定，再为相关 JSON 字段设计迁移和回填；
+4. 若部署到非本机环境，再补备份、恢复演练、监控告警与保留策略；
+5. 每项演进都附带触发证据、回滚方案和自动化验证。
 
-TEST_DATABASE_URL = "sqlite:///./test.db"
-
-@pytest.fixture(scope="function")
-def db_session():
-    """每个测试函数使用独立的 SQLite 内存数据库"""
-    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(bind=engine)
-    
-    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    db = TestingSessionLocal()
-    try:
-        yield db
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-```
-
-但需要注意：MySQL 特有功能（`CHAR`, `JSON`）在 SQLite 中行为不同，需要针对性适配或使用 Docker 起临时 MySQL。
-
-**7.2 推荐方案：docker compose 起测试 MySQL**
-
-```yaml
-# docker-compose.test.yml
-services:
-  mysql-test:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: test
-      MYSQL_DATABASE: zhitong_test
-    ports:
-      - "3307:3306"
-```
-
-### 步骤 8：向量库版本管理
-
-**当前问题**：知识库更新后无法回滚。
-
-**方案**：
-
-```python
-# app/services/vector_store.py 新增
-
-import shutil
-
-VERSION_BACKUP_DIR = "chroma_db/backups"
-MAX_BACKUP_VERSIONS = 3
-
-def create_backup(self):
-    """为当前向量库创建快照"""
-    version = self._get_current_version()
-    backup_path = os.path.join(
-        self.persist_directory, "backups", f"v{version}"
-    )
-    os.makedirs(backup_path, exist_ok=True)
-    
-    # 复制 ChromaDB 数据文件
-    for item in os.listdir(self.persist_directory):
-        src = os.path.join(self.persist_directory, item)
-        dst = os.path.join(backup_path, item)
-        if os.path.isfile(src):
-            shutil.copy2(src, dst)
-        elif os.path.isdir(src) and item != "backups":
-            if os.path.exists(dst):
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
-    
-    # 轮转：保留最近 MAX_BACKUP_VERSIONS 个版本
-    backups = sorted(
-        [d for d in os.listdir(os.path.join(self.persist_directory, "backups"))
-         if d.startswith("v")],
-        key=lambda x: int(x[1:]),
-    )
-    while len(backups) > MAX_BACKUP_VERSIONS:
-        oldest = os.path.join(self.persist_directory, "backups", backups.pop(0))
-        shutil.rmtree(oldest)
-    
-    logger.info(f"向量库快照已创建：v{version}")
-
-def restore_from_backup(self, version: int):
-    """从指定版本恢复向量库"""
-    backup_path = os.path.join(
-        self.persist_directory, "backups", f"v{version}"
-    )
-    if not os.path.exists(backup_path):
-        raise ValueError(f"快照 v{version} 不存在")
-    
-    # 清空当前向量库
-    self.reset_store()
-    
-    # 恢复快照文件
-    for item in os.listdir(backup_path):
-        src = os.path.join(backup_path, item)
-        dst = os.path.join(self.persist_directory, item)
-        if os.path.isfile(src):
-            shutil.copy2(src, dst)
-        elif os.path.isdir(src):
-            if os.path.exists(dst):
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
-    
-    # 重新初始化 Chroma 连接
-    self.vector_store = self.create_chroma()
-    logger.info(f"向量库已从 v{version} 恢复")
-```
-
-在 `load_document` 执行前自动创建备份：
-
-```python
-def load_document(self):
-    self.create_backup()  # ← 新增：更新知识库前自动备份
-    # ... 原有加载逻辑 ...
-```
-
----
-
-## 三、实施检查清单
-
-- [ ] 1. 创建 `app/core/data_contracts.py`（数据集注册表 + 质量检查规则）
-- [ ] 2. `models.py` JSON TEXT 列改为 SQLAlchemy JSON 类型
-- [ ] 3. `schemas.py` 移除冗余的 JSON 解析 validator
-- [ ] 4. `fitness.py` 添加幂等写入函数
-- [ ] 5. 创建 `app/core/maintenance.py`（自动清理任务）
-- [ ] 6. `main.py` lifespan 注册维护调度器
-- [x] 7. Alembic 基础设施与初始迁移（已在 01 完成）
-- [ ] 8. `coros_client.py` 添加子进程自动恢复
-- [ ] 9. `vector_store.py` 添加备份/恢复功能
-- [ ] 10. `vector_store.py` `load_document` 前自动备份
-- [ ] 11. 测试数据隔离方案实施
-- [ ] 12. `.gitignore` 确认 `alembic/versions/` 不排除迁移文件
-
----
-
-## 四、验收标准
-
-1. `data_contracts.py` 覆盖所有 5 个 active dataset
-2. MySQL JSON 类型替代 TEXT 后，`schemas.py` 无需手动 `json.loads`
-3. 运动数据重复同步不产生脏数据（幂等验证）
-4. 上传文件在 24 小时后自动清理
-5. `alembic upgrade head` 可正确建表
-6. coros-mcp 子进程异常退出后自动重启（3 次重试）
-7. 知识库更新前自动创建快照，可回滚到上一个版本
-8. `docker-compose.yml` 可一键启动 MySQL + 应用
+这条路径能在面试中清楚展示：项目并非忽略生产问题，而是以数据规模、风险和可测量信号决定何时增加复杂度。

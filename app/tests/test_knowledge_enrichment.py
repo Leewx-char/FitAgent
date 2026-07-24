@@ -24,13 +24,13 @@ def test_content_deduplicator_removes_exact_content_duplicates():
     assert deduplicator.exact_duplicates == 1
 
 
-def test_metadata_enricher_creates_local_summary_and_tags():
-    enriched = MetadataEnricher(summary_max_chars=20).enrich(
-        "深蹲训练前应热身；膝部疼痛时停止训练。", title="下肢动作防护"
-    )
+def test_metadata_enricher_creates_reusable_tags_without_unused_summary():
+    enricher = MetadataEnricher()
+    enriched = enricher.enrich("深蹲训练前应热身；膝部疼痛时停止训练。", title="下肢动作防护")
 
-    assert enriched.summary.startswith("深蹲训练前")
-    assert {"动作", "防护", "下肢"}.issubset(set(enriched.tags.split(",")))
+    assert {"动作", "防护", "下肢"}.issubset(set(enriched.tags))
+    assert enricher.extract_tags("膝部疼痛") == ("防护", "下肢")
+    assert not hasattr(enriched, "summary")
 
 
 def test_indexer_keeps_child_retrieval_text_and_parent_context():
@@ -68,5 +68,4 @@ def test_indexer_keeps_child_retrieval_text_and_parent_context():
     assert len(chunks) >= 2
     assert len({chunk.metadata["parent_id"] for chunk in chunks}) == 1
     assert all("膝部疼痛" in chunk.metadata["parent_text"] for chunk in chunks)
-    assert all(chunk.metadata["summary"] for chunk in chunks)
     assert any("防护" in chunk.metadata["tags"] for chunk in chunks)

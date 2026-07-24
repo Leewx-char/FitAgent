@@ -1,3 +1,6 @@
+import json
+
+
 class TestChat:
     def test_chat_creates_session(self, auth_client, agent_mock):
         """无 session_id → 自动创建会话，响应头返回 X-Session-Id"""
@@ -18,6 +21,38 @@ class TestChat:
             # 中间应有 text 类型事件
             text_events = [e for e in events if e != "[DONE]" and '"type": "text"' in e]
             assert text_events
+
+    def test_chat_forwards_rag_evidence_cards(self, auth_client, agent_mock):
+        """RAG 证据事件必须穿过聊天路由，前端才能渲染来源卡片。"""
+        agent_mock.execute_stream.return_value = iter(
+            [
+                '{"type": "tool", "name": "检索知识库"}',
+                (
+                    '{"type": "evidence", "items": [{"rank": 1, '
+                    '"evidence_id": "动作指南.md#squat", "source_id": "动作指南.md", '
+                    '"snippet": "膝盖与脚尖方向一致。", "tags": "动作"}]}'
+                ),
+                '{"type": "text", "content": "膝盖跟随脚尖。[证据:1]"}',
+            ]
+        )
+
+        with auth_client.stream("POST", "/api/chat", json={"message": "深蹲怎么做？"}) as response:
+            events = [
+                json.loads(line[6:])
+                for line in response.iter_lines()
+                if line.startswith("data: ") and line[6:] != "[DONE]"
+            ]
+
+        evidence = next(event for event in events if event["type"] == "evidence")
+        assert evidence["items"] == [
+            {
+                "rank": 1,
+                "evidence_id": "动作指南.md#squat",
+                "source_id": "动作指南.md",
+                "snippet": "膝盖与脚尖方向一致。",
+                "tags": "动作",
+            }
+        ]
 
     def test_chat_invalid_session(self, auth_client, agent_mock):
         """传不存在的 session_id → 返回统一的 404 JSON 错误。"""

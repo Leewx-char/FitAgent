@@ -11,11 +11,10 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class EnrichedText:
-    """清洗后的文本及可直接写入向量库的低成本元数据。"""
+    """清洗后的文本及可直接写入向量库的低成本、可消费元数据。"""
 
     text: str
-    summary: str
-    tags: str
+    tags: tuple[str, ...]
 
 
 class DeepTextCleaner:
@@ -103,7 +102,7 @@ class ContentDeduplicator:
 
 
 class MetadataEnricher:
-    """不调用大模型，为切片生成摘要和可过滤的主题标签。"""
+    """不调用大模型，为切片生成可用于在线排序的主题标签。"""
 
     _TAG_RULES = {
         "动作": ("深蹲", "硬拉", "卧推", "引体", "俯卧撑", "训练", "动作"),
@@ -114,22 +113,18 @@ class MetadataEnricher:
         "核心": ("核心", "腰", "脊柱", "腹"),
     }
 
-    def __init__(self, summary_max_chars: int = 160, max_tags: int = 4) -> None:
-        self.summary_max_chars = summary_max_chars
+    def __init__(self, max_tags: int = 4) -> None:
         self.max_tags = max_tags
 
-    def enrich(self, text: str, title: str = "") -> EnrichedText:
-        """从标题和正文提取可展示的简短摘要与标签。"""
-        body = re.sub(r"(?m)^#{1,6}\s+.*$", "", text).strip()
-        summary_source = re.sub(r"\s+", " ", body or text).strip()
-        summary = summary_source[: self.summary_max_chars].rstrip("，、；;：:")
-        if len(summary_source) > self.summary_max_chars:
-            summary += "…"
-
+    def extract_tags(self, text: str, title: str = "") -> tuple[str, ...]:
+        """从标题和正文提取稳定标签；同一规则也用于查询侧标签识别。"""
         target = f"{title}\n{text}".lower()
-        tags = [
+        return tuple(
             tag
             for tag, keywords in self._TAG_RULES.items()
             if any(word in target for word in keywords)
-        ]
-        return EnrichedText(text=text, summary=summary, tags=",".join(tags[: self.max_tags]))
+        )[: self.max_tags]
+
+    def enrich(self, text: str, title: str = "") -> EnrichedText:
+        """生成写入索引的文本和标签，不生成没有消费者的摘要字段。"""
+        return EnrichedText(text=text, tags=self.extract_tags(text, title))

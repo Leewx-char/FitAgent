@@ -96,6 +96,36 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
 
 
+class AgentToolCallResponse(BaseModel):
+    sequence: int
+    tool_name: str
+    argument_shape: dict[str, str]
+    status: str
+    elapsed_ms: int
+    detail: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("argument_shape", mode="before")
+    @classmethod
+    def parse_argument_shape(cls, value):
+        return json.loads(value) if isinstance(value, str) else value
+
+
+class AgentRunResponse(BaseModel):
+    id: str
+    request_id: str
+    mode: str
+    status: str
+    elapsed_ms: int
+    tool_call_count: int
+    created_at: datetime
+    tool_calls: list[AgentToolCallResponse]
+
+    model_config = {"from_attributes": True}
+
+
 # ==================== 用户画像 ====================
 class ProfileCreate(BaseModel):
     gender: str = Field(..., max_length=10)

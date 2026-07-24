@@ -1,3 +1,5 @@
+import json
+import time
 from typing import Callable
 from app.utils.prompt_loader import load_system_prompts, load_report_prompts
 from langchain.agents import AgentState
@@ -7,7 +9,67 @@ from langchain_core.messages import ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Command
 from app.services.agent_tools import _user_context
+from app.services.agent_trace import AgentTrace
+from app.core.request_context import request_id_var
 from app.utils.logger_handler import logger
+
+
+def _tool_argument_shape(tool_args: object) -> dict[str, str]:
+    """仅记录参数名和类型，避免把用户问题、城市等原始内容写入工具日志。"""
+    if not isinstance(tool_args, dict):
+        return {"_raw": type(tool_args).__name__}
+    return {str(key): type(value).__name__ for key, value in tool_args.items()}
+
+
+def _consume_tool_budget(runtime_ctx: dict) -> tuple[bool, int, int]:
+    """消耗一次请求级工具预算，防止模型陷入重复工具调用循环。"""
+    limit = int(runtime_ctx.get("tool_call_limit", 6))
+    count = int(runtime_ctx.get("tool_call_count", 0)) + 1
+    runtime_ctx["tool_call_count"] = count
+    return count <= limit, count, limit
+
+
+def _log_tool_event(
+    *,
+    tool_name: str,
+    argument_shape: dict[str, str],
+    status: str,
+    elapsed_ms: int,
+    tool_call_count: int,
+    detail: str = "",
+) -> None:
+    """输出可关联请求、但不泄露原始参数和异常文本的结构化工具审计事件。"""
+    event = {
+        "request_id": request_id_var.get(),
+        "tool": tool_name,
+        "argument_shape": argument_shape,
+        "status": status,
+        "elapsed_ms": elapsed_ms,
+        "tool_call_count": tool_call_count,
+    }
+    if detail:
+        event["detail"] = detail
+    logger.info("AGENT_TOOL_CALL %s", json.dumps(event, ensure_ascii=False))
+
+
+def _record_trace_event(
+    runtime_ctx: dict,
+    *,
+    tool_name: str,
+    argument_shape: dict[str, str],
+    status: str,
+    elapsed_ms: int,
+    detail: str = "",
+) -> None:
+    trace = runtime_ctx.get("agent_trace")
+    if isinstance(trace, AgentTrace):
+        trace.record_tool(
+            tool_name=tool_name,
+            argument_shape=argument_shape,
+            status=status,
+            elapsed_ms=elapsed_ms,
+            detail=detail,
+        )
 
 
 @wrap_tool_call
@@ -17,26 +79,99 @@ def monitor_tool(
     runtime_ctx = request.runtime.context or {}
     user_id = runtime_ctx.get("user_id")
     city = runtime_ctx.get("city", "")
-    if user_id:
-        _user_context.set({"user_id": user_id, "city": city})
+    retrieval_history = runtime_ctx.get("retrieval_history", [])
 
     tool_name = request.tool_call.get("name", "unknown_tool")
     tool_args = request.tool_call.get("args", {})
-    logger.info(f"[tool monitor]执行工具：{tool_name}")
-    logger.info(f"[tool monitor]传入参数：{tool_args}")
+    argument_shape = _tool_argument_shape(tool_args)
+    allowed, tool_call_count, tool_call_limit = _consume_tool_budget(runtime_ctx)
+    if not allowed:
+        _log_tool_event(
+            tool_name=tool_name,
+            argument_shape=argument_shape,
+            status="budget_exceeded",
+            elapsed_ms=0,
+            tool_call_count=tool_call_count,
+            detail=f"limit={tool_call_limit}",
+        )
+        _record_trace_event(
+            runtime_ctx,
+            tool_name=tool_name,
+            argument_shape=argument_shape,
+            status="budget_exceeded",
+            elapsed_ms=0,
+            detail=f"limit={tool_call_limit}",
+        )
+        return ToolMessage(
+            content=(
+                "本轮工具调用已达到上限。请不要继续调用工具，"
+                "应基于已获得的信息给出明确答复，并说明必要的不确定性。"
+            ),
+            tool_call_id=request.tool_call.get("id", tool_name),
+        )
+
+    context_token = _user_context.set(
+        {
+            "user_id": user_id,
+            "city": city,
+            "retrieval_history": retrieval_history,
+        }
+    )
+    started_at = time.perf_counter()
 
     try:
         result = handler(request)
-        logger.info(f"[tool monitor]工具{tool_name}调用成功")
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+        _log_tool_event(
+            tool_name=tool_name,
+            argument_shape=argument_shape,
+            status="success",
+            elapsed_ms=elapsed_ms,
+            tool_call_count=tool_call_count,
+        )
+        _record_trace_event(
+            runtime_ctx,
+            tool_name=tool_name,
+            argument_shape=argument_shape,
+            status="success",
+            elapsed_ms=elapsed_ms,
+        )
+        if tool_name == "rag_summarize":
+            # 工具函数在当前上下文记录真实命中的证据；将其转交给流式层，
+            # 不依赖解析 LLM 最终回答中的 [证据:N] 文本。
+            runtime_ctx["rag_evidence"] = _user_context.get().get("rag_evidence", [])
+            runtime_ctx["rag_evidence_emitted"] = False
         if tool_name == "trigger_report":
             request.runtime.context["report"] = True
         return result
-    except Exception as e:
-        logger.error(f"工具{tool_name}调用失败，原因：{str(e)}", exc_info=True)
+    except Exception:
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+        logger.exception("Agent 工具执行异常：%s", tool_name)
+        _log_tool_event(
+            tool_name=tool_name,
+            argument_shape=argument_shape,
+            status="error",
+            elapsed_ms=elapsed_ms,
+            tool_call_count=tool_call_count,
+            detail="internal_error",
+        )
+        _record_trace_event(
+            runtime_ctx,
+            tool_name=tool_name,
+            argument_shape=argument_shape,
+            status="error",
+            elapsed_ms=elapsed_ms,
+            detail="internal_error",
+        )
         return ToolMessage(
-            content=f"工具{tool_name}调用失败：{str(e)}",
+            content=(
+                f"工具“{tool_name}”暂时不可用。请不要暴露内部错误或反复重试；"
+                "可以基于已获得的信息继续回答，并建议用户稍后重试。"
+            ),
             tool_call_id=request.tool_call.get("id", tool_name),
         )
+    finally:
+        _user_context.reset(context_token)
 
 
 @before_model
@@ -47,10 +182,11 @@ def log_before_model(
     logger.info(f"[log_before_model]即将调用模型，带有{len(state['messages'])}条消息。")
 
     last_message = state["messages"][-1]
+    content = getattr(last_message, "content", "")
     logger.debug(
-        "[log_before_model]%s| %s",
+        "[log_before_model]last_message_type=%s content_length=%s",
         type(last_message).__name__,
-        last_message.content.strip(),
+        len(str(content)),
     )
 
     return None

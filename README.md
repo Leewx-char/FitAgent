@@ -1,6 +1,6 @@
-# FitAgent — 多Agent个性化运动教练
+# FitAgent — 可演进的 RAG 运动教练 Demo
 
-基于大语言模型的智能运动教练系统，结合 RAG 知识库检索、用户画像和多模态健康文档上传，提供个性化健身指导。
+基于大语言模型的运动教练 Demo：通用问题走带证据的快速 RAG，个性化问题才进入 Agent 工具编排；结合用户画像和多模态健康文档，提供可解释的健身指导。
 
 ## 环境要求
 
@@ -19,7 +19,7 @@
 | 后端框架 | FastAPI 0.136 + Uvicorn 0.47 |
 | 数据库 | MySQL 8.0 + SQLAlchemy 2.0 |
 | 认证 | JWT (python-jose) + bcrypt |
-| LLM | DashScope (deepseek-v4-pro / text-embedding-v4) |
+| LLM | DashScope (deepseek-v4-pro / text-embedding-v1) |
 | Agent | LangGraph + LangChain |
 | 向量数据库 | Qdrant（单节点 Docker，生产演进 demo） |
 | 关键词检索 | rank-bm25 (BM25) |
@@ -99,6 +99,43 @@ ruff check app
 pytest app/tests
 ```
 
+当前 Qdrant revision 的检索基线（需要 Qdrant 与 DashScope embedding 服务可访问）：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.evaluation.retrieval_evaluator
+```
+
+知识源变更后，可先运行不调用 embedding、不访问 Qdrant 的发布前数据预检：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.services.knowledge_preflight
+```
+
+预检报告位于 Git 忽略的 `storage/rag/index_preflight_report.json`；通过后再执行索引构建。
+
+该命令不调用回答模型、不修改索引，输出的评测报告位于 Git 忽略的 `storage/rag/`。
+
+## Agent 运行防护栏
+
+完整 Agent 请求使用受配置约束的递归步数与工具调用预算，避免模型陷入工具循环；工具调用以请求 ID、耗时和参数形状写入结构化日志，不记录用户原文或工具参数值。可在 `.env` 中按部署环境调整：
+
+```dotenv
+AGENT_MAX_STEPS=8
+AGENT_MAX_TOOL_CALLS=6
+```
+
+## Agent 执行轨迹
+
+每轮聊天会以独立事务写入 `agent_runs` 和 `agent_tool_calls`：记录请求 ID、执行路径（`agent` / `direct_rag`）、状态、总耗时、工具顺序、参数类型和工具耗时。为保护隐私，不保存用户问题、工具参数值或模型回复原文。
+
+升级代码后先执行数据库迁移并重启后端：
+
+```powershell
+alembic upgrade head
+```
+
+登录后可调用 `GET /api/sessions/{session_id}/agent-runs` 查看该会话最近的执行轨迹。此操作不需要重新构建知识库索引。
+
 ## 健康文档处理提示
 
 - 可选文字的 PDF 使用文本模型；扫描版 PDF 和图片先使用 Qwen-VL Plus，失败页才以更高精度交给 Max 重试。扫描 PDF 会处理全部页面，默认最多 20 页。
@@ -141,7 +178,7 @@ FitAgent/
 │       └── bootstrap.py
 ├── config/                     # YAML 配置（含 vector_store.yml）
 ├── prompts/                    # 系统提示词
-├── data/                       # 知识库（txt）
+├── data/                       # 经审核的知识源（Markdown / TXT / PDF）
 ├── frontend/                   # Vue 3 前端
 ├── docs/                       # 架构文档
 │   ├── architecture.md
@@ -167,13 +204,11 @@ FitAgent/
   └── 取 Top-6 返回
 ```
 
-更多设计决策和技术细节请查看 [docs/decisions.md](./docs/decisions.md)。
+更多设计决策和技术细节请查看 [docs/decisions.md](./docs/decisions.md)、[02 离线索引](./docs/refactoring/02-rag-offline-pipeline.md)、[03 在线检索](./docs/refactoring/03-rag-online-pipeline.md) 与 [面试演示指南](./docs/interview-demo.md)。
 
 ## Qdrant 演进 Demo
 
-演示采用单 collection、单层切片和离线构建：`data/` 中的知识文件经过
-`knowledge_indexer` 生成带 revision 的 Qdrant collection，校验完成后才切换 `rag_active`
-别名。在线 API 只读检索，绝不自动导入或重建索引。
+演示使用单节点 Qdrant 与离线构建：`data/` 中的知识文件经标题感知切分、父子关联、内容去重和 embedding 后，生成带 revision 的 collection；校验完成后才切换 `rag_active` 别名。在线 API 只读检索，绝不自动导入或重建索引。
 
 - `GET /api/health/rag`：检查当前 Qdrant collection 是否可读。
 - `python -m app.services.knowledge_indexer`：知识文件更新后显式构建并激活新 revision。

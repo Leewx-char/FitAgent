@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     dashscope_api_key: str = ""
     qdrant_url: str = ""
     qdrant_api_key: str = ""
+    agent_max_steps: int = Field(default=8, ge=2, le=32)
+    agent_max_tool_calls: int = Field(default=6, ge=1, le=16)
 
     @property
     def database_url(self) -> str:

@@ -1,656 +1,216 @@
-# 03 - RAG 在线管线重构方案
+# 03 - RAG 在线检索链路（V1）
 
-> **状态**: 待实施  
-> **优先级**: P0（直接影响回答质量和用户感知速度）  
-> **预计工时**: 5-7 天
-
----
-
-## 一、现状诊断 vs 理想在线管线
-
-### 1.1 在线管线完整对照表
-
-| 环节 | 理想流程 | 当前实现 | 差距评估 |
-|------|---------|---------|---------|
-| **用户提问** | 用户输入 → 意图识别 → 路由分发 | Agent 直接调用 `rag_summarize` 工具 | 无意图分类，所有问题都走 RAG |
-| **查询改写** | 指代消解 + 省略补全 + 多轮改写 | 无（单轮查询直接使用） | 多轮对话时指代丢失 |
-| **查询构建** | 关键词提取 + 查询扩展 + 子查询拆分 | 仅同义词扩展 (`_expand_query`) | 复杂问题无法拆解 |
-| **查询分发** | 按意图路由（RAG/工具/直接回答/闲聊） | 全部走 Agent 由 LLM 决定 | 简单问题也走检索 |
-| **检索** | 向量+关键词+图谱多路，候选池 50+ | 向量+BM25 双路，candidate_k=15 (`rag_service.py:31`) | 候选太少，容易漏检 |
-| **评估检索文档** | 相关性打分 + 阈值过滤 + 置信度评估 | 仅余弦相似度阈值 0.3 (`rag_service.py:32`) | 无相关性模型，阈值固定 |
-| **查询分解/重写** | 检索质量低时自动拆分子问题或改写 | **无** | 一次检索失败就返回空 |
-| **求助外部知识源** | 知识库无结果时 fallback web search | **无** | 知识盲区无法覆盖 |
-| **重排序** | Cross-encoder 精排 | RRF 融合排序（粗排算法） | 缺少精排模型 |
-| **文档压缩** | 冗余内容压缩、关键信息提取 | 无，原始 chunk 直接返回给 LLM | Context 被大量冗余填充 |
-| **生成答案** | 多源证据融合 + 引用标注 | rag_summarize 拼接参考资料 (`rag_service.py:284-309`) | 无可溯源引用格式 |
-| **答案评估** | 幻觉检测 + 事实核对 + 完整性检查 | **无** | 无法保证答案质量 |
-| **反馈优化** | 用户反馈收集 + 检索策略调整 | **无** | 无闭环优化机制 |
-| **返回答案** | 带引用 + 置信度 + 追问建议 | 前端手动渲染 Markdown | 无结构化输出 |
-
-### 1.2 当前流程瓶颈
-
-```python
-# 当前流程 (rag_service.py retriever_docs)
-用户提问
-  → _expand_query (归一化 + 同义词)
-  → ChromaDB 向量检索 (candidate_k=15)
-  → BM25 关键词检索
-  → RRF 融合排序
-  → Jaccard 去重
-  → Top-6 返回
-```
-
-**瓶颈分析**：
-- 查询扩展仅做同义词替换，不会真正"改写"问题
-- 候选池太小（15），RRF 融合前各路的有效候选可能不足
-- 无精排，RRF 只考量排名不考量语义相关性
-- 无压缩，可能返回大量冗余文本给 LLM
-- 检索失败后无重试/降级机制
-- 多轮对话无上下文传递
+> **状态**：在线 RAG V1 已实施；RAGAS 评测后置。
+> **目标**：先完成从多轮用户问题到可引用上下文的完整在线链路，再以 RAGAS 对“检索 + 最终回答”进行质量验收与回归。
+> **前置条件**：[02 离线知识管线](./02-rag-offline-pipeline.md) 已发布 Qdrant `rag_active` revision。
 
 ---
 
-## 二、分步骤重构方案
+## 1. 范围与原则
 
-### 步骤 1：查询改写（Query Rewriting）
+本阶段只负责“问题如何变成可靠的检索上下文”。它不重建索引、不写入 Qdrant、不自动联网搜索，
+也不把评测分数当作功能开发的前置条件。
 
-**目标**：将用户的自然语言问题改写成更适合检索的查询。
-
-**场景**：
-- 多轮对话："那深蹲呢？" → "深蹲的标准动作是什么"
-- 口语化："怎么减肚子" → "腹部减脂的训练方法"
-- 指代消解："它有什么好处" → "深蹲有什么好处"
-
-**方案**：引入 LLM 驱动的查询改写：
-
-```python
-# app/services/query_rewriter.py (新文件)
-
-from app.services.factory import get_chat_model
-
-QUERY_REWRITE_PROMPT = """你是一个搜索查询优化助手。根据对话历史，将用户当前问题改写成更精准的检索查询。
-
-规则：
-1. 补齐省略的主语和指代（"那个"→"深蹲"）
-2. 将口语化表达转为专业术语
-3. 拆解复合问题为多个简单子查询（用 | 分隔）
-4. 只返回改写后的查询，不要解释
-
-对话历史：
-{history}
-
-用户当前问题：{query}
-
-改写后的查询："""
-
-class QueryRewriter:
-    def __init__(self):
-        self._model = get_chat_model()
-    
-    def rewrite(self, query: str, history: list[dict] | None = None) -> str:
-        """将用户问题改写为检索优化查询"""
-        # 单轮查询：只用同义词扩展（快速，不走 LLM）
-        if not history or len(history) < 2:
-            return query
-        
-        # 多轮查询：走 LLM 指代消解
-        history_text = "\n".join(
-            f"{m['role']}: {m['content'][:200]}" 
-            for m in history[-6:]  # 最近 3 轮
-        )
-        prompt = QUERY_REWRITE_PROMPT.format(history=history_text, query=query)
-        
-        try:
-            result = self._model.invoke(prompt)
-            rewritten = result.content.strip()
-            logger.info(f"查询改写：{query} → {rewritten}")
-            return rewritten
-        except Exception as e:
-            logger.warning(f"查询改写失败：{str(e)}，使用原始查询")
-            return query
+```text
+用户消息与会话历史
+  → 明确通用知识问题：直接 RAG；其他问题：Agent 编排
+  → 查询规划（可选改写 / 最多两个子查询）
+  → 子查询的 Dense + BM25 并行召回
+  → revision 对齐检查、RRF 融合与去重
+  → 有界候选重排序
+  → 父段上下文预算与证据编号
+  → Agent 根据 [证据:N] 生成最终回答
+  → SSE 同步返回结构化证据卡片
 ```
 
-### 步骤 2：查询构建（Query Construction）
+设计约束：
 
-**目标**：将用户问题拆解成多个子查询，提高复杂问题的召回率。
+1. **普通问题快速通过**：仅有指代或复合问题才调用查询规划模型，普通单轮问题不会额外增加 LLM 调用。
+2. **所有扩展都受上限约束**：最近 3 轮历史、最多 2 个子查询、有限候选集、固定上下文预算；禁止递归改写或无限重试。
+3. **所有新增能力可回退**：查询规划异常回退原问题；BM25 revision 不一致时回退 dense；重排序可关闭且保留 RRF 基础顺序。
+4. **线上只读**：在线过程只读 `rag_active` 与同 revision 的 BM25 工件。资料导入、切分、去重与 revision 发布仍属于 02。
+5. **快速路径不牺牲个性化**：仅通用动作、营养和防护问题跳过首次 Agent 工具决策；包含“我的情况”、训练记录、报告或天气的请求仍走完整工具编排。
 
-**当前问题**："新手减脂需要做什么训练和怎么吃" — 一个查询无法同时命中训练和营养两个领域。
+---
 
-**方案**：
+## 2. 完整调用链
 
-```python
-# app/services/query_constructor.py (新文件)
-
-import re
-
-DECOMPOSE_TRIGGERS = [
-    r"(.+)和(.+)",       # "A和B怎么"
-    r"(.+)以及(.+)",     # "A以及B"
-    r"(.+)还有(.+)",     # "A还有B"
-    r"(.+)另外(.+)",    # "A另外B"
-]
-
-class QueryConstructor:
-    @staticmethod
-    def decompose(query: str) -> list[str]:
-        """将复合查询拆解为独立子查询"""
-        # 规则1：识别 "和/以及/还有/另外" 连接的子问题
-        for pattern in DECOMPOSE_TRIGGERS:
-            match = re.search(pattern, query)
-            if match:
-                # 简单启发式：拆成两个子查询
-                sub1 = match.group(1).strip()
-                sub2 = match.group(2).strip()
-                # 补全语义
-                if sub1 and sub2 and len(sub1) > 2 and len(sub2) > 2:
-                    # 获取原始问题的开头部分作为上下文前缀
-                    prefix = query[:match.start()].strip()
-                    if prefix:
-                        return [
-                            f"{prefix}{sub1}",
-                            f"{prefix}{sub2}",
-                        ]
-                    return [sub1, sub2]
-        
-        return [query]  # 无法拆解，返回原查询
-    
-    @staticmethod
-    def construct(query: str) -> list[dict]:
-        """
-        构建查询列表，每个元素为 {"query": str, "source_filter": list | None}
-        """
-        sub_queries = QueryConstructor.decompose(query)
-        result = []
-        for sq in sub_queries:
-            # 为每个子查询推断可能的 source 过滤
-            source_hints = _infer_source_filter(sq)
-            result.append({"query": sq, "source_filter": source_hints})
-        return result
-
-def _infer_source_filter(query: str) -> list[str] | None:
-    """根据查询内容推断应检索的知识库来源"""
-    domain_map = {
-        "动作指南": ["动作", "姿势", "标准", "怎么做", "教学"],
-        "营养学": ["吃", "营养", "蛋白", "碳水", "脂肪", "饮食"],
-        "训练计划": ["计划", "每周", "安排", "频率", "周期"],
-        "运动损伤预防": ["伤", "疼", "痛", "预防", "恢复"],
-        "健身基础知识": ["基础", "新手", "入门", "原理", "概念"],
-    }
-    for source, keywords in domain_map.items():
-        for kw in keywords:
-            if kw in query:
-                return [f"{source}.txt"]
-    return None
+```text
+frontend/src/views/Chat.vue
+  → POST /api/chat
+  → app/api/routers/chat.py
+  → ReactAgent.execute_stream(messages)
+  → 通用知识问题：直接构建 RAG 上下文并调用一次答案模型
+    其他问题：middleware.monitor_tool() 写入最近会话历史
+  → agent_tools.rag_summarize()
+  → RagSummarizeService.build_context()
+       ├─ QueryPlanner
+       ├─ Qdrant Dense（每个子查询）
+       ├─ BM25（每个子查询）
+       ├─ RRF / 去重 / LexicalReranker
+       └─ ContextBuilder / [证据:N]
+  → Agent 流式生成最终回答
+  → SSE 返回文本、工具状态和 `evidence` 结构化事件
+  → 前端将证据编号渲染为可展开来源卡片
 ```
 
-### 步骤 3：检索增强（Retrieval Enhancement）
+| 文件 | 职责 |
+|---|---|
+| `app/services/query_planner.py` | 多轮指代消解与复合问题拆解；模型异常时回退原问题 |
+| `app/services/rag_service.py` | 在线链路编排、并行混合召回、标签加权、RRF、去重、重排序和来源质量软惩罚；返回模型上下文和结构化命中证据 |
+| `app/services/reranker.py` | V1 的确定性轻量重排序器；保留替换为 Cross-encoder/API 的边界 |
+| `app/services/context_builder.py` | 在固定字符预算内优先保留命中子片段附近的父段文本 |
+| `app/services/retrieval_contracts.py` | `RetrievalRequest`、`RetrievalHit`、`RetrievalResult` 稳定契约，以及查询标签和标签匹配得分 |
+| `app/services/vector_store.py` / `vector_repository.py` | 查询向量化与 Qdrant 只读适配 |
+| `app/services/bm25_retriever.py` | 读取 02 生成的 BM25 工件并执行关键词检索 |
+| `app/services/agent_tools.py` | 将 Agent 工具参数、来源过滤和会话历史传给 RAG 服务；生成前端证据卡片和启动预热 |
+| `app/services/middleware.py` | 在工具调用边界传递用户、城市和最近会话历史，并转发结构化证据 |
 
-**目标**：扩大候选池 + 添加混合检索第三路。
+---
 
-**方案**：
+## 3. 查询规划
 
-**3.1 增大候选池**
+`QueryPlanner` 的输入是当前问题与最近最多 3 轮历史，输出 `QueryPlan`：
+
+```python
+QueryPlan(
+    original_query="那深蹲呢？",
+    rewritten_query="杠铃深蹲的标准动作和常见错误",
+    search_queries=("杠铃深蹲的标准动作", "杠铃深蹲常见错误"),
+    used_llm=True,
+)
+```
+
+触发条件：
+
+- 指代或省略问题，如“那深蹲呢”“它有什么好处”；
+- 明显复合问题，如“新手减脂怎么练和怎么吃”。
+
+模型必须返回 JSON，最多两个独立检索子查询；无效 JSON、模型超时或网络失败时，回退为原问题的单查询。查询规划不生成答案，也不允许引入用户消息中没有出现的事实。
+
+---
+
+## 4. 混合召回、融合与重排序
+
+对每一个受控子查询，服务使用线程池并行执行：
+
+```text
+子查询 A ─┬─ Qdrant dense
+          └─ BM25
+子查询 B ─┬─ Qdrant dense
+          └─ BM25
+               ↓
+      按 chunk_id 做 RRF 融合
+               ↓
+        父段重叠去重
+               ↓
+         有界重排序 → Top-K
+```
+
+Dense 和 BM25 仅在两者 revision 一致时融合；工件缺失或 revision 不一致时记录告警并降级为 Dense。
+
+V1 的 `LexicalReranker` 以 RRF 分数为主、以查询词在命中 `child_text` 中的覆盖率为辅。它不增加模型部署、网络调用或运行时依赖，主要解决“同一候选集中关键词更贴切的资料排在后面”的问题。
+
+评测发现，FitKG-CN 的原始三元组能补充长尾概念，但偶尔只因动作关键词相同而排在可直接回答问题的人工审核资料之前。因此最终排序支持按来源前缀配置小幅质量软惩罚：`external/fitkg-cn/` 当前为 8%。该规则不影响 Dense/BM25 召回、不删除外部资料；只在候选分数接近时降低低信息量三元组抢占 Top-1 的概率。每次评测报告会同时记录该排序配置，避免把不同在线配置下的分数误当作同一基线。
+
+它不是 Cross-encoder。若后续需要接入 Cross-encoder 或云端 rerank API，只替换 `reranker.py` 的实现，
+不改变 `RagSummarizeService`、Agent 工具或前端接口。
+
+关键配置位于 `config/vector_store.yml`：
 
 ```yaml
-# config/chroma.yml
-candidate_k: 30  # 从 15 提升到 30（粗召回不够细排没意义）
+k: 6
+candidate_k: 15
+query_history_turns: 3
+max_subqueries: 2
+reranker_enabled: true
+reranker_candidate_k: 12
+reranker_base_score_weight: 0.7
+query_planner_enabled: true
+metadata_tag_boost_enabled: true
+metadata_tag_boost_weight: 0.15
+source_quality_penalties:
+  "external/fitkg-cn/": 0.08
 ```
 
-**3.2 添加基于标签的预过滤**
+`candidate_k` 仍保持 15。查询规划总开关关闭时，任何问题都保持原问题的单查询路径；开启时仍只有指代或复合问题会调用模型。标签加权使用离线和在线共享的确定性规则：查询标签与切片标签重合时，RRF 分数最多提升 15%，不命中或旧 revision 缺少标签时保持原顺序。来源质量惩罚仅作用于已重排序候选，未命中前缀时为 0。是否提高候选池、为标签建立 Qdrant payload 索引或替换为 Cross-encoder，属于基于实际使用和后续评测的调优，不在 V1 里预设结论。
 
-当查询匹配到已知领域标签时，优先检索该领域的文档：
+---
 
-```python
-# app/services/rag_service.py retriever_docs 修改
+## 5. 上下文预算与引用
 
-def retriever_docs(self, query: str, source_filter: list[str] | None = None):
-    # 如果 source_filter 为空，尝试用标签推断
-    if not source_filter:
-        source_filter = self._infer_tag_filter(query)
-    
-    # ... 后续保留 current_k 索引逻辑 ...
+Qdrant 和 BM25 都用子切片命中，但返回父段。为了避免六个长父段占满 Agent 上下文，
+`ContextBuilder` 采用确定性策略：
+
+1. 总上下文预算默认 6000 字符；
+2. 单条证据最多 1200 字符；
+3. 父段过长时，优先保留 `child_text` 附近内容；
+4. 仍保留稳定 `evidence_id`、来源、切片序号与 `[证据:N]` 编号；
+5. 预算耗尽时停止追加低排名证据，而不是调用额外 LLM 压缩。
+
+Agent 获得的上下文示例：
+
+```text
+[证据:1] 来源=动作指南大全.txt | 证据ID=动作指南大全.txt#<chunk_id>
+……与命中动作相关的父段内容……
+
+证据目录：
+[证据:1] 动作指南大全.txt#<chunk_id> | 来源=动作指南大全.txt
 ```
 
-**3.3 异步并行检索**
+系统提示词要求 Agent 在采用该资料的结论后保留对应 `[证据:N]`，且不得虚构证据编号。
 
-```python
-import asyncio
+聊天接口不会通过解析最终模型文本来猜测来源。RAG 在构建上下文时同步返回真实 `RetrievalHit`；
+SSE 发送裁剪后的 `evidence` 事件（证据编号、来源、命中子片段、标签），前端将其挂在当前回答下方的“证据来源”可展开卡片中。
 
-async def _async_vector_search(self, query: str, k: int) -> list[tuple]:
-    """异步向量检索（不阻塞 BM25）"""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None,
-        lambda: self.vector_store.vector_store.similarity_search_with_relevance_scores(query, k=k)
-    )
+---
 
-async def _async_bm25_search(self, query: str, k: int) -> list[tuple]:
-    """异步 BM25 检索"""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, lambda: self.bm25.search(query, k=k))
+## 6. 启动预热与延迟策略
 
-async def retriever_docs_async(self, query: str, source_filter: list[str] | None = None):
-    """异步双路并行检索"""
-    self._ensure_collection_ready()
-    self._sync_bm25_index()
-    
-    expanded_query = self._expand_query(query)
-    
-    # 并行执行两路检索
-    vector_results, bm25_results = await asyncio.gather(
-        self._async_vector_search(expanded_query, self.candidate_k),
-        self._async_bm25_search(expanded_query, self.candidate_k),
-        return_exceptions=True,
-    )
-    
-    # 异常处理
-    if isinstance(vector_results, Exception):
-        logger.error(f"向量检索异常：{vector_results}")
-        vector_results = []
-    if isinstance(bm25_results, Exception):
-        logger.error(f"BM25检索异常：{bm25_results}")
-        bm25_results = []
-    
-    # 过滤 + 融合 + 去重 （与同步版本相同）
-    # ...
-```
+后端启动时只加载 02 生成的 BM25 工件，不调用 embedding、Qdrant 查询或 LLM。这样首个 RAG 问题不再额外承担本地 BM25 建索引时间。
 
-### 步骤 4：检索文档评估（Retrieval Evaluation）
+对明确的通用知识问题，`ReactAgent` 以保守关键词和排除规则直接进入 RAG：检索后仅调用一次模型生成最终回答；涉及个人画像、训练记录、报告、天气或户外场景时，继续由完整 Agent 决定需要的工具。该策略降低模型调用次数，但不绕过 RAG 证据、安全提示或引用规则。
 
-**目标**：判断检索结果的"可用性"，不可用时自动触发重试/降级。
+---
 
-**方案**：
+## 7. 可观测性与功能验证
 
-```python
-# app/services/retrieval_evaluator.py (新文件)
+每次检索写入 `RAG_RETRIEVAL` 日志，记录：request ID、查询长度、子查询数量、revision、Dense/BM25 候选数、最终命中数、耗时、是否使用查询规划与是否发生回退。日志不记录原始用户问题。
 
-class RetrievalEvaluator:
-    """评估检索结果质量，决策下一步动作"""
-    
-    MINIMUM_RETRIEVED_COUNT = 3       # 最少需要 3 条结果
-    LOW_QUALITY_THRESHOLD = 0.3       # RRF 分数阈值
-    
-    @staticmethod
-    def evaluate(scored_docs: list[tuple], original_query: str) -> dict:
-        """
-        返回评估结果：
-        {
-            "status": "ok" | "low_quality" | "no_results",
-            "score": float,         # 整体检索质量分数 (0-1)
-            "suggestion": str,      # 下一步建议
-        }
-        """
-        if not scored_docs:
-            return {
-                "status": "no_results",
-                "score": 0.0,
-                "suggestion": "decompose_or_rewrite",  # 建议分解或改写查询
-            }
-        
-        # 计算整体质量分：最高分 + 文档数量归一化
-        scores = [s for _, s in scored_docs[:10]]
-        max_score = max(scores) if scores else 0
-        count_score = min(len(scored_docs) / 10, 1.0)  # 10条以上满分
-        quality_score = (max_score * 0.7 + count_score * 0.3)
-        
-        if len(scored_docs) < RetrievalEvaluator.MINIMUM_RETRIEVED_COUNT:
-            return {
-                "status": "low_quality",
-                "score": quality_score,
-                "suggestion": "expand_sources_or_fallback",
-            }
-        
-        if max_score < RetrievalEvaluator.LOW_QUALITY_THRESHOLD:
-            return {
-                "status": "low_quality",
-                "score": quality_score,
-                "suggestion": "rewrite_or_web_fallback",
-            }
-        
-        return {
-            "status": "ok",
-            "score": quality_score,
-            "suggestion": "proceed",  # 继续重排序
-        }
-```
+当前功能测试覆盖：
 
-### 步骤 5：查询分解/重写 & 外部知识源 Fallback
+- 普通问题不调用查询模型；
+- 指代问题结合历史生成完整查询；
+- 无效规划结果回退原查询；
+- 两个子查询都会进入混合召回；
+- 命中关键词的候选可经重排序前移；
+- 长父段在预算内仍保留命中的子片段；
+- RAG 工具可产生只含展示字段的结构化证据卡片；
+- 通用知识问题进入快速路径，个性化问题保留完整 Agent 编排；
+- `RagSummarizeService` 仅暴露结构化 `retrieve()` 和面向 Agent 的 `build_context()` 两个入口。
 
-**目标**：检索质量低时自动降级流程。
-
-**方案**：
-
-```python
-# app/services/rag_service.py 新增方法
-
-def _retrieval_fallback(self, query: str, eval_result: dict) -> list[Document]:
-    """检索降级策略"""
-    suggestion = eval_result.get("suggestion", "proceed")
-    
-    if suggestion == "decompose_or_rewrite":
-        # 策略1：拆解查询重新检索
-        sub_queries = QueryConstructor.decompose(query)
-        all_docs = []
-        for sq in sub_queries:
-            if sq != query:  # 避免死循环
-                docs = self.retriever_docs(sq)
-                all_docs.extend(docs)
-        if all_docs:
-            logger.info(f"查询拆解后检索到 {len(all_docs)} 篇文档")
-            return all_docs
-    
-    elif suggestion == "rewrite_or_web_fallback":
-        # 策略2：LLM 改写查询
-        rewritten = QueryRewriter().rewrite(query)
-        if rewritten and rewritten != query:
-            docs = self.retriever_docs(rewritten)
-            if docs:
-                return docs
-        
-        # 策略3：标记需要外部知识（由 Agent 层处理 web search）
-        logger.warning(f"知识库未检索到相关内容，建议 Agent 使用通用知识回答或提示用户")
-    
-    return []  # 所有降级策略失败
-```
-
-### 步骤 6：重排序（Reranking）
-
-**目标**：使用 Cross-encoder 对融合结果进行精排。
-
-**当前问题**：RRF 只是粗排算法（只考量排名，不考量语义相关性）。需要用 Cross-encoder 做最终精排。
-
-**方案**：
-
-```python
-# app/services/reranker.py (新文件)
-
-class CrossEncoderReranker:
-    """使用 Cross-encoder 模型对候选文档精排"""
-    
-    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3"):
-        # 方案A：使用 FlagEmbedding 的本地模型（推荐，速度快）
-        # 方案B：使用 DashScope 的 rerank API（免部署，但网络开销）
-        self._use_api = os.getenv("RERANKER_MODE", "local") == "api"
-        
-        if self._use_api:
-            self._api_client = None  # DashScope rerank client
-        else:
-            try:
-                from FlagEmbedding import FlagReranker
-                self._model = FlagReranker(model_name, use_fp16=True)
-                self._model_loaded = True
-            except ImportError:
-                logger.warning("FlagEmbedding 未安装，降级为 RRF 排序")
-                self._model_loaded = False
-    
-    def rerank(self, query: str, docs: list[Document], top_k: int = 6) -> list[Document]:
-        """对候选文档重排序并返回 top_k"""
-        if len(docs) <= 1 or not self._model_loaded:
-            return docs[:top_k]
-        
-        # 构建 query-doc 对
-        pairs = [[query, doc.page_content] for doc in docs]
-        
-        # Cross-encoder 打分
-        scores = self._model.compute_score(pairs, normalize=True)
-        
-        # 排序
-        ranked = sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)
-        
-        logger.info(
-            f"精排完成：{len(docs)} → {min(top_k, len(docs))}，"
-            f"最高分 {ranked[0][1]:.3f}"
-        )
-        
-        return [doc for doc, _ in ranked[:top_k]]
-```
-
-### 步骤 7：文档压缩（Context Compression）
-
-**目标**：在返回 LLM 之前压缩冗余内容，让 LLM 更聚焦关键信息。
-
-**当前问题**：原始 chunk 直接拼接返回，可能包含大量不相关内容，浪费 token 且降低回答质量。
-
-**方案**：
-
-```python
-# app/services/context_compressor.py (新文件)
-
-from langchain.retrievers import ContextualCompressionRetriever
-from langchain.retrievers.document_compressors import LLMChainExtractor
-
-class ContextCompressor:
-    """压缩检索文档：提取与 query 相关的核心句子"""
-    
-    COMPRESSION_PROMPT = """根据用户问题，从以下文档片段中仅提取直接相关的句子。
-丢弃与问题无关的内容。保持原文不变，不要改写。
-
-用户问题：{query}
-
-文档片段：
-{content}
-
-相关句子（保留原文）："""
-    
-    def __init__(self):
-        self._model = get_chat_model()
-    
-    def compress(self, query: str, docs: list[Document]) -> list[Document]:
-        """对每个文档压缩无关内容"""
-        if len(docs) <= 2:
-            return docs  # 文档少时不压缩，避免丢失信息
-        
-        compressed = []
-        for doc in docs:
-            # 仅压缩超过 300 字的长文档
-            if len(doc.page_content) < 300:
-                compressed.append(doc)
-                continue
-            
-            try:
-                prompt = self.COMPRESSION_PROMPT.format(
-                    query=query, content=doc.page_content
-                )
-                result = self._model.invoke(prompt)
-                extracted = result.content.strip()
-                
-                if extracted and len(extracted) > 20:
-                    new_doc = Document(
-                        page_content=extracted,
-                        metadata=doc.metadata.copy(),
-                    )
-                    # 标记为压缩版本
-                    new_doc.metadata["compressed"] = True
-                    # 保留原始长度比率
-                    new_doc.metadata["compress_ratio"] = round(
-                        len(extracted) / len(doc.page_content), 2
-                    )
-                    compressed.append(new_doc)
-                else:
-                    compressed.append(doc)  # 压缩失败，保留原文
-            except Exception:
-                compressed.append(doc)  # 异常时保留原文
-        
-        return compressed
-```
-
-### 步骤 8：答案生成增强
-
-**目标**：生成带引用、可信度评估的答案。
-
-**方案**：增强 `rag_summarize` 方法的输出格式：
-
-```python
-# app/services/rag_service.py rag_summarize 修改
-
-def rag_summarize(self, query: str, source_filter: list[str] | None = None) -> str:
-    context_docs = self.retriever_docs(query, source_filter)
-    
-    if not context_docs:
-        return "[RAG]未检索到相关参考资料。"
-    
-    # 新增：参考来源追踪（用于 LLM 引用）
-    references = []
-    context_parts = []
-    
-    for i, doc in enumerate(context_docs, start=1):
-        source = doc.metadata.get("source", "未知")
-        # 使用 [ref:N] 标记，方便 LLM 在回答中引用
-        ref_tag = f"[ref:{i}]"
-        references.append(f"{ref_tag} {source}")
-        
-        context_parts.append(
-            f"[资料{ref_tag}] {doc.page_content.strip()}"
-        )
-    
-    context_text = "\n\n---\n".join(context_parts)
-    ref_text = "\n".join(references)
-    
-    # 返回结构化上下文（让 LLM 知道如何引用）
-    return (
-        f"检索到 {len(context_docs)} 篇参考资料：\n\n"
-        f"{context_text}\n\n"
-        f"---\n引用标记说明（在回答中使用 [ref:N] 引用）：\n{ref_text}"
-    )
-```
-
-### 步骤 9：反馈闭环
-
-**目标**：收集用户反馈，优化检索策略。
-
-**方案**：
-
-```python
-# app/services/feedback_collector.py (新文件)
-
-class FeedbackCollector:
-    """收集用户对 RAG 回答的反馈，用于优化检索策略"""
-    
-    def __init__(self):
-        self._feedback_file = "logs/rag_feedback.jsonl"
-    
-    def record(self, query: str, docs_count: int, 
-               user_rating: int | None = None,  # 用户评分 1-5
-               was_useful: bool | None = None,   # 是否解决了问题
-               resolution: str | None = None,     # "answered" | "web_fallback" | "gave_up"
-               ):
-        """记录一次检索反馈"""
-        record = {
-            "timestamp": datetime.now().isoformat(),
-            "query": query,
-            "docs_count": docs_count,
-            "user_rating": user_rating,
-            "was_useful": was_useful,
-            "resolution": resolution,
-        }
-        with open(self._feedback_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    
-    def get_low_performance_queries(self, min_occurrences: int = 3) -> list[str]:
-        """获取高频低质量查询（用于改进同义词表/知识库）"""
-        # 分析反馈日志，找出 was_useful=False 的高频查询
-        # 返回需要改进的查询列表
-        pass
+```powershell
+.\.venv\Scripts\python.exe -m ruff format --check app
+.\.venv\Scripts\python.exe -m ruff check app
+.\.venv\Scripts\python.exe -m pytest app/tests
 ```
 
 ---
 
-## 三、在线管线重构后完整流程
+## 8. RAGAS 后置阶段
 
-```
-用户提问
-│
-├── 1. 查询改写 ──────────────────────────────────
-│   ├── 多轮对话 → LLM 指代消解/省略补全
-│   ├── 单轮对话 → 仅同义词扩展（快速路径）
-│   └── 输出：改写后的标准查询
-│
-├── 2. 查询构建 ──────────────────────────────────
-│   ├── 复合问题拆解 → 多个独立子查询
-│   ├── 领域推断 → source_filter 预过滤
-│   └── 输出：查询列表 [{"query", "source_filter"}]
-│
-├── 3. 查询分发（Agent 决定） ────────────────────
-│   ├── 闲聊/问候 → 直接回答（不走 RAG）
-│   ├── 运动知识 → RAG 检索
-│   ├── 工具调用 → 天气/用户画像/运动数据
-│   └── 输出：执行路径
-│
-├── 4. 检索 (双路并行，candidate_k=30) ──────────
-│   ├── 向量检索（ChromaDB）- 语义匹配
-│   ├── BM25 检索 - 关键词匹配
-│   ├── 标签过滤（tags 预过滤）
-│   ├── 异步并行执行
-│   └── 输出：粗排候选列表
-│
-├── 5. 评估检索文档 ──────────────────────────────
-│   ├── 结果数量检查（≥3条）
-│   ├── RRF 分数检查（max > 0.3）
-│   ├── 决策：proceed / decompose / rewrite / web_fallback
-│   └── 输出：{"status", "score", "suggestion"}
-│
-├── 6. 查询分解/重写 ────────────────────────────（评估不合格时）
-│   ├── decompose → 拆分子查询 → 重新检索
-│   ├── rewrite → LLM 改写 → 重新检索
-│   ├── web_fallback → 标记需外部知识
-│   └── 输出：重试后的文档列表或空
-│
-├── 7. 重排序 (Cross-encoder Reranker) ──────────
-│   ├── BGE-Reranker-v2-m3 精排
-│   ├── 本地模型（快）/ API（省部署）
-│   └── 输出：Top-6 精排文档
-│
-├── 8. 文档压缩 ──────────────────────────────────
-│   ├── LLM 提取相关句子
-│   ├── 丢弃无关内容
-│   └── 输出：压缩后的上下文
-│
-├── 9. 生成答案 ──────────────────────────────────
-│   ├── 带 [ref:N] 引用标记
-│   ├── 多源证据融合
-│   └── 输出：结构化答案文本
-│
-├── 10. 答案评估 ─────────────────────────────────（可选）
-│   ├── 幻觉检测（回答是否基于提供的文档）
-│   ├── 完整性检查（是否回答了问题的所有方面）
-│   └── 输出：质量标记
-│
-├── 11. 反馈优化 ─────────────────────────────────
-│   ├── 记录用户反馈
-│   ├── 分析低质量查询模式
-│   └── 输出：改进建议
-│
-└── 12. 返回答案 ─────────────────────────────────
-    └── SSE 流式输出给前端
-```
+完整在线链路稳定后，再建立“问题、实际检索上下文、最终回答、人工参考答案”的黄金集，
+引入 RAGAS 或等价工具评估：
 
----
+- Context Precision / Recall：召回上下文是否相关且覆盖所需证据；
+- Faithfulness：最终回答是否能由提供的上下文支持；
+- Answer Accuracy / Relevance：最终回答是否正确回应问题。
 
-## 四、实施检查清单
+RAGAS 使用 LLM 评审，存在成本、模型版本和提示词漂移；因此应固定评审模型、数据集 revision 和运行参数，并将报告与被测索引 revision 关联。它用于全链路质量验收和回归，不替代当前单元测试、错误处理或功能开发。
 
-- [ ] 1. 创建 `app/services/query_rewriter.py`（LLM 查询改写）
-- [ ] 2. 创建 `app/services/query_constructor.py`（查询拆解 + 领域推断）
-- [ ] 3. 修改 `rag_service.py` `retriever_docs` 支持并行异步检索 + 增大候选池
-- [ ] 4. 创建 `app/services/retrieval_evaluator.py`（检索质量评估）
-- [ ] 5. 修改 `rag_service.py` 添加 `_retrieval_fallback`（降级策略）
-- [ ] 6. 创建 `app/services/reranker.py`（Cross-encoder 精排）
-- [ ] 7. 创建 `app/services/context_compressor.py`（文档压缩）
-- [ ] 8. 修改 `rag_service.py` `rag_summarize`（结构化引用输出）
-- [ ] 9. 创建 `app/services/feedback_collector.py`（反馈闭环）
-- [ ] 10. `config/chroma.yml` `candidate_k` 调至 30
-- [ ] 11. `requirements.txt` 添加 `FlagEmbedding` 依赖（精排模型）
-- [ ] 12. 为每个新模块编写单元测试
-- [ ] 13. 端到端检索质量对比测试（重构前后）
+## 9. 不在 V1 范围内
 
----
-
-## 五、验收标准
-
-1. 多轮对话中省略指代（"那深蹲呢"）能被正确改写为完整查询
-2. 复合问题（"怎么吃和怎么练"）被拆解为子查询分别检索
-3. 候选池从 15 扩展到 30，召回率提升 20%+
-4. 检索质量低时自动降级（拆解→改写→标记降级），不返回空结果
-5. Cross-encoder 精排后的 Top-3 相关性评分 > 0.7
-6. 长文档被压缩至原始长度的 40-60%，保留核心信息
-7. LLM 回答包含 `[ref:1] [ref:2]` 引用标记
-8. 整体延迟 < 2 秒（异步并行 + 缓存优化）
+- 外部搜索 fallback：需要单独明确来源授权、引用展示和安全审核边界；
+- 用户反馈闭环：需要先定义数据保留与隐私策略；
+- Qdrant 原生 sparse、集群、快照、DOCX/JSON/HTML 接入：属于 02 的数据与运维演进；
+- 多 Agent 编排、长期会话摘要与意图路由：属于 04 Agent 对话演进。

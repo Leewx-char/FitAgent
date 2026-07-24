@@ -12,6 +12,8 @@
 """
 
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
@@ -66,6 +68,24 @@ engine = create_engine(
 )
 # 会话工厂，之后在 API 里每次请求调用 SessionLocal() 拿到一个临时会话
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+@contextmanager
+def get_db_session() -> Iterator:
+    """提供统一的数据库事务边界。
+
+    HTTP 路由和 Agent 工具都通过该上下文管理器取得会话：正常结束时提交，
+    出现异常时回滚，无论结果如何都会关闭会话并归还连接池。
+    """
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 class Base(DeclarativeBase):
