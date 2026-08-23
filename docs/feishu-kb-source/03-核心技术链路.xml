@@ -1,0 +1,95 @@
+<title>FitAgent 核心技术链路：RAG、Agent、记忆、计划与 Coros</title>
+<callout emoji="🔬" background-color="light-blue" border-color="blue"><p>本页解释“为什么这样设计”。不要把 RAG、Agent、记忆和设备同步视为一条没有边界的大模型链；它们各有触发条件、数据契约与失败降级。</p></callout>
+<h1 seq="auto">RAG：离线发布与在线回答必须分开</h1>
+<whiteboard type="mermaid">
+flowchart TB
+  subgraph OFF[离线：知识源变更后显式执行]
+    D[data Markdown / TXT / PDF] --> PF[knowledge_preflight]
+    PF --> CL[清洗、去重、标签]
+    CL --> SP[标题感知父子切块]
+    SP --> EMB[批量 embedding]
+    EMB --> REV[创建 Qdrant revision]
+    SP --> BM[生成 BM25 工件]
+    REV --> CHECK{一致性校验}
+    BM --> CHECK
+    CHECK -->|通过| ALIAS[切换 rag_active alias]
+  end
+  subgraph ON[在线：每次问题]
+    Q[用户问题] --> PLAN[QueryPlanner]
+    PLAN --> DENSE[Qdrant Dense]
+    PLAN --> LEX[BM25]
+    DENSE --> FUSE[RRF 融合]
+    LEX --> FUSE
+    FUSE --> CLEAN[去重/标签提升/重排]
+    CLEAN --> CTX[ContextBuilder + evidence]
+  end
+  ALIAS --> DENSE
+  BM --> LEX
+</whiteboard>
+<p><b>关键理由：</b>revision + alias 让线上始终读取完整索引；BM25 工件绑定 revision/checksum，防止词法和向量索引版本错配；RRF 融合排名而非直接混合不同量纲的分数；ContextBuilder 只保留预算内、可引用的 child 证据与父上下文。</p>
+<table><thead><tr><th background-color="light-gray"><p>阶段</p></th><th background-color="light-gray"><p>主要文件</p></th><th background-color="light-gray"><p>失败时表现</p></th></tr></thead><tbody><tr><td><p>预检</p></td><td><p>knowledge_preflight.py、knowledge_indexer.py</p></td><td><p>报告问题，不初始化 Qdrant/embedding，不污染线上索引。</p></td></tr><tr><td><p>构建/发布</p></td><td><p>knowledge_indexer.py、vector_repository.py、bm25_retriever.py</p></td><td><p>未通过校验不切 alias；不完整 revision 不替代旧线上数据。</p></td></tr><tr><td><p>检索</p></td><td><p>rag_service.py、vector_store.py、query_planner.py、reranker.py</p></td><td><p>BM25 工件缺失时降级 Dense；规划模型异常时走原始查询快速路径。</p></td></tr></tbody></table>
+<h1 seq="auto">Agent：只有需要个性化上下文才使用</h1>
+<whiteboard type="mermaid">
+flowchart LR
+  Q[问题] --> G{_should_use_direct_rag}
+  G -->|通用健身知识| D[Direct RAG: 一次检索+一次生成]
+  G -->|我的/结合伤病/近期数据等| A[LangGraph ReAct]
+  A --> T1[rag_summarize]
+  A --> T2[get_user_profile]
+  A --> T3[get_confirmed_memories]
+  A --> T4[get_fitness_summary]
+  A --> T5[get_weather]
+  A --> MW[中间件：递归/工具预算/审计]
+  D --> S[SSE text/evidence]
+  A --> S
+</whiteboard>
+<p>ReactAgent 不拥有数据库或任意外部调用权限；它只能调用 agent_tools.py 注册的受限工具。middleware.py 对每个工具调用保存“名称、耗时、参数形状”，而不是用户问题/参数值。agent_trace.py 与 AgentTraceRepository 把这份安全元数据持久化，便于查看调用路径又不扩大隐私暴露。</p>
+<h1 seq="auto">记忆：三层、可确认、不可被模型污染</h1>
+<whiteboard type="mermaid">
+stateDiagram-v2
+  [*] --> Proposed: 用户消息提取候选
+  Proposed --> Confirmed: 用户确认 / 主动创建
+  Proposed --> Revoked: 用户撤销或过期
+  Confirmed --> Revoked: 用户撤销 / 新值替换旧值
+  Confirmed --> AgentVisible: 只读工具筛选未过期 confirmed
+  AgentVisible --> [*]
+</whiteboard>
+<table><thead><tr><th background-color="light-gray"><p>层</p></th><th background-color="light-gray"><p>载体与写入</p></th><th background-color="light-gray"><p>Agent 可见性</p></th></tr></thead><tbody><tr><td><p>近期上下文</p></td><td><p>messages 最近 10 轮（20 条）</p></td><td><p>当前会话可见</p></td></tr><tr><td><p>会话暂存</p></td><td><p>session_summaries；仅由较早 user 消息确定性提取</p></td><td><p>作为带来源标记的短期状态</p></td></tr><tr><td><p>长期记忆</p></td><td><p>memory_facts；proposed → confirmed/revoked</p></td><td><p>只读 confirmed、未过期、最多 6 条</p></td></tr></tbody></table>
+<p><b>防污染规则：</b><code>extract_session_facts</code> 忽略 assistant/tool 内容；聊天只从本条用户消息提出候选。因而“模型猜测用户膝盖受伤”不会反向变成可用事实。</p>
+<h1 seq="auto">训练计划：规则先于生成，校验晚于生成</h1>
+<whiteboard type="mermaid">
+flowchart LR
+  P[用户画像] --> SS[FitnessSnapshot]
+  C[近四周 Coros] --> SS
+  F[最近 RPE/疼痛反馈] --> POL[TrainingSafetyPolicy.assess]
+  SS --> POL
+  P --> POL
+  POL --> E[RAG 训练证据]
+  E --> L[LLM 输出 WeeklyTrainingPlan JSON]
+  POL --> V[强度上限]
+  L --> V
+  V -->|7天/天数/强度/证据均通过| DB[(TrainingPlan + Feedback)]
+  V -->|任一失败| REJ[整体拒绝，不写半成品]
+</whiteboard>
+<p>伤病、负荷比 &gt; 1.3、平均睡眠不足 6 小时、过度疲劳或痛感 ≥ 4 会把最大强度降为“低”。模型没有机会绕过这个上限；_validate_plan 还校验一周 7 天覆盖、训练天数不超过画像 weekly_days、每个动作不超限、evidence_ids 真实来自本次 RAG。反馈按 (plan_id, day_of_week) upsert，重复提交不会重复记一条记录。</p>
+<h1 seq="auto">Coros：设备数据是显式同步，不是聊天 Agent 工具</h1>
+<whiteboard type="mermaid">
+sequenceDiagram
+  participant UI as Dashboard
+  participant F as fitness.py
+  participant C as CorosClient
+  participant R as Provider Runner
+  participant M as stdio MCP 只读缓存
+  participant DB as MySQL
+  UI->>F: POST /fitness/sync
+  F->>C: sync_cache(range)
+  C->>R: 刷新私有 SQLite cache
+  F->>C: 读取 daily / sleep / activities
+  C->>M: JSON-RPC 串行调用
+  M-->>C: 数组或单源失败
+  C-->>F: 可用数据 + unavailable_sources
+  F->>DB: external_id 幂等 upsert
+  F-->>UI: partial / counts / 数据
+</whiteboard>
+<ul><li>CorosClient 用单进程锁避免 JSON-RPC 回包交叉；超时/断管立即终止子进程，下一次请求重建。</li><li>Runner 只重定向社区 MCP 的 SQLite cache 到项目 .tools，不改变 HOME/USERPROFILE，保留操作系统安全令牌。</li><li>未佩戴设备导致 sleep=[] 是完整成功；只有单源明确失败才以 partial 和 unavailable_sources 标记。</li><li>日指标/睡眠 external_id 使用日期；活动优先 provider activity_id，缺失时生成稳定哈希，因此同日晨跑/夜跑不覆盖。</li></ul>
+<callout emoji="🎯" background-color="light-green" border-color="green"><p>此页的完成标准：你能解释“为什么不让聊天 Agent 直接生成/写入训练计划”“为什么线上 RAG 不重建索引”“为什么 assistant 不能写记忆”“为什么同步必须由用户主动触发”。</p></callout>

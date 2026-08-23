@@ -13,6 +13,7 @@ from app.services.rag_service import RagSummarizeService
 from app.utils.logger_handler import logger
 from app.core.database import get_db_session
 from app.models import UserProfile, FitnessData
+from app.services.memory_service import MemoryService
 
 
 @lru_cache(maxsize=1)
@@ -345,6 +346,22 @@ def get_user_profile():
             f"- 饮食限制：{', '.join(diet_restrict) if diet_restrict else '无'}\n"
             f"- 偏好：{preferences or '未填写'}"
         )
+
+
+@tool(
+    description=(
+        "读取当前用户已确认且未过期的长期记忆。仅当用户的问题明确要求结合个人目标、"
+        "习惯、伤病、饮食或历史偏好时调用；候选记忆和已撤销记忆不可读取。"
+    )
+)
+def get_confirmed_memories(query: str) -> str:
+    """Read-only memory tool. Writes remain exclusively in the memory API."""
+
+    user_id = _user_context.get().get("user_id")
+    if not user_id:
+        return "未获取到用户信息，请让用户先登录。"
+    with get_db_session() as db:
+        return MemoryService.format_relevant_memories(db, user_id=user_id, query=query)
 
 
 @tool(

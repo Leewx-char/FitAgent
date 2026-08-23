@@ -34,6 +34,7 @@ class TestFitnessSummary:
                     user_id=user_id,
                     date=today - timedelta(days=1),
                     data_type="daily_metrics",
+                    external_id="test:summary:daily:1",
                     data=json.dumps(
                         {
                             "rhr": 52,
@@ -51,6 +52,7 @@ class TestFitnessSummary:
                     user_id=user_id,
                     date=today - timedelta(days=2),
                     data_type="daily_metrics",
+                    external_id="test:summary:daily:2",
                     data=json.dumps(
                         {
                             "rhr": 54,
@@ -93,6 +95,7 @@ class TestFitnessSummary:
                     user_id=user_id,
                     date=today - timedelta(days=1),
                     data_type="daily_metrics",
+                    external_id="test:all:daily",
                     data=json.dumps({"rhr": 60, "avg_sleep_hrv": 55}),
                 )
             )
@@ -101,6 +104,7 @@ class TestFitnessSummary:
                     user_id=user_id,
                     date=today - timedelta(days=1),
                     data_type="sleep",
+                    external_id="test:all:sleep",
                     data=json.dumps(
                         {"total_duration_minutes": 450, "phases": {"deep_minutes": 100}}
                     ),
@@ -111,6 +115,7 @@ class TestFitnessSummary:
                     user_id=user_id,
                     date=today - timedelta(days=2),
                     data_type="activity",
+                    external_id="test:all:activity",
                     data=json.dumps(
                         {
                             "name": "跑步",
@@ -147,6 +152,7 @@ class TestFitnessSummary:
                     user_id=user_id,
                     date=date.today() - timedelta(days=1),
                     data_type="daily_metrics",
+                    external_id="test:rhr:daily",
                     data=json.dumps({"rhr": 48}),
                 )
             )

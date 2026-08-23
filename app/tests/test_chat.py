@@ -1,5 +1,9 @@
 import json
 
+from app.core.database import SessionLocal
+from app.models import SessionSummary
+from app.services.memory_service import RECENT_MESSAGE_LIMIT
+
 
 class TestChat:
     def test_chat_creates_session(self, auth_client, agent_mock):
@@ -83,3 +87,34 @@ class TestChat:
             "messages": ["请求过于频繁，请稍后重试。"],
             "data": None,
         }
+
+    def test_chat_keeps_twenty_recent_messages_and_summarizes_older_history(
+        self, auth_client, agent_mock
+    ):
+        """第 11 次请求前已有 21 条消息：最近 20 条进 Agent，首条转入会话暂存状态。"""
+
+        agent_mock.execute_stream.side_effect = lambda *args, **kwargs: iter(
+            ['{"type": "text", "content": "ok"}']
+        )
+        session_id = ""
+        for index in range(11):
+            payload = {"message": "我在成都，目标是减脂" if index == 0 else f"消息 {index}"}
+            if session_id:
+                payload["session_id"] = session_id
+            response = auth_client.post("/api/chat", json=payload)
+            assert response.status_code == 200
+            session_id = response.headers["X-Session-Id"]
+
+        recent_messages = agent_mock.execute_stream.call_args.args[0]
+        assert len(recent_messages) == RECENT_MESSAGE_LIMIT == 20
+        assert recent_messages[0]["role"] == "assistant"
+
+        db = SessionLocal()
+        try:
+            summary = db.query(SessionSummary).filter(SessionSummary.session_id == session_id).one()
+            assert json.loads(summary.content)["facts"] == {
+                "city": "成都",
+                "training_goal": "减脂",
+            }
+        finally:
+            db.close()

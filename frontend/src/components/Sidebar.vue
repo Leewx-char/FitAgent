@@ -17,6 +17,12 @@
       <router-link to="/dashboard" class="nav-item" :class="{ active: $route.name === 'Dashboard' }">
         数据面板
       </router-link>
+      <router-link to="/training-plan" class="nav-item" :class="{ active: $route.name === 'TrainingPlan' }">
+        本周计划
+      </router-link>
+      <router-link to="/memory" class="nav-item" :class="{ active: $route.name === 'Memory' }">
+        我的记忆
+      </router-link>
       <router-link to="/profile" class="nav-item" :class="{ active: $route.name === 'Profile' }">
         档案
       </router-link>

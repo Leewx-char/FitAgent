@@ -1,120 +1,293 @@
+"""A serial, restartable stdio MCP client for Coros data.
+
+The Coros MCP server is a local subprocess with one stdin/stdout stream. A single stream
+cannot safely service interleaved JSON-RPC requests, so this client owns one process and
+serializes an entire request/response exchange. Timeout reads use a small reader thread
+instead of ``select.select`` because Windows does not support ``select`` on pipe handles.
+"""
+
+from __future__ import annotations
+
 import json
-import select  # 用于给 stdin/stdout 加超时
-import subprocess  # 启动和管理子进程
 import os
+import queue
+import subprocess
+import threading
+import time
+from collections.abc import Callable
+from typing import Any, Mapping
+
 from dotenv import load_dotenv
+
+from app.utils.logger_handler import logger
 
 load_dotenv()
 
 
-# 请求是_send发的
 class CorosClient:
-    def __init__(self):
-        """
-        构造环境变量字典，传给子进程
-        coros-mcp 作为子进程，它有自己独立的环境变量空间。
-        当前进程读到了 .env，但子进程不一定有。所以显式拷贝一份传过去。
-        """
-        env = os.environ.copy()
-        env.setdefault("COROS_EMAIL", os.getenv("COROS_EMAIL", ""))
-        env.setdefault("COROS_PASSWORD", os.getenv("COROS_PASSWORD", ""))
-        env.setdefault("COROS_REGION", os.getenv("COROS_REGION", ""))
+    """Own the lifecycle and serialized JSON-RPC communication of ``coros-mcp serve``.
 
-        # 启动一个独立的进程
-        self.proc = subprocess.Popen(
-            ["coros-mcp", "serve"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-        )
+    The local server is an external, community-maintained integration. FitAgent passes an
+    explicit readonly toolset to the child process and only exposes three read methods below.
+    Authentication happens with the provider CLI before this process is started.
+    """
 
-        """
-        _req_id 是自增计数器，每个请求的 ID 不能重复，
-        这是 MCP 协议的要求。然后立即调用 _initialize() 完成握手。
-        """
+    _RESPONSE_TIMEOUT_SECONDS = 30.0
+
+    def __init__(
+        self,
+        *,
+        process_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
+        command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+        command: tuple[str, ...] = ("coros-mcp", "serve"),
+        sync_command: tuple[str, ...] = ("coros-mcp", "sync"),
+        environment: Mapping[str, str] | None = None,
+        working_directory: str | None = None,
+        response_timeout_seconds: float = _RESPONSE_TIMEOUT_SECONDS,
+    ) -> None:
+        self._process_factory = process_factory
+        self._command_runner = command_runner
+        self._command = command
+        self._sync_command = sync_command
+        self._environment = dict(environment or {})
+        self._working_directory = working_directory
+        self._response_timeout_seconds = response_timeout_seconds
+        self._lock = threading.RLock()
         self._req_id = 0
-        self._initialize()
+        self.proc: subprocess.Popen | None = None
+        self._closed = False
+        self._start_process()
 
-    """
-    MCP 协议规定：客户端必须先在 initialize 时自报家门，
-    服务端才知道你是什么程序。_send("initialize", ...) 
-    发了这个请求，得到一个回应。然后还要发一个 notifications/initialized 通知
-    （不需要等回复），告诉服务端"我准备好了"。这两步少任何一步服务端都不理你。
-    """
+    def _build_environment(self) -> dict[str, str]:
+        """Explicitly propagate Coros settings to the isolated MCP process."""
 
-    def _initialize(self):
+        env = os.environ.copy()
+        for key in ("COROS_EMAIL", "COROS_PASSWORD", "COROS_REGION"):
+            if key not in env:
+                env[key] = os.getenv(key, "")
+        env.update(self._environment)
+        # MCP stdio is UTF-8 JSON. Windows otherwise inherits a GBK console encoding, which
+        # makes the provider CLI/server fail when it emits Chinese text or status symbols.
+        env["PYTHONUTF8"] = "1"
+        return env
+
+    def _start_process(self) -> None:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("Coros MCP 客户端已关闭")
+            self._terminate_process()
+            try:
+                self.proc = self._process_factory(
+                    list(self._command),
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="strict",
+                    env=self._build_environment(),
+                    cwd=self._working_directory,
+                )
+                self._initialize()
+                logger.info("Coros MCP 子进程已启动并完成握手")
+            except Exception:
+                self._terminate_process()
+                raise
+
+    def _ensure_running(self) -> None:
+        if self._closed:
+            raise RuntimeError("Coros MCP 客户端已关闭")
+        if self.proc is None or self.proc.poll() is not None:
+            logger.warning("检测到 Coros MCP 子进程不可用，正在重建连接")
+            self._start_process()
+
+    def _initialize(self) -> None:
         self._send(
             "initialize",
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "fitagent", "version": "1.0.0"},
+                "clientInfo": {"name": "fitagent", "version": "2.1.0"},
             },
+            ensure_running=False,
         )
+        assert self.proc is not None and self.proc.stdin is not None
         notification = {"jsonrpc": "2.0", "method": "notifications/initialized"}
         self.proc.stdin.write(json.dumps(notification) + "\n")
         self.proc.stdin.flush()
 
-    def _send(self, method: str, params: dict | None = None) -> dict:
-        # 1. 进程存活检查
-        if self.proc.poll() is not None:
-            raise RuntimeError(f"coros-mcp 子进程已退出，returncode={self.proc.returncode}")
+    @staticmethod
+    def _readline_in_thread(stdout, output: queue.Queue) -> None:
+        try:
+            output.put(("line", stdout.readline()))
+        except Exception as error:  # pragma: no cover - platform process failure
+            output.put(("error", error))
 
-        self._req_id += 1
-        request = {
-            "jsonrpc": "2.0",
-            "id": self._req_id,
-            "method": method,
-            "params": params or {},
-        }
+    def _read_response_line(self) -> str:
+        """Read one stdio line with a portable timeout.
 
-        # 2. 写入 stdin
-        self.proc.stdin.write(json.dumps(request) + "\n")
-        self.proc.stdin.flush()
+        A timeout makes the current stream unsafe for further protocol traffic, so the caller
+        tears the process down before accepting another request. This avoids stale responses
+        being accidentally consumed by the next request.
+        """
 
-        # 3. 读 stdout（带 30s 超时，防止子进程崩溃时永久阻塞）
-        ready, _, _ = select.select([self.proc.stdout], [], [], 30.0)
-        if not ready:
-            raise RuntimeError(f"coros-mcp 响应超时（30s），method={method}")
-        if self.proc.poll() is not None:
-            raise RuntimeError(f"coros-mcp 子进程在响应前退出，returncode={self.proc.returncode}")
+        assert self.proc is not None and self.proc.stdout is not None
+        output: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
+        reader = threading.Thread(
+            target=self._readline_in_thread,
+            args=(self.proc.stdout, output),
+            daemon=True,
+            name="coros-mcp-stdout-reader",
+        )
+        reader.start()
+        try:
+            kind, payload = output.get(timeout=self._response_timeout_seconds)
+        except queue.Empty as error:
+            self._terminate_process()
+            raise RuntimeError("coros-mcp 响应超时，连接已重置，请稍后重试") from error
+        if kind == "error":
+            raise RuntimeError(f"读取 coros-mcp 响应失败：{payload}")
+        line = str(payload).strip()
+        if not line:
+            return_code = self.proc.poll() if self.proc else "unknown"
+            raise RuntimeError(f"coros-mcp 未返回响应，returncode={return_code}")
+        return line
 
-        response = json.loads(self.proc.stdout.readline())
-        if "error" in response:
-            raise RuntimeError(response["error"].get("message", str(response["error"])))
-        return response.get("result", {})
+    def _send(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        ensure_running: bool = True,
+    ) -> dict[str, Any]:
+        """Send one JSON-RPC request and wait for its matching response under a process lock."""
 
-    # 对_send的二次封装
-    def _call_tool(self, name: str, arguments: dict) -> dict:
+        with self._lock:
+            if ensure_running:
+                self._ensure_running()
+            if self.proc is None or self.proc.poll() is not None:
+                raise RuntimeError("coros-mcp 子进程不可用")
+            if self.proc.stdin is None:
+                raise RuntimeError("coros-mcp stdin 不可用")
+
+            self._req_id += 1
+            request_id = self._req_id
+            request = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+                "params": params or {},
+            }
+            try:
+                self.proc.stdin.write(json.dumps(request) + "\n")
+                self.proc.stdin.flush()
+            except (BrokenPipeError, OSError) as error:
+                self._terminate_process()
+                raise RuntimeError("coros-mcp 连接已断开，连接已重置") from error
+
+            deadline = time.monotonic() + self._response_timeout_seconds
+            while time.monotonic() < deadline:
+                response = json.loads(self._read_response_line())
+                if response.get("id") != request_id:
+                    # JSON-RPC notifications do not have an id. Do not let them corrupt an
+                    # ordered request/response exchange, but preserve observability.
+                    logger.debug("忽略 Coros MCP 非匹配消息：method=%s", response.get("method", ""))
+                    continue
+                if "error" in response:
+                    error = response["error"]
+                    raise RuntimeError(error.get("message", str(error)))
+                result = response.get("result", {})
+                return result if isinstance(result, dict) else {}
+            self._terminate_process()
+            raise RuntimeError("coros-mcp 未返回匹配响应，连接已重置")
+
+    def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         result = self._send("tools/call", {"name": name, "arguments": arguments})
         content = result.get("content", [])
         if content and isinstance(content[0], dict):
-            # result.content[0].text → 这才是 JSON 字符串
-            return json.loads(content[0].get("text", "{}"))
+            text = content[0].get("text", "{}")
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                if parsed.get("error"):
+                    raise RuntimeError(f"coros-mcp 工具 {name} 返回上游错误")
+                return parsed
         return {}
 
-    # 过去4周的 HRV、静息心率、训练负荷、VO2max
-    def get_daily_metrics(self, weeks: int = 4) -> list:
+    def get_daily_metrics(self, weeks: int = 4) -> list[dict[str, Any]]:
         return self._call_tool("get_daily_metrics", {"weeks": weeks}).get("records", [])
 
-    # 过去4周的深睡、浅睡、REM时长
-    def get_sleep_data(self, weeks: int = 4) -> list:
+    def get_sleep_data(self, weeks: int = 4) -> list[dict[str, Any]]:
         return self._call_tool("get_sleep_data", {"weeks": weeks}).get("records", [])
 
-    # 这个时间段的运动记录
-    def list_activities(self, start_day: str, end_day: str, size: int = 50) -> dict:
+    def list_activities(self, start_day: str, end_day: str, size: int = 50) -> dict[str, Any]:
         return self._call_tool(
             "list_activities",
-            {
-                "start_day": start_day,
-                "end_day": end_day,
-                "size": size,
-            },
+            {"start_day": start_day, "end_day": end_day, "size": size},
         )
 
-    def close(self):
-        if self.proc:
-            self.proc.terminate()
-            self.proc.wait(timeout=5)
+    def sync_cache(self, start_day: str, end_day: str) -> dict[str, Any]:
+        """Synchronize the provider's private cache before serving its MCP read tools.
+
+        The selected community MCP intentionally serves data through a local SQLite cache.
+        Synchronization is explicit and user-triggered by the fitness API, never by an Agent
+        tool call. The persistent stdio process is stopped first so a single writer owns the
+        cache during the external fetch.
+        """
+
+        with self._lock:
+            self._terminate_process()
+            command = [*self._sync_command, "--from", start_day, "--to", end_day]
+            try:
+                result = self._command_runner(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=self._build_environment(),
+                    cwd=self._working_directory,
+                    timeout=self._response_timeout_seconds * 4,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                raise RuntimeError("coros-mcp 数据同步超时，请稍后重试") from error
+            except OSError as error:
+                raise RuntimeError("无法启动 coros-mcp 数据同步命令") from error
+            if result.returncode != 0:
+                # Provider output can contain upstream implementation details. Keep it out of
+                # API responses and logs; the user can diagnose via `coros-mcp auth-status`.
+                raise RuntimeError("coros-mcp 数据同步失败，请检查认证状态后重试")
+            try:
+                summary = json.loads(result.stdout.strip() or "{}")
+            except json.JSONDecodeError:
+                logger.warning("Coros MCP 缓存同步未返回可解析摘要")
+                return {}
+            return summary if isinstance(summary, dict) else {}
+
+    def _terminate_process(self) -> None:
+        process, self.proc = self.proc, None
+        if process is None:
+            return
+        try:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        except OSError:
+            pass
+        finally:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                try:
+                    if stream:
+                        stream.close()
+                except OSError:
+                    pass
+
+    def close(self) -> None:
+        """Explicitly release the subprocess; a closed client cannot silently restart."""
+
+        with self._lock:
+            self._closed = True
+            self._terminate_process()

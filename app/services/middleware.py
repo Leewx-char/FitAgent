@@ -196,6 +196,7 @@ def log_before_model(
 def report_prompt_switch(request: ModelRequest):  # 动态切换提示词
     is_report = request.runtime.context.get("report", False)
     session_facts = request.runtime.context.get("session_facts", {})
+    session_summary = request.runtime.context.get("session_summary", "")
 
     facts_prompt = ""
     if session_facts:
@@ -204,6 +205,13 @@ def report_prompt_switch(request: ModelRequest):  # 动态切换提示词
             "\n\n已知会话事实：\n"
             + "\n".join(fact_lines)
             + "\n请优先使用这些历史事实回答，不要忽略用户之前已经明确提到的信息。"
+        )
+
+    if session_summary:
+        facts_prompt += (
+            "\n\n"
+            + session_summary
+            + "\n这是短期会话状态，不是已确认的跨会话记忆；不能据此声称用户已授权保存。"
         )
 
     if is_report:  # 是报告生成场景，返回报告生成提示词内容

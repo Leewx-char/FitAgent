@@ -28,6 +28,14 @@
 | VL 调用 | ChatTongyi (qwen-vl-plus) | 通义千问 VL 中文识别最佳 |
 | PDF 处理 | 文字≥200字走 LLM，<200走 VL | 平衡速度与准确性 |
 | 前端框架 | Naive UI（非 Element Plus） | 配色 #42A5F5，清新极简风 |
+| 长期记忆 | 候选—用户确认—按需读取，不做聊天全文向量化 | 健康偏好和伤病信息错误长期化的代价高；保留来源、撤销、替换和过期能力 |
+| 长会话上下文 | 最近 10 轮（20 条）原文 + 可重建确定性摘要 | 控制 token 成本，同时不删除审计原文，也不把摘要伪装成长记忆 |
+| 周计划生成 | 结构化 JSON + 确定性安全策略 + RAG 证据 | 不能只靠 prompt 限制模型强度；把可检验约束放在 Pydantic 和服务层 |
+| Coros 活动幂等 | `(user_id, data_type, external_id)` | 旧的日期级唯一键会覆盖同一天多次活动 |
+| Coros MCP 传输 | 社区 `cygnusb/coros-mcp` 的本地 stdio 串行适配器 | 与现有读取工具契约一致；固定提交并隔离至 `.tools`，不让 FastMCP 传递依赖污染 FastAPI 服务 |
+| Coros MCP 权限 | 强制 `readonly` + 隐藏认证工具 | FitAgent 仅同步设备数据；不把写计划、认证或令牌能力暴露给模型工具调用 |
+| Coros 缓存隔离 | Provider Runner 在 import 前重定向社区 SQLite cache | 避免 Windows 用户目录的 `.config/coros-mcp` 文件/目录冲突；不篡改令牌依赖的用户 profile |
+| Coros 部分同步 | 可用源落库 + `partial` 契约 | 移动端睡眠接口暂不可用时，不因单一源失败回滚日指标/活动；正常的睡眠空数组仍是完整成功 |
 
 ---
 
@@ -72,10 +80,20 @@
 - 通用知识问题的直接 RAG 路径、SSE 证据卡片、启动期 BM25 预热
 - Agent 和 HTTP 访问 MySQL 的统一事务边界
 
+### 阶段6：用户可控个性化闭环 ✅
+
+- 会话记忆从“最近 20 轮全文截断”改为“最近 10 轮（20 条）原文 + `session_summaries` 短期状态”；状态仅从用户消息确定性提取，assistant 输出不可信。
+- 新增 `memory_facts`：聊天产生待确认候选，用户确认后才供 Agent 的只读工具使用；支持来源消息、替换关系、撤销和过期。
+- 新增训练计划页与 `training_plans` / `training_feedbacks`：显式生成、结构化周计划、单日反馈幂等更新。
+- 新增 `TrainingSafetyPolicy`：伤病、训练负荷比、睡眠、疲劳和疼痛/RPE 触发强度降级；计划还校验 7 天覆盖、训练天数、动作强度和证据 ID。
+- 运动数据唯一键迁移到 external id；同日多个 Coros 活动不再互相覆盖。
+- Coros 本地 MCP 客户端重写为串行 JSON-RPC、Windows 可用超时和失败后重建进程；启动命令纳入环境配置。
+- 社区 `cygnusb/coros-mcp` 固定到 `71d594c`，安装策略为隔离 `.tools` 虚拟环境；认证改为用户主动 CLI 操作，后端强制只读工具集。
+
 ### 后续演进原则
 
 - 先建立中文检索评测集，再针对召回、排序或生成中的具体短板演进；
-- 多 Agent、对话摘要、自动写画像均需要实际任务量、评测或安全机制作为触发证据；
+- 多 Agent、自动写画像均需要实际任务量、评测或安全机制作为触发证据；会话摘要已以可重建、用户消息限定的最小形式落地；
 - 备份恢复、集群和定时清理在进入多环境或出现明确 RPO/RTO、数据增长要求后再实施。
 
 详见 [04 - Agent 编排与工具调用](./refactoring/04-llm-agent-conversation.md) 与 [05 - 数据治理与运行边界](./refactoring/05-data-governance.md)。
@@ -142,6 +160,13 @@ health_data       # 从文档提取的健康指标（10个固定字段）
 | GET | `/api/sessions/:id/messages` | 会话消息 | 是 |
 | POST | `/api/chat` | SSE 流式聊天 | 是 |
 | POST | `/api/upload/health-doc` | 上传健康文档 | 是 |
+| GET | `/api/memory` | 查询用户记忆，默认隐藏撤销项 | 是 |
+| POST | `/api/memory` | 用户主动新增已确认记忆 | 是 |
+| PATCH/DELETE | `/api/memory/:id` | 确认或撤销记忆 | 是 |
+| GET | `/api/training-plans/current` | 查询当前周生效计划 | 是 |
+| POST | `/api/training-plans/generate` | 生成受安全策略约束的周计划 | 是 |
+| POST | `/api/training-plans/:id/feedback` | 写入或更新某日执行反馈 | 是 |
+| POST | `/api/fitness/sync` | 主动同步 Coros 数据 | 是 |
 
 ---
 

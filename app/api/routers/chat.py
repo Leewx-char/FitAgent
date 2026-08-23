@@ -21,6 +21,7 @@ from app.models import Session as SessionModel, Message, User
 from app.services.react_agent import ReactAgent
 from app.services.agent_trace import AgentTrace
 from app.services.session_facts import extract_session_facts
+from app.services.memory_service import MemoryService, RECENT_MESSAGE_LIMIT
 from app.repositories.agent_trace_repository import AgentTraceRepository
 from app.core.database import get_db_session
 from app.utils.logger_handler import logger
@@ -66,6 +67,7 @@ async def sse_generator(
     session_id: str,
     user_message: str,
     current_user: User,
+    session_summary: str = "",
 ):
     # 获取当前事件循环
     loop = asyncio.get_event_loop()
@@ -85,7 +87,15 @@ async def sse_generator(
     user_id = current_user.id
     city = session_facts.get("city", "") or ""
     trace = AgentTrace()
-    gen = iter(agent.execute_stream(messages, user_id=user_id, city=city, trace=trace))
+    gen = iter(
+        agent.execute_stream(
+            messages,
+            user_id=user_id,
+            city=city,
+            session_summary=session_summary,
+            trace=trace,
+        )
+    )
     stream_failed = False
     try:
         while True:
@@ -210,30 +220,47 @@ async def chat(
         db.add(new_session)
         db.commit()
     # 2. 存用户消息到数据库
-    db.add(
-        Message(
-            session_id=session_id,
-            role="user",
-            content=payload.message,
-        )
+    user_message_record = Message(session_id=session_id, role="user", content=payload.message)
+    db.add(user_message_record)
+    db.commit()
+    db.refresh(user_message_record)
+
+    # 只从本条用户消息生成“待确认”候选；模型回答无法进入这一写入链路。
+    MemoryService().propose_from_user_message(
+        db,
+        user_id=current_user.id,
+        message=user_message_record,
     )
     db.commit()
     # 3. 从数据库加载历史消息，拼接新消息
     history_messages = (
         db.query(Message)
         .filter(Message.session_id == session_id)
-        .order_by(Message.created_at)
+        .order_by(Message.created_at, Message.id)
         .all()
     )
     all_messages = [{"role": m.role, "content": m.content} for m in history_messages]
-    # 滑动窗口：只保留最近 20 轮（40 条消息），防止长对话 token 爆炸
-    MAX_ROUNDS = 20
-    messages = (
-        all_messages[-(MAX_ROUNDS * 2) :] if len(all_messages) > MAX_ROUNDS * 2 else all_messages
+    # 最近 10 轮（20 条）原文 + 可审计短期状态，避免全量历史进入模型上下文。
+    recent_message_limit = RECENT_MESSAGE_LIMIT
+    session_summary = MemoryService().refresh_session_summary(
+        db,
+        session_id=session_id,
+        messages=history_messages,
+        recent_message_limit=recent_message_limit,
     )
+    db.commit()
+    messages = all_messages[-recent_message_limit:]
     # 4. 流式响应
     return StreamingResponse(
-        sse_generator(agent, messages, db, session_id, payload.message, current_user),
+        sse_generator(
+            agent,
+            messages,
+            db,
+            session_id,
+            payload.message,
+            current_user,
+            session_summary,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

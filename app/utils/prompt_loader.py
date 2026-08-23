@@ -45,5 +45,19 @@ def load_health_extract_prompts():
         raise e
 
 
+def load_training_plan_prompt() -> str:
+    """Load the schema-bound prompt used solely for weekly-plan JSON generation."""
+
+    try:
+        prompt_path = get_abs_path(get_prompts_config()["training_plan_prompt_path"])
+        return open(prompt_path, "r", encoding="utf-8").read()
+    except KeyError as error:
+        logger.error("[load_training_plan_prompt] prompts.yml 缺少训练计划提示词路径")
+        raise error
+    except Exception as error:
+        logger.error("[load_training_plan_prompt]读取训练计划提示词失败：%s", error)
+        raise
+
+
 if __name__ == "__main__":
     print(load_system_prompts())

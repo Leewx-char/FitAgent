@@ -1,0 +1,94 @@
+<title>FitAgent 端到端阅读路线：从用户动作追到数据与测试</title>
+<callout emoji="📚" background-color="light-blue" border-color="blue"><p>不要从 models.py 或全部 Router 开始通读。本页按用户动作组织阅读：每条链路都给出入口、依次经过的文件、持久化点、验证方式和你要讲清楚的结论。</p></callout>
+<h1 seq="auto">阅读总原则</h1>
+<ol><li>从页面或 src/api/ 找到 HTTP 动作和 API 契约。</li><li>在 Router 确认鉴权、输入 Schema、事务/SSE 边界。</li><li>进入 Service 理解业务决策，再看 Repository/Adapter 的第三方细节。</li><li>回到 models.py 与 Alembic 确认状态怎样落库；最后阅读同名测试确认不变量。</li><li>每段代码都用“五问”：谁调用？输入从哪来？做何种决策？写到哪里？失败如何表现？</li></ol>
+<h1 seq="auto">链路 A：通用问题的 Direct RAG</h1>
+<whiteboard type="mermaid">
+flowchart LR
+  A[Chat.vue sendMessage] --> B[chat.py chat]
+  B --> C[写 User Message / 记忆候选]
+  C --> D[ReactAgent.execute_stream]
+  D --> E{_should_use_direct_rag}
+  E --> F[_execute_direct_rag]
+  F --> G[RagSummarizeService.build_context]
+  G --> H[VectorStore + BM25]
+  H --> I[RRF / 证据]
+  I --> J[模型流式生成]
+  J --> K[sse_generator / SSE 四类事件 + DONE]
+  K --> L[Chat.vue 增量渲染]
+  K --> M[保存 assistant / AgentRun]
+</whiteboard>
+<table><thead><tr><th background-color="light-gray"><p>按顺序读</p></th><th background-color="light-gray"><p>要确认什么</p></th></tr></thead><tbody><tr><td><p>frontend/src/views/Chat.vue：sendMessage</p></td><td><p>JWT、message、session_id 如何传出；ReadableStream 如何拆 SSE。</p></td></tr><tr><td><p>app/api/routers/chat.py：chat</p></td><td><p>会话合法性、用户消息、记忆候选、历史/摘要和 StreamingResponse 的边界。</p></td></tr><tr><td><p>chat.py：sse_generator</p></td><td><p>如何将同步生成器放进 executor，如何分别发 tool/evidence/text/error，正常结束如何发送 [DONE]，以及何时落库。</p></td></tr><tr><td><p>react_agent.py</p></td><td><p>为什么“深蹲前怎样热身”不需要个人化工具调用。</p></td></tr><tr><td><p>rag_service.py</p></td><td><p>查询规划、双路检索、RRF、去重/重排、RagContext 与 evidence cards。</p></td></tr></tbody></table>
+<p><b>验证：</b>运行 test_chat.py、test_direct_rag_router.py、test_online_rag_pipeline.py。完成后能用一分钟讲清：用户问题先持久化，再产生待确认候选；通用问题一次混合检索、一次流式回答；证据是真实检索结果；流结束再写 assistant 与安全轨迹。</p>
+<h1 seq="auto">链路 B：个性化问题进入 Agent</h1>
+<whiteboard type="mermaid">
+flowchart TB
+  Q[结合我的膝盖情况和近期训练] --> RA[ReactAgent]
+  RA --> CTX[run_context: user/session/history/city/budget]
+  CTX --> LG[LangGraph ReAct]
+  LG --> P[画像工具]
+  LG --> M[已确认记忆工具]
+  LG --> F[FitnessSnapshot 工具]
+  LG --> R[RAG 工具]
+  LG --> W[天气工具]
+  LG --> AUD[中间件预算/脱敏轨迹]
+  AUD --> SSE[SSE 输出]
+</whiteboard>
+<p>阅读 agent_tools.py 的工具定义与 middleware.py 的预算逻辑，而不是先研究 LangGraph 内部。特别检查：候选/撤销记忆不能被 Agent 读取；原始 Coros payload 不进 prompt；天气失败可熔断降级；轨迹不保存原问题和工具参数值。</p>
+<h1 seq="auto">链路 C：从知识文件到线上证据</h1>
+<ol><li>从 config/knowledge_sources.yml 与 data/ 了解允许哪些知识源。</li><li>读 knowledge_preflight.py 和 KnowledgeIndexer.preflight，先理解“为什么构建前必须预检”。</li><li>读 KnowledgeIndexer.build_and_activate：加载、清洗、标题切分、parent/child、embedding、revision、BM25、校验、alias。</li><li>读 vector_repository.py：外部 Qdrant 调用为何隔离、alias 如何保证发布安全。</li><li>回到 rag_service.py 的 retrieve/build_context，理解线上只读当前 rag_active。</li></ol>
+<p><b>验证：</b>test_markdown_knowledge_indexer.py、test_bm25_retriever.py、test_rag_service.py、test_vector_repository.py、test_retrieval_evaluator.py；知识源更新时先运行 <code>python -m app.services.knowledge_preflight</code>，通过再显式构建索引。</p>
+<h1 seq="auto">链路 D：记忆的用户确认闭环</h1>
+<whiteboard type="mermaid">
+sequenceDiagram
+  participant Chat as 聊天请求
+  participant MS as MemoryService
+  participant DB as memory_facts
+  participant UI as Memory.vue
+  participant Agent as 后续 Agent
+  Chat->>MS: propose_from_user_message
+  MS->>DB: proposed 候选
+  UI->>DB: PATCH confirmed 或 DELETE/revoked
+  Agent->>MS: get_confirmed_memories
+  MS-->>Agent: confirmed 且未过期，最多 6 条
+</whiteboard>
+<p>按 memory_service.py → session_facts.py → routers/memory.py → Memory.vue → test_memory.py / test_session_facts.py 阅读。重点是确认新值会处理 supersedes_id 指向的旧值；“摘要”不是长期记忆；用户是写权限的最后拥有者。</p>
+<h1 seq="auto">链路 E：周训练计划与执行反馈</h1>
+<ol><li>从 TrainingPlan.vue 的 generate 和 submitFeedback 找到两个显式 API。</li><li>在 routers/training_plans.py 确认周一校验、当前 user 隔离和序列化。</li><li>进入 TrainingPlanService.generate：加载 profile、近四周 snapshot、最近反馈，先评估 TrainingSafetyPolicy。</li><li>查看 _retrieve_evidence、模型 JSON 解析和 _validate_plan；模型不合格时不能持久化。</li><li>查看 record_feedback：同一 (plan_id, day_of_week) 的重复提交应更新而不是新增。</li></ol>
+<p><b>验证：</b>test_training_safety.py、test_training_plans.py、test_fitness_summary.py。口述结论必须是“先规则，后生成，再校验”，不能说“通过 prompt 保证安全”。</p>
+<h1 seq="auto">链路 F：主动 Coros 同步与数据面板</h1>
+<ol><li>从 Dashboard.vue 的 handleSync/loadData 开始，确认同步由用户点击而不是 Agent 自动发起。</li><li>读 routers/fitness.py：sync_fitness、_record_external_id、_upsert_fitness 和 partial 返回。</li><li>读 CorosClient：stdio 请求必须串行；超时后为什么重建子进程。</li><li>读 coros_mcp_runner.py：为什么只重定向缓存、而不影响系统令牌。</li><li>读 FitnessSnapshot：为什么训练/Agent 只拿聚合特征。</li></ol>
+<p><b>验证：</b>test_coros_client.py、test_fitness.py、test_fitness_summary.py。测试同日多活动、空睡眠成功、单源 partial 和超时重连是这条链路最重要的规格。</p>
+<h1 seq="auto">链路 G：健康文档提取与用户确认</h1>
+<p>这条链路与首次建档分离：Onboarding.vue 只收集基础画像；健康文件的上传、识别结果编辑与最终确认都由 Chat.vue 承担。识别不构成医疗诊断，取消、关闭或存在未解决冲突时均不写入画像。</p>
+<whiteboard type="mermaid">
+sequenceDiagram
+  participant UI as Chat.vue
+  participant U as upload.py
+  participant P as doc_parser.py
+  participant Profile as profile.py
+  participant DB as Profile.health_data
+  UI->>U: POST /api/upload/health-doc (file)
+  U->>P: handle_upload / parse_health_doc
+  P-->>UI: metrics + conflicts + messages
+  UI->>UI: 用户编辑并解决冲突
+  UI->>Profile: PUT /api/profile (health_data)
+  Profile->>DB: 仅确认后写入
+</whiteboard>
+<p><b>按顺序读：</b><code>Chat.vue</code> 的 <code>handleFileSelect</code> → <code>upload.py</code> 的 <code>upload_health_doc</code> → <code>doc_parser.py</code> 的 <code>parse_health_doc</code> → <code>Chat.vue</code> 的 <code>confirmHealthData</code> → <code>profile.py</code>。这条链路的关键不变量是“提取与写入分离”。</p>
+<h1 seq="auto">七天学习安排</h1>
+<table><thead><tr><th background-color="light-gray"><p>天</p></th><th background-color="light-gray"><p>主题</p></th><th background-color="light-gray"><p>可口述的成果</p></th></tr></thead><tbody><tr><td><p>Day 1</p></td><td><p>总览 + Direct RAG</p></td><td><p>3 分钟讲一次 SSE 聊天和真实证据。</p></td></tr><tr><td><p>Day 2</p></td><td><p>Agent 工具与轨迹</p></td><td><p>说明何时进入 Agent、工具为何受限。</p></td></tr><tr><td><p>Day 3</p></td><td><p>离线/在线 RAG</p></td><td><p>说明 revision、alias、BM25、RRF、证据卡片。</p></td></tr><tr><td><p>Day 4</p></td><td><p>三层记忆</p></td><td><p>说明候选、确认、撤销和防污染。</p></td></tr><tr><td><p>Day 5</p></td><td><p>训练计划</p></td><td><p>说明规则先于模型、Pydantic/业务校验。</p></td></tr><tr><td><p>Day 6</p></td><td><p>Coros/MCP</p></td><td><p>说明 stdio 串行、缓存隔离、partial、external_id。</p></td></tr><tr><td><p>Day 7</p></td><td><p>演示与面试</p></td><td><p>按原始 interview 文档进行项目演练。</p></td></tr></tbody></table>
+<h1 seq="auto">陌生代码的回溯关系图</h1>
+<whiteboard type="mermaid">
+flowchart LR
+  U[一个用户动作] --> P[前端页面 / src/api]
+  P --> R[FastAPI Router]
+  R --> S[Service 业务决策]
+  S --> E[Repository / Adapter]
+  E --> D[(数据库或外部系统)]
+  S --> T[同名测试]
+  T --> G[必须保持的行为门禁]
+  D --> R
+</whiteboard>
+<p>当你只知道一个现象或页面时，沿箭头向下找真实写入/外部调用，再从测试反向确认不变量；不要因为看到了 ORM 或 SDK 就跳过 Service 的业务决策。</p>
+<callout emoji="🏁" background-color="light-green" border-color="green"><p>完成标准不是“看过多少文件”，而是能从任一用户动作画出：前端 → API → Service → 外部/数据库 → 响应的完整箭头，并指出至少一个安全或一致性门禁。</p></callout>

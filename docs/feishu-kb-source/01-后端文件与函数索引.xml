@@ -1,0 +1,84 @@
+<title>FitAgent 后端：文件、类与关键函数索引</title>
+<callout emoji="🗂️" background-color="light-blue" border-color="blue"><p>范围：app/、根配置、数据库迁移和测试。这里忽略私有小细节，但保留每个可执行模块的职责与主要入口；类方法在括号内列出。</p></callout>
+<h1 seq="auto">后端阅读顺序</h1>
+<whiteboard type="mermaid">
+flowchart LR
+  MAIN[main.py 应用组装] --> ROUTER[api/routers HTTP 入口]
+  ROUTER --> SERVICE[services 业务编排]
+  SERVICE --> REPO[repositories / adapter]
+  REPO --> DATA[(MySQL / Qdrant / MCP)]
+  CORE[core 配置、认证、依赖] -.注入.-> ROUTER
+  SCHEMA[schemas 请求/响应契约] -.约束.-> ROUTER
+  MODEL[models ORM] -.映射.-> DATA
+</whiteboard>
+<h1 seq="auto">应用根与核心基础设施</h1>
+<table><thead><tr><th background-color="light-gray"><p>文件</p></th><th background-color="light-gray"><p>关键函数 / 类</p></th><th background-color="light-gray"><p>职责</p></th></tr></thead><tbody>
+<tr><td><p>app/main.py</p></td><td><p>lifespan；request_id_middleware；health_check；rag_health_check</p></td><td><p>创建 FastAPI、挂载路由/CORS/限流/异常处理；启动时校验运行环境，关闭时释放 Coros 子进程；提供健康和 RAG 就绪检查。</p></td></tr>
+<tr><td><p>app/core/settings.py</p></td><td><p>Settings(database_url, coros_mcp_command_parts, project_root)；get_settings</p></td><td><p>集中读取环境变量；解析 JSON argv，生成 MySQL URL 和项目内 Coros 缓存路径。</p></td></tr>
+<tr><td><p>app/core/database.py</p></td><td><p>Base；ensure_database_exists；get_db_session</p></td><td><p>创建 SQLAlchemy engine/session；按配置创建空库；上下文管理器负责 commit/rollback/close。</p></td></tr>
+<tr><td><p>app/core/auth.py</p></td><td><p>hash_password；verify_password；create_access_token；decode_access_token；get_current_user</p></td><td><p>bcrypt 密码哈希和 JWT 签发/解析；把 Bearer token 解析为当前 User。</p></td></tr>
+<tr><td><p>app/core/deps.py</p></td><td><p>get_db；get_agent；get_coros；close_coros</p></td><td><p>FastAPI 依赖注入边界；管理 ReactAgent 与 CorosClient 单例生命周期。</p></td></tr>
+<tr><td><p>app/core/request_context.py</p></td><td><p>模块级 ContextVar</p></td><td><p>承载 request_id，供日志与审计关联同一次请求。</p></td></tr>
+</tbody></table>
+<h1 seq="auto">领域模型与 API 契约</h1>
+<table><thead><tr><th background-color="light-gray"><p>文件</p></th><th background-color="light-gray"><p>主要内容</p></th><th background-color="light-gray"><p>实现的功能</p></th></tr></thead><tbody>
+<tr><td><p>app/models.py</p></td><td><p>User、UserProfile、Session、Message、AgentRun、AgentToolCall、FitnessData、SessionSummary、MemoryFact、TrainingPlan、TrainingFeedback</p></td><td><p>SQLAlchemy ORM。覆盖账号/画像、会话消息、脱敏 Agent 轨迹、Coros 原始记录、三层记忆、周计划和每日反馈。</p></td></tr>
+<tr><td><p>app/schemas.py</p></td><td><p>ApiResponse；认证/会话/消息/画像/健康数据/运动同步/记忆/计划的 Pydantic 模型</p></td><td><p>API 输入输出契约和业务前置校验。例如 FitnessSyncRequest 验证日期范围，PlanDay 验证休息日，WeeklyTrainingPlan 验证周一至周日完整覆盖。</p></td></tr>
+<tr><td><p>app/api/response.py</p></td><td><p>success_response；error_response</p></td><td><p>把非 SSE 接口统一为 <code>{code, messages, data}</code>，code 与 HTTP 状态一致。</p></td></tr>
+<tr><td><p>app/api/exception_handlers.py</p></td><td><p>http_exception_handler；request_validation_exception_handler；integrity_error_handler；sqlalchemy_error_handler；global_exception_handler；rate_limit_exception_handler；register_exception_handlers</p></td><td><p>把参数、约束、数据库、限流和未预期异常统一转换为安全响应，不把内部堆栈暴露给前端。</p></td></tr>
+</tbody></table>
+<h1 seq="auto">HTTP Router：只负责边界，不承载算法</h1>
+<table><thead><tr><th background-color="light-gray"><p>文件 / 路径</p></th><th background-color="light-gray"><p>函数</p></th><th background-color="light-gray"><p>职责</p></th></tr></thead><tbody>
+<tr><td><p>routers/auth.py<br/>/auth</p></td><td><p>register；login；get_me</p></td><td><p>注册、OAuth2 表单登录、读取当前用户；调用 core.auth，不在 Router 写密码/JWT 细节。</p></td></tr>
+<tr><td><p>routers/sessions.py<br/>/sessions</p></td><td><p>list_sessions；create_session；delete_session；update_session</p></td><td><p>会话列表、创建、删除和改标题，所有查询按当前 user_id 隔离。</p></td></tr>
+<tr><td><p>routers/messages.py<br/>/sessions/{id}/messages</p></td><td><p>list_messages</p></td><td><p>读取一个已授权会话的历史消息，给前端切换会话使用。</p></td></tr>
+<tr><td><p>routers/chat.py<br/>/chat</p></td><td><p>_redact_sensitive；_rate_limit_key；sse_generator；chat</p></td><td><p>聊天主入口：持久化 user 消息、提出记忆候选、刷新摘要、消费 Agent 生成器并把 text/tool/evidence/error 输出为 SSE；正常结束额外发送 [DONE]，流结束后保存 assistant 消息和轨迹。</p></td></tr>
+<tr><td><p>routers/profile.py<br/>/profile</p></td><td><p>get_profile；create_profile；update_profile</p></td><td><p>用户健身画像 CRUD，包含目标、经验、伤病、饮食与已确认健康字段。</p></td></tr>
+<tr><td><p>routers/upload.py<br/>/upload/health-doc</p></td><td><p>upload_health_doc</p></td><td><p>接收 PDF/图片，交给 doc_parser；返回可编辑的健康指标候选，绝不直接作医学结论。</p></td></tr>
+<tr><td><p>routers/fitness.py<br/>/fitness</p></td><td><p>_record_external_id；_upsert_fitness；sync_fitness；get_daily_data；get_sleep_data；get_activities</p></td><td><p>主动同步 Coros 近 7 天或指定范围；为日指标/睡眠/活动计算稳定 external_id 并幂等写库；同时提供读接口。</p></td></tr>
+<tr><td><p>routers/memory.py<br/>/memory</p></td><td><p>_serialize；list_memories；create_memory；update_memory；revoke_memory</p></td><td><p>展示候选/已确认/撤销记忆；用户可主动创建 confirmed 事实，或确认/撤销候选。</p></td></tr>
+<tr><td><p>routers/training_plans.py<br/>/training-plans</p></td><td><p>_monday；_serialize；get_current_plan；generate_plan；record_feedback</p></td><td><p>显式读取/生成周计划并记录当日反馈。周起始日限定为周一；业务编排下沉到 TrainingPlanService。</p></td></tr>
+<tr><td><p>routers/agent_runs.py<br/>/sessions/{id}/agent-runs</p></td><td><p>list_agent_runs</p></td><td><p>读取会话的执行轨迹，供排障/解释使用；不返回用户原文或工具参数值。</p></td></tr>
+</tbody></table>
+<h1 seq="auto">Service：RAG、Agent 与业务规则的真正入口</h1>
+<table><thead><tr><th background-color="light-gray"><p>文件</p></th><th background-color="light-gray"><p>关键类 / 函数</p></th><th background-color="light-gray"><p>职责</p></th></tr></thead><tbody>
+<tr><td><p>services/factory.py</p></td><td><p>get_chat_model；get_embedding_model；get_vl_model</p></td><td><p>按 Settings 和 YAML 工厂化创建 DashScope 聊天、Embedding 与视觉模型。</p></td></tr>
+<tr><td><p>services/react_agent.py</p></td><td><p>ReactAgent(_should_use_direct_rag, _execute_direct_rag, execute_stream)</p></td><td><p>请求分流。普通知识问题一次检索一次生成；个性化问题进入 LangGraph ReAct，并发出统一事件流。</p></td></tr>
+<tr><td><p>services/agent_tools.py</p></td><td><p>rag_summarize；get_user_profile；get_confirmed_memories；get_fitness_summary；get_weather；CircuitBreaker；build_evidence_cards</p></td><td><p>Agent 的显式工具白名单。RAG、画像、记忆、摘要均受限读取；外部天气具备重试与熔断。</p></td></tr>
+<tr><td><p>services/middleware.py</p></td><td><p>monitor_tool；log_before_model；report_prompt_switch</p></td><td><p>LangGraph 中间件：工具预算、递归限制、参数形状审计、提示词切换记录。</p></td></tr>
+<tr><td><p>services/agent_trace.py</p></td><td><p>AgentToolTrace；AgentTrace(record_tool, finish)</p></td><td><p>在内存中收集每轮执行路径、耗时、工具名和安全元数据。</p></td></tr>
+<tr><td><p>repositories/agent_trace_repository.py</p></td><td><p>AgentTraceRepository(save, list_for_session)</p></td><td><p>将 AgentRun / AgentToolCall 原子写入数据库，并按会话读取。</p></td></tr>
+<tr><td><p>services/memory_service.py</p></td><td><p>MemoryCandidate；MemoryService(extract_candidates, propose_from_user_message, confirm, revoke, refresh_session_summary)</p></td><td><p>三层记忆生命周期、候选去重/替换、用户确认和会话摘要；只信任 user 消息。</p></td></tr>
+<tr><td><p>services/session_facts.py</p></td><td><p>extract_session_facts</p></td><td><p>从较早 user 消息确定性提取训练目标、地点等轻量短期状态，忽略 assistant/tool。</p></td></tr>
+<tr><td><p>services/training_plan_service.py</p></td><td><p>TrainingSafetyPolicy.assess；TrainingPlanService(generate, _validate_plan, record_feedback)</p></td><td><p>先计算强度上限，再 RAG 取证、调用模型、校验 JSON，并用 (plan_id, day_of_week) 幂等写反馈。</p></td></tr>
+<tr><td><p>services/fitness_insights.py</p></td><td><p>FitnessSnapshot(has_data, to_prompt)；load_fitness_snapshot</p></td><td><p>把原始设备记录聚合成近四周的受限快照，不把无边界 payload 塞进 prompt。</p></td></tr>
+</tbody></table>
+<h1 seq="auto">RAG 与知识构建服务</h1>
+<table><thead><tr><th background-color="light-gray"><p>文件</p></th><th background-color="light-gray"><p>关键类 / 函数</p></th><th background-color="light-gray"><p>职责</p></th></tr></thead><tbody>
+<tr><td><p>services/knowledge_preflight.py</p></td><td><p>main</p></td><td><p>离线索引前数据预检：检查知识源、切块门禁和报告，不调用 embedding/Qdrant。</p></td></tr>
+<tr><td><p>services/knowledge_indexer.py</p></td><td><p>KnowledgeIndexer(preflight, build_and_activate, _split_source_documents, _build_chunks, _write_artifacts)；IndexBuildResult；IndexPreflightResult</p></td><td><p>加载 data/，清洗、去重、父子切块、批量 embedding，构建 revision，写 BM25 工件，校验后切换 alias。</p></td></tr>
+<tr><td><p>services/knowledge_enrichment.py</p></td><td><p>DeepTextCleaner.clean；ContentDeduplicator.is_duplicate；MetadataEnricher.enrich</p></td><td><p>删除噪声、SimHash 去重、产出可复用标签与来源元数据。</p></td></tr>
+<tr><td><p>services/fitkg_markdown_builder.py</p></td><td><p>build_fitkg_markdown；render_markdown</p></td><td><p>将 FitKG 记录稳定地转换为带明确标题边界的 Markdown 知识源。</p></td></tr>
+<tr><td><p>services/vector_repository.py</p></td><td><p>VectorRepository；QdrantVectorRepository(create_collection, upsert, activate_alias, search, active_revision)</p></td><td><p>Qdrant SDK 隔离层；处理 collection 创建歧义、网关重连、revision alias 切换与检索过滤。</p></td></tr>
+<tr><td><p>services/vector_store.py</p></td><td><p>VectorStoreService(similarity_search, health, active_revision)</p></td><td><p>在线 Dense 检索服务，向上返回项目自己的检索契约而非 Qdrant 类型。</p></td></tr>
+<tr><td><p>services/bm25_retriever.py</p></td><td><p>BM25Retriever(build, load_artifact, is_stale, search)</p></td><td><p>离线构建/加载词法检索工件，检查 revision 与 checksum，返回父上下文和子证据。</p></td></tr>
+<tr><td><p>services/query_planner.py</p></td><td><p>QueryPlan；QueryPlanner.plan</p></td><td><p>仅在指代不清等场景扩展/拆分查询；普通问题保持快速路径，异常模型结果可降级。</p></td></tr>
+<tr><td><p>services/reranker.py</p></td><td><p>LexicalReranker.rerank；RerankCandidate；RerankResult</p></td><td><p>对近似候选用词法匹配轻量重排，避免为简单排序再调用模型。</p></td></tr>
+<tr><td><p>services/context_builder.py</p></td><td><p>ContextBuilder.build；ContextSnippet</p></td><td><p>在 token/字符预算中组合父文本与命中的 child 片段，保留可引用证据。</p></td></tr>
+<tr><td><p>services/retrieval_contracts.py</p></td><td><p>RetrievalRequest；RetrievalHit；RetrievalResult.log_payload</p></td><td><p>定义内部检索输入、命中和安全日志的稳定数据结构。</p></td></tr>
+<tr><td><p>services/rag_service.py</p></td><td><p>RagSummarizeService(retrieve, build_context, _rrf_fusion, _deduplicate_docs, _rerank)；RagContext</p></td><td><p>在线检索编排：规范化、同义词、Dense/BM25 并行、RRF、Jaccard 去重、标签提升、来源质量惩罚、重排和引用上下文构建。</p></td></tr>
+</tbody></table>
+<h1 seq="auto">外部适配、文档处理、通用工具与评测</h1>
+<table><thead><tr><th background-color="light-gray"><p>文件</p></th><th background-color="light-gray"><p>函数 / 类</p></th><th background-color="light-gray"><p>职责</p></th></tr></thead><tbody>
+<tr><td><p>services/coros_client.py</p></td><td><p>CorosClient(get_daily_metrics, get_sleep_data, list_activities, sync_cache, close)</p></td><td><p>本地 stdio JSON-RPC 客户端：串行锁、初始化握手、队列超时、失败后杀进程重建。</p></td></tr>
+<tr><td><p>integrations/coros_mcp_runner.py</p></td><td><p>_configure_provider_cache；_synchronize；main</p></td><td><p>独立进程包装社区 Provider；仅重定向其 SQLite 缓存而保留系统凭据存储。</p></td></tr>
+<tr><td><p>services/doc_parser.py</p></td><td><p>parse_image；parse_pdf；parse_health_doc；handle_upload 及解析/清理辅助函数</p></td><td><p>校验上传、保存临时文件、PDF 文本与图片页处理、VL 回退、十项指标归并/冲突检测、最终清理。</p></td></tr>
+<tr><td><p>utils/config_handler.py</p></td><td><p>get_models_config；get_vector_store_config；get_synonyms_config；get_prompts_config</p></td><td><p>读取 config/ 下 YAML，不散落硬编码配置。</p></td></tr>
+<tr><td><p>utils/prompt_loader.py</p></td><td><p>load_system_prompts；load_report_prompts；load_health_extract_prompts；load_training_plan_prompt</p></td><td><p>从 prompts/ 加载各业务场景的提示词模板。</p></td></tr>
+<tr><td><p>utils/file_handler.py</p></td><td><p>get_file_sha256_hex；listdir_with_allowed_type；pdf_loader；txt_loader；clean_text；normalize_documents；split_qa_documents</p></td><td><p>知识文件发现、哈希、加载、规范化与切块基础工具。</p></td></tr>
+<tr><td><p>utils/logger_handler.py / audit.py / path_tool.py / bootstrap.py</p></td><td><p>get_logger；audit_log；get_project_root；get_abs_path；validate_runtime</p></td><td><p>统一日志/审计、相对路径、启动前模型配置检查。</p></td></tr>
+<tr><td><p>evaluation/retrieval_evaluator.py</p></td><td><p>load_cases；RetrievalEvaluator.evaluate_case/evaluate；main</p></td><td><p>加载 retrieval_cases.json，计算来源与证据命中指标，生成离线回归报告。</p></td></tr>
+</tbody></table>
+<h1 seq="auto">迁移、配置与测试如何读</h1>
+<ul><li><b>alembic/versions/20260723_01_initial_schema.py：</b>初始表结构。</li><li><b>20260724_02_agent_traces.py：</b>添加 AgentRun/AgentToolCall 的隐私友好轨迹。</li><li><b>20260817_03_coaching_memory_and_plans.py：</b>加入会话摘要、长期记忆、周计划/反馈，并把 FitnessData 唯一性演进到 external_id。</li><li><b>config/：</b>models.yml、vector_store.yml、synonyms.yml、knowledge_sources.yml、prompts.yml 是运行时非敏感参数。</li><li><b>prompts/：</b>main、training_plan、report、health_extract 是模型文本输入，应与业务校验共同演进，而不是替代校验。</li><li><b>app/tests/：</b>按服务名/能力命名。优先将测试当成“必须保持的行为契约”，尤其关注 chat、direct_rag_router、online_rag_pipeline、memory、training_safety、coros_client。</li></ul>
+<callout emoji="✅" background-color="light-green" border-color="green"><p>读完此页的检查：你能从一个 HTTP endpoint 找到其 Schema、Router、Service、数据模型和对应测试；如果答案跳过了 Service 直接钻进 SDK，通常说明阅读顺序错了。</p></callout>

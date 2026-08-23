@@ -40,6 +40,16 @@ const routes = [
         name: 'Dashboard',
         component: () => import('@/views/Dashboard.vue'),
       },
+      {
+        path: 'training-plan',
+        name: 'TrainingPlan',
+        component: () => import('@/views/TrainingPlan.vue'),
+      },
+      {
+        path: 'memory',
+        name: 'Memory',
+        component: () => import('@/views/Memory.vue'),
+      },
     ],
   },
 ]

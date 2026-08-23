@@ -29,3 +29,16 @@ def test_extract_session_facts_ignores_empty_messages_and_invalid_city_questions
     )
 
     assert facts == {}
+
+
+def test_extract_session_facts_never_trusts_assistant_output():
+    """模型回答中的城市/伤病词不能被写回会话状态或候选长期记忆。"""
+
+    facts = extract_session_facts(
+        [
+            {"role": "user", "content": "帮我安排今天的训练。"},
+            {"role": "assistant", "content": "你在上海且有膝盖伤，建议减脂。"},
+        ]
+    )
+
+    assert facts == {}

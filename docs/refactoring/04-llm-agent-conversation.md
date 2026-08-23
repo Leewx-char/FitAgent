@@ -1,6 +1,8 @@
 # 04 - Agent 编排与工具调用
 
-> **状态**：当前 Demo 的最小闭环已完成。本文记录实际实现和后续演进条件，而不是待执行的功能清单。
+> **状态**：当前实现的 Agent/RAG 编排已完成；本文保留演进背景，并已同步当前记忆边界。
+>
+> **当前口径优先级**：若本文与 [架构说明](../architecture.md)、[学习路线](../learning-guide.md) 或代码不一致，以后三者为准。
 
 ## 1. 目标与边界
 
@@ -38,7 +40,7 @@ FitAgent 需要同时支持两类请求：
 |---|---|---|
 | 快速 RAG 路径 | `app/services/react_agent.py` | 通用问题避免 Agent 的“决定工具 + 最终回答”两次模型调用。|
 | 请求级 Agent 实例 | `app/core/deps.py` | 不使用全局 Agent 单例，避免 LangGraph 运行时上下文在并发请求间共享；底层模型客户端仍由工厂缓存。|
-| 有界历史 | `app/api/routers/chat.py` | 仅取最近 20 轮（40 条）消息，控制上下文和成本。|
+| 有界历史 | `app/api/routers/chat.py`、`app/services/memory_service.py` | 仅取最近 10 轮（20 条）原文；较早 user 消息被确定性提取为可重建的 `session_summaries`，不把 LLM 摘要伪装为长期事实。|
 | 请求级上下文 | `app/services/agent_tools.py`、`middleware.py` | `ContextVar` 保存当前用户信息；中间件将 RAG 证据交给 SSE 输出。|
 | 统一 DB 会话 | `app/core/database.py` | `get_db_session()` 统一提交、异常回滚和关闭；HTTP 依赖和 Agent 的 MySQL 工具共用。|
 | 证据可见性 | `frontend/src/views/Chat.vue` | SSE `evidence` 事件渲染为可展开来源卡片，回答中的 `[证据:N]` 可回溯。|
@@ -64,7 +66,8 @@ with get_db_session() as db:
 - `tool`：实际执行的工具或直接 RAG 检索；
 - `evidence`：结构化来源卡片；
 - `text`：模型逐步输出；
-- `done` / `error`：请求结束状态。
+- `error`：本轮生成异常的用户可见提示；
+- `data: [DONE]`：SSE 流的最终哨兵。它不是 JSON `done` 事件，前端收到后必须结束加载状态。
 
 ### 工具调用的生产防护栏
 
@@ -85,7 +88,7 @@ with get_db_session() as db:
 | 能力 | 暂不实现的原因 | 触发条件 |
 |---|---|---|
 | Agent 单例或实例池 | 当前实例隔离更安全，尚无 graph 初始化的性能证据。 | 压测确认实例构建成为主要瓶颈，并能证明运行时状态可安全隔离。|
-| LLM 对话摘要记忆 | 20 轮窗口足够 Demo，摘要会增加一次模型调用和错误压缩风险。 | 真实会话频繁超过窗口，且评测显示关键信息被截断。|
+| LLM 对话摘要记忆 | 当前已采用不调用 LLM 的确定性会话暂存状态；不引入模型自由摘要，避免错误压缩和事实污染。 | 确有未被结构化事实覆盖的长任务上下文需求，且评测证明固定事实摘要不足时。|
 | LLM 自动事实提取并写画像 | 健康/伤病信息不能因模型误判直接落库。 | 有用户确认界面、字段级审计和准确率评测。|
 | 多 Agent / Supervisor | 增加路由、状态和可观测复杂度，当前一个 Agent + 快速 RAG 已覆盖场景。 | 有互不相同的长任务和可量化的成功率或成本收益。|
 | 完整意图分类服务 | 现有规则只承担“是否走直接 RAG”的窄职责。 | 规则误判可量化，且需要至少三个稳定意图分支。|

@@ -16,6 +16,7 @@ from app.services.agent_tools import (
     trigger_report,
     get_current_month,
     get_user_profile,
+    get_confirmed_memories,
     get_fitness_summary,
 )
 from app.services.middleware import monitor_tool, log_before_model, report_prompt_switch
@@ -25,6 +26,7 @@ from app.core.settings import get_settings
 
 TOOL_DISPLAY = {
     "get_user_profile": "获取用户画像",
+    "get_confirmed_memories": "读取已确认记忆",
     "rag_summarize": "检索知识库",
     "get_weather": "查询天气",
     "get_user_location": "获取位置",
@@ -94,6 +96,7 @@ class ReactAgent:
                 get_user_id,
                 get_current_month,
                 get_user_profile,
+                get_confirmed_memories,
                 get_fitness_summary,
                 trigger_report,
             ],
@@ -184,6 +187,7 @@ class ReactAgent:
         messages: list[dict],
         user_id: int | None = None,
         city: str = "",
+        session_summary: str = "",
         trace: AgentTrace | None = None,
     ):
         normalized_messages = self._normalize_messages(messages)
@@ -196,6 +200,7 @@ class ReactAgent:
             "tool_call_limit": self.max_tool_calls,
             "tool_call_count": 0,
             "agent_trace": trace,
+            "session_summary": session_summary,
         }
         # 当前消息由工具参数携带；检索器只需要最近历史来消解“那个动作”等指代。
         run_context["retrieval_history"] = normalized_messages[:-1][-6:]

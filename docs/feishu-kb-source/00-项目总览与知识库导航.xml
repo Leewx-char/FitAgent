@@ -1,0 +1,85 @@
+<title>FitAgent 项目总览与知识库导航</title>
+<callout emoji="🧭" background-color="light-blue" border-color="blue"><p><b>适用读者：</b>第一次接触 FitAgent 的开发者、准备项目演示/面试的同学，以及负责迭代的工程师。读完本页，你应能说清产品边界、模块分工和第一条代码阅读路线。</p></callout>
+<h1 seq="auto">项目是什么：有证据、有边界的私人运动教练</h1>
+<p>FitAgent 是一个基于 RAG 的运动教练应用。它不把“大模型聊天”直接等同于“个性化教练”：通用训练知识通过可追溯证据回答；只有确实需要个人资料、已确认记忆或运动数据的问题才进入受限 Agent；训练计划必须先经过确定性安全策略和结构化校验。</p>
+<callout emoji="🎯" background-color="light-green" border-color="green"><p><b>面试主线只有三项：</b>可解释 RAG、用户可控记忆、自适应训练计划。受控 Agent、COROS 同步、健康文档和执行轨迹是支撑这三项能力的工程模块，不应喧宾夺主。</p></callout>
+<table><thead><tr><th background-color="light-gray"><p>核心亮点</p></th><th background-color="light-gray"><p>用户获得什么</p></th><th background-color="light-gray"><p>代码上的保证</p></th></tr></thead><tbody>
+<tr><td><p>可解释 RAG</p></td><td><p>答案附带真实命中的证据卡片</p></td><td><p>Dense 与 BM25 双路检索、RRF 融合、来源过滤与上下文预算</p></td></tr>
+<tr><td><p>用户可控记忆</p></td><td><p>用户决定哪些事实可跨会话保留</p></td><td><p>proposed → confirmed/revoked；模型回答不能写回用户事实</p></td></tr>
+<tr><td><p>自适应训练计划</p></td><td><p>结合近四周运动与反馈生成周计划</p></td><td><p>安全上限先于模型；Pydantic 与业务规则拒绝不合格计划</p></td></tr>
+</tbody></table>
+<p><b>工程支撑模块：</b>受控 Agent 只按需读取画像、confirmed 记忆和运动摘要；COROS 数据由用户显式同步、经本地 MCP 适配后写入 MySQL；健康文档只做指标提取并要求用户确认；执行轨迹只保留无原文的工具元数据。</p>
+<whiteboard type="mermaid">
+flowchart LR
+  U[用户] --> FE[Vue 3 前端]
+  FE -->|JWT / REST / SSE| API[FastAPI 路由层]
+  API --> CHAT[聊天编排]
+  API --> PLAN[训练计划服务]
+  API --> FIT[运动数据同步]
+  CHAT --> ROUTE{请求路由}
+  ROUTE -->|通用知识| DR[Direct RAG]
+  ROUTE -->|个性化问题| AG[LangGraph ReAct Agent]
+  DR --> RAG[Dense + BM25 + RRF]
+  AG --> TOOLS[受限工具集]
+  TOOLS --> RAG
+  RAG --> Q[(Qdrant alias / revision)]
+  RAG --> B[BM25 离线工件]
+  CHAT --> M[(MySQL 记忆/会话/轨迹)]
+  PLAN --> M
+  FIT --> C[Coros 本地 stdio MCP]
+  FIT --> M
+</whiteboard>
+<p>图 1：系统总览。阅读时始终按 <b>API → Service → Repository / External system</b> 向下追踪；Router 不承载业务决策，Service 不依赖 HTTP 对象，第三方 SDK 类型不进入核心领域模型。</p>
+<h1 seq="auto">知识库导航：按任务阅读，不按目录背诵</h1>
+<table><thead><tr><th background-color="light-gray"><p>页面</p></th><th background-color="light-gray"><p>解决的问题</p></th><th background-color="light-gray"><p>最先看的入口</p></th></tr></thead><tbody>
+<tr><td><p>01 后端文件与函数索引</p></td><td><p>每个 app 文件由谁调用、有哪些关键类/函数</p></td><td><p>app/main.py、schemas.py、models.py</p></td></tr>
+<tr><td><p>02 前端文件与函数索引</p></td><td><p>页面、状态和 API 如何组合成用户闭环</p></td><td><p>frontend/src/main.js、router、Chat.vue</p></td></tr>
+<tr><td><p>03 RAG / Agent / 记忆 / 计划 / Coros</p></td><td><p>关键设计为何这样拆分，数据如何受控</p></td><td><p>rag_service.py、react_agent.py、memory_service.py</p></td></tr>
+<tr><td><p>04 端到端链路与学习路线</p></td><td><p>从一次用户动作追到所有写入、外部调用与 UI 渲染</p></td><td><p>Chat.vue → chat.py → ReactAgent</p></td></tr>
+<tr><td><p>原始学习资料</p></td><td><p>保留项目现有架构、契约、重构和面试文档</p></td><td><p>按需要阅读原始 Markdown 版本</p></td></tr>
+</tbody></table>
+<h1 seq="auto">第一条主链路：一次通用健身问答</h1>
+<p>用问题“深蹲前怎样热身？”建立全局心智模型。它通常不依赖个人状态，因而走更短、更稳定的 Direct RAG 路径。</p>
+<whiteboard type="mermaid">
+sequenceDiagram
+  participant UI as Chat.vue
+  participant API as chat.py
+  participant MEM as MemoryService
+  participant RA as ReactAgent
+  participant RAG as RagSummarizeService
+  participant DB as MySQL
+  UI->>API: POST /api/chat (JWT, message, session_id)
+  API->>DB: 创建/校验会话，写入用户消息
+  API->>MEM: 仅从本条用户消息生成记忆候选
+  API->>RA: execute_stream(history, user context)
+  RA->>RA: 判断为通用知识问题
+  RA->>RAG: build_context(query)
+  RAG-->>RA: evidence hits + 可引用上下文
+  RA-->>API: tool / evidence / text / error 增量
+  API-->>UI: SSE 事件流
+  API-->>UI: [DONE]（正常结束）
+  API->>DB: 流结束后写 assistant message 与安全轨迹
+</whiteboard>
+<callout emoji="🔒" background-color="light-green" border-color="green"><p><b>关键边界：</b>模型生成前产生的记忆候选只来自用户输入；会话摘要也只提取 user 消息。assistant 或 tool 内容不会变成用户事实。</p></callout>
+<h1 seq="auto">目录地图与运行时依赖</h1>
+<whiteboard type="mermaid">
+flowchart TB
+  ROOT[FitAgent]
+  ROOT --> APP[app 后端]
+  ROOT --> FE[frontend Vue SPA]
+  ROOT --> CFG[config / prompts]
+  ROOT --> DOCS[docs 学习与设计]
+  ROOT --> DBM[alembic 迁移]
+  APP --> CORE[core 基础设施]
+  APP --> API[api HTTP 契约]
+  APP --> SVC[services 业务编排]
+  APP --> REP[repositories 持久化边界]
+  APP --> INT[integrations 第三方适配]
+  SVC --> MYSQL[(MySQL)]
+  SVC --> QDRANT[(Qdrant)]
+  INT --> MCP[Coros MCP]
+</whiteboard>
+<p><b>配置优先级：</b>环境变量 > 配置文件 > 默认值。敏感项放在 .env，仓库仅保留 .env.example。知识源在 data/，日志、模型、索引工件不应提交 Git。</p>
+<h1 seq="auto">启动与验证的最短路径</h1>
+<ol><li>复制 <code>.env.example</code> 为 <code>.env</code>，填写 DashScope、MySQL、JWT 配置。</li><li>安装 Python 3.11+ 与 Node 20+ 依赖，执行 Alembic 迁移。</li><li>使用 Docker Compose 启动 Qdrant；首次运行显式执行 <code>python -m app.services.knowledge_indexer</code>。</li><li>启动 Uvicorn 8000 端口与 Vite 5173 端口；浏览器打开前端。</li><li>提交前执行 <code>ruff format --check app</code>、<code>ruff check app</code>、<code>pytest app/tests</code>。</li></ol>
+<p>下一页从后端文件开始。阅读每个模块都回答五个问题：<b>谁调用它？输入来自哪里？它做出什么业务决策？状态写到哪里？失败时如何表现？</b></p>

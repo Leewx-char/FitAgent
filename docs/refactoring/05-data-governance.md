@@ -7,7 +7,7 @@
 | 数据 | 权威来源与写入方 | 在线读取方 | 当前保障 |
 |---|---|---|---|
 | 账户、画像、会话、消息 | MySQL；各自 API 路由 | API、Agent 工具 | SQLAlchemy 模型、Pydantic API Schema、Alembic 迁移、请求/工具统一事务边界。|
-| 高驰运动数据 | `fitness` 同步路由 | `get_fitness_summary` | 用户、日期和数据类型的幂等写入；近 4 周聚合测试。|
+| 高驰运动数据 | `fitness` 同步路由 | `get_fitness_summary`、数据面板读接口 | 以 `(user_id, data_type, external_id)` 幂等写入；日指标/睡眠按日期生成 ID，活动优先使用上游 ID，从而保留同日多次活动。|
 | 中文健身知识源 | `data/` 下经审核的 Markdown / TXT / PDF | 离线索引器 | 来源文件 SHA256、来源元数据、标题感知切分、内容去重。|
 | Qdrant 向量索引 | `knowledge_indexer` 显式构建 | `RagSummarizeService` | revision collection + `rag_active` alias；发布前校验，在线只读。|
 | BM25 工件 | 与同一 revision 一同离线生成 | `RagSummarizeService` | 启动预加载；工件缺失时降级为 Dense 检索。|

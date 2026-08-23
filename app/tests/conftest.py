@@ -105,6 +105,11 @@ def coros_mock(auth_client):
     """override get_coros，返回 mock 的 CorosClient。
     依赖 auth_client 保证在其之后执行（auth_client 会 clear overrides）。"""
     mock = MagicMock()
+    mock.sync_cache.return_value = {
+        "partial": False,
+        "failed_sources": [],
+        "cached_source_counts": {"daily": 0, "sleep": 0, "activities": 0},
+    }
     mock.get_daily_metrics.return_value = []
     mock.get_sleep_data.return_value = []
     mock.list_activities.return_value = {"activities": []}
@@ -142,18 +147,21 @@ def seed_fitness_data(auth_client):
             user_id=user_id,
             date=today - timedelta(days=1),
             data_type="daily_metrics",
+            external_id=f"test:daily:{(today - timedelta(days=1)).isoformat()}",
             data='{"training_load": 50, "avg_sleep_hrv": 60, "rhr": 55}',
         ),
         FitnessData(
             user_id=user_id,
             date=today - timedelta(days=2),
             data_type="daily_metrics",
+            external_id=f"test:daily:{(today - timedelta(days=2)).isoformat()}",
             data='{"training_load": 55, "avg_sleep_hrv": 58, "rhr": 56}',
         ),
         FitnessData(
             user_id=user_id,
             date=today - timedelta(days=3),
             data_type="daily_metrics",
+            external_id=f"test:daily:{(today - timedelta(days=3)).isoformat()}",
             data='{"training_load": 60, "avg_sleep_hrv": 62, "rhr": 54}',
         ),
     ]

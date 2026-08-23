@@ -6,25 +6,6 @@ from langchain_core.documents import Document
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 
 
-def get_file_md5_hex(filepath: str) -> str | None:
-    """返回现有调用方仍在使用的兼容性 MD5 校验和。"""
-    if not os.path.exists(filepath):
-        logger.error(f"[md5计算]文件{filepath}不存在")
-        return None
-    if not os.path.isfile(filepath):
-        logger.error(f"[md5计算]路径{filepath}不是文件")
-        return None
-    digest = hashlib.md5()
-    try:
-        with open(filepath, "rb") as file:
-            while chunk := file.read(4096):
-                digest.update(chunk)
-        return digest.hexdigest()
-    except OSError as error:
-        logger.error(f"计算文件{filepath}md5失败，{error}")
-        return None
-
-
 def get_file_sha256_hex(filepath: str) -> str | None:
     """返回适用于不可变索引版本清单的源文件校验和。"""
     if not os.path.isfile(filepath):

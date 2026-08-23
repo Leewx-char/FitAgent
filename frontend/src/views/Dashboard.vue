@@ -262,8 +262,13 @@ async function loadData() {
 async function handleSync() {
   syncing.value = true
   try {
-    await syncFitness()
+    const response = await syncFitness()
     await loadData()
+    if (response.data.data.partial) {
+      message.warning(`部分同步完成：${response.data.data.unavailable_sources.join('、')} 暂不可用`)
+    } else {
+      message.success(`同步完成，写入 ${response.data.data.upserted} 条记录`)
+    }
   } catch (error) {
     console.error('同步失败:', error)
     message.error(getErrorMessage(error, '同步失败，请稍后重试'))

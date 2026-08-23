@@ -13,10 +13,10 @@
 """
 
 import json
-from datetime import datetime
-from typing import Any, Generic, TypeVar
+from datetime import date, datetime
+from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ResponseData = TypeVar("ResponseData")
 
@@ -247,6 +247,32 @@ class FitnessSyncRequest(BaseModel):
     start_day: str = ""
     end_day: str = ""
 
+    @field_validator("start_day", "end_day")
+    @classmethod
+    def validate_compact_date(cls, value: str) -> str:
+        if not value:
+            return value
+        try:
+            datetime.strptime(value, "%Y%m%d")
+        except ValueError as exc:
+            raise ValueError("日期必须是 YYYYMMDD 格式") from exc
+        return value
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if self.start_day and self.end_day and self.start_day > self.end_day:
+            raise ValueError("start_day 不能晚于 end_day")
+        return self
+
+
+class FitnessSyncResponse(BaseModel):
+    """Outcome of one explicit Coros-to-MySQL synchronization request."""
+
+    upserted: int = Field(ge=0)
+    partial: bool = False
+    unavailable_sources: list[str] = Field(default_factory=list)
+    cached_source_counts: dict[str, int] = Field(default_factory=dict)
+
 
 class FitnessDataResponse(BaseModel):
     id: int
@@ -271,3 +297,133 @@ class FitnessDataResponse(BaseModel):
         if isinstance(v, str):
             return json.loads(v)
         return v
+
+
+# ==================== 用户可控记忆 ====================
+
+
+MemoryStatus = Literal["proposed", "confirmed", "revoked"]
+
+
+class MemoryFactResponse(BaseModel):
+    id: str
+    source_message_id: int | None
+    supersedes_id: str | None
+    fact_key: str
+    category: str
+    value: dict[str, Any]
+    display_text: str
+    status: MemoryStatus
+    expires_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def parse_memory_value(cls, value):
+        return json.loads(value) if isinstance(value, str) else value
+
+
+class MemoryFactUpdate(BaseModel):
+    status: Literal["confirmed", "revoked"]
+    display_text: str | None = Field(default=None, max_length=300)
+    expires_at: datetime | None = None
+
+
+class MemoryFactCreate(BaseModel):
+    """由用户在记忆页主动保存的条目；不接受模型直接写入。"""
+
+    fact_key: str = Field(min_length=1, max_length=80)
+    category: str = Field(default="custom", min_length=1, max_length=30)
+    value: dict[str, Any] = Field(default_factory=dict)
+    display_text: str = Field(min_length=1, max_length=300)
+    expires_at: datetime | None = None
+
+
+# ==================== 自适应训练计划 ====================
+
+
+class PlanExercise(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    sets: int = Field(ge=1, le=8)
+    reps: str = Field(min_length=1, max_length=30)
+    intensity: Literal["低", "中", "高"]
+    notes: str = Field(default="", max_length=240)
+
+
+class PlanDay(BaseModel):
+    day_of_week: int = Field(ge=1, le=7)
+    title: str = Field(min_length=1, max_length=80)
+    focus: str = Field(min_length=1, max_length=120)
+    kind: Literal["训练", "恢复", "休息"]
+    exercises: list[PlanExercise] = Field(default_factory=list, max_length=8)
+    notes: str = Field(default="", max_length=300)
+
+    @model_validator(mode="after")
+    def validate_rest_day(self):
+        if self.kind != "训练" and self.exercises:
+            raise ValueError("恢复日和休息日不能包含训练动作")
+        if self.kind == "训练" and not self.exercises:
+            raise ValueError("训练日必须包含至少一个动作")
+        return self
+
+
+class WeeklyTrainingPlan(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+    goal: str = Field(min_length=1, max_length=80)
+    days: list[PlanDay] = Field(min_length=1, max_length=7)
+    rationale: list[str] = Field(default_factory=list, max_length=6)
+    safety_notes: list[str] = Field(default_factory=list, max_length=8)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=6)
+
+    @model_validator(mode="after")
+    def validate_days(self):
+        day_ids = [item.day_of_week for item in self.days]
+        if len(day_ids) != len(set(day_ids)):
+            raise ValueError("训练计划中不能出现重复星期")
+        return self
+
+
+class TrainingPlanGenerateRequest(BaseModel):
+    week_start: date | None = None
+
+
+class TrainingFeedbackCreate(BaseModel):
+    day_of_week: int = Field(ge=1, le=7)
+    completed: bool
+    rpe: int | None = Field(default=None, ge=1, le=10)
+    pain_score: int | None = Field(default=None, ge=0, le=10)
+    notes: str = Field(default="", max_length=500)
+
+
+class TrainingFeedbackResponse(TrainingFeedbackCreate):
+    id: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TrainingPlanResponse(BaseModel):
+    id: str
+    week_start: date
+    version: int
+    status: Literal["draft", "active", "archived"]
+    plan: WeeklyTrainingPlan
+    safety: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+    feedbacks: list[TrainingFeedbackResponse] = Field(default_factory=list)
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("plan", mode="before")
+    @classmethod
+    def parse_plan(cls, value):
+        return json.loads(value) if isinstance(value, str) else value
+
+    @field_validator("safety", mode="before")
+    @classmethod
+    def parse_safety(cls, value):
+        return json.loads(value) if isinstance(value, str) else value

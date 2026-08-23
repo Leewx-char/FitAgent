@@ -1,7 +1,7 @@
 import json
 
 from app.services.bm25_retriever import BM25Retriever
-from app.utils.file_handler import get_file_md5_hex, get_file_sha256_hex
+from app.utils.file_handler import get_file_sha256_hex
 
 
 def test_bm25_source_filter_and_offline_artifact(tmp_path):
@@ -35,12 +35,15 @@ def test_bm25_source_filter_and_offline_artifact(tmp_path):
     assert results[0][0].metadata["source_id"] == "动作指南大全.txt"
 
 
-def test_file_checksums_support_legacy_and_index_revisions(tmp_path):
+def test_file_checksum_is_stable_for_index_revisions(tmp_path):
     source = tmp_path / "source.txt"
     source.write_text("健身知识", encoding="utf-8")
 
-    assert len(get_file_md5_hex(str(source))) == 32
-    assert len(get_file_sha256_hex(str(source))) == 64
+    checksum = get_file_sha256_hex(str(source))
+
+    assert checksum is not None
+    assert len(checksum) == 64
+    assert checksum == get_file_sha256_hex(str(source))
 
 
 def test_bm25_returns_parent_context_but_keeps_child_evidence(tmp_path):

@@ -79,6 +79,9 @@ def extract_session_facts(messages: Iterable[dict[str, Any]]) -> dict[str, str |
     facts: dict[str, str | list[str]] = {}
     injuries: list[str] = []
     for message in messages:
+        # 只信任用户的原始表达；不能把模型回答或工具输出反向写入会话事实。
+        if message.get("role") != "user":
+            continue
         content = str(message.get("content") or "").strip()
         if not content:
             continue

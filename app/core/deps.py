@@ -11,9 +11,12 @@
 """
 
 from app.core.database import get_db_session
+from fastapi import HTTPException
 from app.services.react_agent import ReactAgent
 from functools import lru_cache
+from threading import Lock
 from app.services.coros_client import CorosClient
+from app.core.settings import get_settings
 
 
 def get_db():
@@ -29,13 +32,60 @@ def get_agent():
     return ReactAgent()
 
 
+_coros_creation_lock = Lock()
+
+
 @lru_cache(maxsize=1)
-def _coros_singleton():
-    return CorosClient()
+def _coros_singleton() -> CorosClient:
+    # lru_cache protects its mapping but can execute a cold function more than once when
+    # concurrent callers race. The explicit lock guarantees exactly one MCP subprocess.
+    with _coros_creation_lock:
+        settings = get_settings()
+        return CorosClient(
+            command=settings.coros_mcp_command_parts,
+            sync_command=settings.coros_mcp_sync_command_parts,
+            working_directory=str(settings.project_root),
+            environment={
+                "COROS_MCP_TOOLSET": settings.coros_mcp_toolset,
+                "COROS_MCP_HIDE_AUTH_TOOLS": "1" if settings.coros_mcp_hide_auth_tools else "0",
+                # The provider runner redirects only the community package's SQLite cache.
+                # Keep HOME / USERPROFILE intact: the provider's auth token is stored under
+                # the real Windows user profile / Credential Manager.
+                "FITAGENT_COROS_MCP_CACHE_DIR": str(settings.coros_mcp_cache_home_path),
+                # Explicit sync owns freshness. Read tools must serve the prepared cache
+                # instead of issuing an unexpected second upstream fetch during a chat/API
+                # request. The provider accepts this integer without a lower bound.
+                "COROS_STABLE_DAYS": "-1",
+            },
+        )
 
 
 def get_coros():
     """CorosClient 单例。用 lru_cache 而非模块级变量，保证线程安全
     （CorosClient 创建子进程耗时 1-2s，并发窗口大，模块级变量方式
     可能创建多个实例导致子进程泄漏）。"""
-    return _coros_singleton()
+
+    try:
+        return _coros_singleton()
+    except FileNotFoundError as error:
+        command = " ".join(get_settings().coros_mcp_command_parts)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Coros MCP 未安装或命令不可执行：{command}。"
+                "请先运行 .\\scripts\\install_coros_mcp.ps1 并完成 coros-mcp auth。"
+            ),
+        ) from error
+    except (OSError, RuntimeError) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Coros MCP 无法启动或初始化；请检查 coros-mcp auth-status 后重试。",
+        ) from error
+
+
+def close_coros() -> None:
+    """Stop the process-level Coros client during application shutdown."""
+
+    if _coros_singleton.cache_info().currsize:
+        _coros_singleton().close()
+    _coros_singleton.cache_clear()

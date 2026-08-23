@@ -1,0 +1,73 @@
+<title>FitAgent 前端：文件、状态与交互函数索引</title>
+<callout emoji="🖥️" background-color="light-blue" border-color="blue"><p>前端是 Vue 3 + Vite + Pinia + Naive UI 单页应用。它负责交互、表单状态、SSE 增量渲染和图表；它不直接绑定 MySQL 表结构，只消费后端 API 契约。</p></callout>
+<h1 seq="auto">前端关系图</h1>
+<whiteboard type="mermaid">
+flowchart LR
+  MAIN[main.js] --> APP[App.vue 主题/容器]
+  MAIN --> ROUTER[router/index.js 路由守卫]
+  MAIN --> PINIA[Pinia stores]
+  ROUTER --> VIEWS[views 页面]
+  VIEWS --> API[api 模块]
+  VIEWS --> STORES[auth / chat / profile]
+  API --> AXIOS[index.js JWT/错误处理]
+  AXIOS --> BACKEND[FastAPI /api]
+</whiteboard>
+<h1 seq="auto">启动、路由与 HTTP 层</h1>
+<table><thead><tr><th background-color="light-gray"><p>文件</p></th><th background-color="light-gray"><p>主要函数 / 对象</p></th><th background-color="light-gray"><p>作用</p></th></tr></thead><tbody>
+<tr><td><p>frontend/src/main.js</p></td><td><p>createApp；createPinia；app.use；mount</p></td><td><p>装配根组件、Pinia、Vue Router 和 Naive UI，再挂载到 #app。</p></td></tr>
+<tr><td><p>frontend/src/App.vue</p></td><td><p>themeOverrides</p></td><td><p>全局 Naive UI 主题/消息容器和 router-view；CSS 变量定义 FitAgent 的视觉色板。</p></td></tr>
+<tr><td><p>frontend/src/router/index.js</p></td><td><p>routes；router.beforeEach</p></td><td><p>声明登录、注册、画像引导与主布局子路由；依据 authStore.isLoggedIn 做 requiresAuth / guest 跳转。</p></td></tr>
+<tr><td><p>frontend/src/api/index.js</p></td><td><p>axios instance；request/response interceptors；getErrorMessage</p></td><td><p>所有请求的 baseURL=/api、15 秒超时、JWT 注入；401 清理本地状态并跳登录页；将统一 messages 转为可显示错误。</p></td></tr>
+<tr><td><p>api/auth.js</p></td><td><p>register；login；getCurrentUser</p></td><td><p>封装认证接口；login 使用 OAuth2 表单编码。</p></td></tr>
+<tr><td><p>api/chat.js</p></td><td><p>getSessions；createSession；deleteSession；getMessages</p></td><td><p>会话和历史消息 REST 调用；聊天 SSE 由 Chat.vue 自行用 fetch 消费。</p></td></tr>
+<tr><td><p>api/profile.js</p></td><td><p>getProfile；createProfile；updateProfile；uploadHealthDoc</p></td><td><p>画像 CRUD 和 multipart 健康文档上传；上传单独延长超时。</p></td></tr>
+<tr><td><p>api/fitness.js</p></td><td><p>syncFitness；getDailyMetrics；getSleepData；getActivities</p></td><td><p>Coros 主动同步及数据面板读取。</p></td></tr>
+<tr><td><p>api/memory.js</p></td><td><p>getMemories；updateMemory；revokeMemory</p></td><td><p>记忆列表、确认/编辑和撤销。</p></td></tr>
+<tr><td><p>api/trainingPlans.js</p></td><td><p>getCurrentPlan；generateTrainingPlan；savePlanFeedback</p></td><td><p>读取/显式生成周计划与提交每日反馈。</p></td></tr>
+</tbody></table>
+<h1 seq="auto">Pinia 状态：只维护 UI 所需状态</h1>
+<table><thead><tr><th background-color="light-gray"><p>文件</p></th><th background-color="light-gray"><p>状态</p></th><th background-color="light-gray"><p>函数</p></th><th background-color="light-gray"><p>边界</p></th></tr></thead><tbody>
+<tr><td><p>stores/auth.js</p></td><td><p>token、user、isLoggedIn</p></td><td><p>setAuth；login；register；logout；fetchUser</p></td><td><p>同步 localStorage 与后端用户身份；不复制后端密码/ORM 字段。</p></td></tr>
+<tr><td><p>stores/chat.js</p></td><td><p>sessions、currentSessionId、messages</p></td><td><p>setMessages；addMessage；updateLastAssistantMessage；clearMessages</p></td><td><p>服务于会话切换和 SSE 增量拼接；消息事实仍由后端持久化。</p></td></tr>
+<tr><td><p>stores/profile.js</p></td><td><p>profile、hasProfile</p></td><td><p>fetchProfile；saveProfile</p></td><td><p>隐藏 GET/POST/PUT 差异，页面只关心“已有还是新建画像”。</p></td></tr>
+</tbody></table>
+<h1 seq="auto">公共布局和所有页面</h1>
+<table><thead><tr><th background-color="light-gray"><p>文件</p></th><th background-color="light-gray"><p>关键函数 / 计算属性</p></th><th background-color="light-gray"><p>用户闭环中的作用</p></th></tr></thead><tbody>
+<tr><td><p>components/Sidebar.vue</p></td><td><p>loadSessions；switchSession；newSession；handleDeleteSession；handleLogout；onSessionScroll</p></td><td><p>主导航、会话列表和用户菜单；切换会话时拉取历史并更新 chatStore。</p></td></tr>
+<tr><td><p>views/AppLayout.vue</p></td><td><p>布局组件</p></td><td><p>将 Sidebar 与 router-view 组合为已登录应用外壳。</p></td></tr>
+<tr><td><p>views/Login.vue</p></td><td><p>handleLogin</p></td><td><p>校验账号密码，调用 authStore.login，成功后进入聊天/引导页。</p></td></tr>
+<tr><td><p>views/Register.vue</p></td><td><p>handleRegister</p></td><td><p>表单规则验证、注册，然后引导用户登录。</p></td></tr>
+<tr><td><p>views/Onboarding.vue</p></td><td><p>nextStep；prevStep；handleSubmit</p></td><td><p>分步填写目标、经验、伤病与饮食；完成后创建基础画像。</p></td></tr>
+<tr><td><p>views/Profile.vue</p></td><td><p>hasHealthData；getHealthValue；getHealthUnit；loadProfile；startEdit；cancelEdit；saveEdit</p></td><td><p>显示/编辑画像；只上传字段差异，健康数据在确认后展示。</p></td></tr>
+<tr><td><p>views/Chat.vue</p></td><td><p>sendMessage；handleFileSelect；confirmHealthData；renderMarkdown</p></td><td><p>核心交互页：发送 JWT/message/session_id，逐帧解析 text/tool/evidence/error SSE；模型文本增量写入 chatStore，证据单独显示；同时负责健康文档上传、冲突处理与确认写入画像。</p></td></tr>
+<tr><td><p>views/Dashboard.vue</p></td><td><p>sportName；sportColor；avgTrainingLoad；avgHrv；avgRhr；buildTloadHrvChart；buildSleepChart；loadData；handleSync</p></td><td><p>主动同步 Coros 并用 ECharts 展示训练负荷/HRV、睡眠和活动；空数据是正常状态而非前端错误。</p></td></tr>
+<tr><td><p>views/Memory.vue</p></td><td><p>load；confirm；revoke；statusLabel；statusType</p></td><td><p>展示 proposed/confirmed/revoked，用户显式确认后才让事实影响未来 Agent 回答。</p></td></tr>
+<tr><td><p>views/TrainingPlan.vue</p></td><td><p>sortedDays；tagType；load；generate；openFeedback；submitFeedback</p></td><td><p>显式生成周计划，显示安全上限和证据；同一日反馈通过后端幂等写入。</p></td></tr>
+</tbody></table>
+<h1 seq="auto">Chat.vue 的 SSE 渲染关系</h1>
+<whiteboard type="mermaid">
+sequenceDiagram
+  participant Input as 用户输入框
+  participant View as Chat.vue
+  participant Store as chatStore
+  participant API as POST /api/chat
+  Input->>View: 点击发送
+  View->>Store: addMessage(user)
+  View->>API: fetch + Authorization
+  API-->>View: data: tool / evidence / text / error
+  alt tool
+    View->>View: 显示检索/工具状态
+  else evidence
+    View->>View: 保存证据卡片
+  else text
+    View->>Store: updateLastAssistantMessage(delta)
+  else error
+    View->>View: 收敛加载状态并显示错误
+  end
+  API-->>View: data: [DONE]（正常结束）
+  View->>View: 收敛加载状态
+  Store-->>View: Vue 响应式重渲染
+</whiteboard>
+<callout emoji="⚠️" background-color="light-orange" border-color="orange"><p><b>前端边界提醒：</b>页面可根据 <code>response.data.data</code> 显示业务数据、根据 <code>messages</code> 显示错误，但不能根据数据库表字段推断业务状态；例如 memory status、plan safety 均应按 API Schema 使用。</p></callout>
+<h1 seq="auto">构建与验证</h1>
+<p>frontend/package.json 的入口命令是 <code>npm run dev</code>、<code>npm run build</code> 和 <code>npm run preview</code>。开发时对照浏览器 Network：普通请求遵循 JSON envelope，只有 /api/chat 使用 <code>text/event-stream</code>。修改页面时至少走一遍未登录跳转、登录后主布局、API 错误提示和空数据状态。</p>

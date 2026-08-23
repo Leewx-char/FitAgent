@@ -12,6 +12,7 @@
 
 from sqlalchemy import (
     CHAR,
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -21,6 +22,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import relationship
@@ -81,6 +83,9 @@ class Session(Base):
 
     user = relationship("User", back_populates="sessions")
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
+    session_summary = relationship(
+        "SessionSummary", back_populates="session", uselist=False, cascade="all, delete-orphan"
+    )
     agent_runs = relationship(
         "AgentRun", back_populates="session", cascade="all, delete-orphan", passive_deletes=True
     )
@@ -151,9 +156,97 @@ class FitnessData(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     date = Column(Date, nullable=False)
     data_type = Column(String(20), nullable=False)
+    # 来自 Coros 的稳定记录键。日指标/睡眠按日期幂等，活动按 activity id 幂等，
+    # 因而同一天的多次活动不会再互相覆盖。
+    external_id = Column(String(128), nullable=False)
     data = Column(Text, default="{}")
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
-        Index("ix_fitness_user_date_type", "user_id", "date", "data_type", unique=True),
+        Index("ix_fitness_user_type_external", "user_id", "data_type", "external_id", unique=True),
     )
+
+
+class SessionSummary(Base):
+    """可重建的会话状态摘要，不替换或删除原始聊天记录。"""
+
+    __tablename__ = "session_summaries"
+
+    id = Column(CHAR(32), primary_key=True)
+    session_id = Column(
+        CHAR(32), ForeignKey("sessions.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    content = Column(Text, nullable=False, default="{}")
+    covered_through_message_id = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    session = relationship("Session", back_populates="session_summary")
+
+
+class MemoryFact(Base):
+    """用户可确认、撤销和过期的长期记忆条目。"""
+
+    __tablename__ = "memory_facts"
+
+    id = Column(CHAR(32), primary_key=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_message_id = Column(
+        Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    supersedes_id = Column(CHAR(32), nullable=True)
+    fact_key = Column(String(80), nullable=False)
+    category = Column(String(30), nullable=False)
+    value = Column(Text, nullable=False, default="{}")
+    display_text = Column(String(300), nullable=False)
+    status = Column(String(20), nullable=False, default="proposed")
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (Index("ix_memory_facts_user_status_key", "user_id", "status", "fact_key"),)
+
+
+class TrainingPlan(Base):
+    """用户显式生成的结构化周训练计划草稿或生效版本。"""
+
+    __tablename__ = "training_plans"
+
+    id = Column(CHAR(32), primary_key=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    week_start = Column(Date, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    status = Column(String(20), nullable=False, default="draft")
+    plan_data = Column(Text, nullable=False, default="{}")
+    safety_data = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    feedbacks = relationship(
+        "TrainingFeedback", back_populates="plan", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (Index("ix_training_plans_user_week", "user_id", "week_start"),)
+
+
+class TrainingFeedback(Base):
+    """计划执行后的用户反馈，供下一版训练计划安全调整使用。"""
+
+    __tablename__ = "training_feedbacks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    plan_id = Column(CHAR(32), ForeignKey("training_plans.id", ondelete="CASCADE"), nullable=False)
+    day_of_week = Column(Integer, nullable=False)
+    completed = Column(Boolean, nullable=False, default=False)
+    rpe = Column(Integer, nullable=True)
+    pain_score = Column(Integer, nullable=True)
+    notes = Column(String(500), nullable=False, default="")
+    created_at = Column(DateTime, server_default=func.now())
+
+    plan = relationship("TrainingPlan", back_populates="feedbacks")
+
+    __table_args__ = (UniqueConstraint("plan_id", "day_of_week", name="uq_plan_feedback_day"),)

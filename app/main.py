@@ -21,6 +21,7 @@ from app.api.exception_handlers import register_exception_handlers
 from app.utils.bootstrap import validate_runtime
 from app.services.vector_store import VectorStoreService
 from app.services.agent_tools import warm_rag_retriever
+from app.core.deps import close_coros
 from app.api.routers.chat import router as chat_router
 from app.api.routers.auth import router as auth_router
 from app.api.routers.sessions import router as sessions_router
@@ -29,6 +30,8 @@ from app.api.routers.profile import router as profile_router
 from app.api.routers.upload import router as upload_router
 from app.api.routers.fitness import router as fitness_router
 from app.api.routers.agent_runs import router as agent_runs_router
+from app.api.routers.memory import router as memory_router
+from app.api.routers.training_plans import router as training_plans_router
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
@@ -49,7 +52,10 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"启动检查未通过，共 {len(issues)} 个问题，请修复后重试")
     # 只加载离线 BM25 工件，不发起 embedding 或 Qdrant 查询；避免首个 RAG 请求承担建索引耗时。
     await asyncio.to_thread(warm_rag_retriever)
-    yield
+    try:
+        yield
+    finally:
+        close_coros()
 
 
 app = FastAPI(title="FitAgent API", version="2.0.0", lifespan=lifespan)
@@ -62,6 +68,8 @@ app.include_router(profile_router)
 app.include_router(upload_router)
 app.include_router(fitness_router)
 app.include_router(agent_runs_router)
+app.include_router(memory_router)
+app.include_router(training_plans_router)
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
 
