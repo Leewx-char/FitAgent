@@ -77,6 +77,8 @@ flowchart LR
 3. 看 [middleware.py](../app/services/middleware.py)：理解工具调用次数、递归步数、脱敏审计分别在哪里被约束。
 4. 看 [agent_trace.py](../app/services/agent_trace.py) 与 [repositories/agent_trace_repository.py](../app/repositories/agent_trace_repository.py)：理解为何记录“工具名、参数形状、耗时”，却不记录用户原文与工具参数值。
 
+`get_fitness_summary` 不接受模型传入的用户 ID。默认读取近 4 周；给出不同的 `start_day` / `end_day` 时读取最多 90 天的闭区间。若两个日期相同，第一次调用会列出当天活动的稳定 `activity_id` 候选，模型必须携带该 ID 再调用一次才能读取某次活动，不能仅按日期猜测晨跑或夜跑。
+
 这阶段最重要的判断是：**Agent 不是拥有全部数据库权限的万能类；它只能调用在 `agent_tools.py` 中显式注册的只读/受限工具。**
 
 建议测试：

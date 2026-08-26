@@ -1,4 +1,4 @@
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import json
 import os
 import time
@@ -12,7 +12,12 @@ from langchain_core.tools import tool
 from app.services.rag_service import RagSummarizeService
 from app.utils.logger_handler import logger
 from app.core.database import get_db_session
-from app.models import UserProfile, FitnessData
+from app.models import UserProfile
+from app.services.fitness_insights import (
+    list_activity_candidates,
+    load_activity_snapshot,
+    load_fitness_snapshot,
+)
 from app.services.memory_service import MemoryService
 
 
@@ -364,118 +369,88 @@ def get_confirmed_memories(query: str) -> str:
         return MemoryService.format_relevant_memories(db, user_id=user_id, query=query)
 
 
+_MAX_FITNESS_RANGE_DAYS = 90
+
+
+def _parse_fitness_day(value: str) -> date | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
 @tool(
-    description="获取用户近4周运动数据摘要：含平均静息心率、HRV、训练负荷、睡眠时长/质量、运动类型分布。当用户询问训练建议/运动报告/身体状态时调用，与用户画像和天气数据一起为个性化推荐提供数据基础。"
+    description=(
+        "读取当前用户的受限运动数据摘要。start_day/end_day 均为空时返回近4周汇总；"
+        "二者同时传 YYYYMMDD 且不同时，返回该闭区间汇总（最多90天）。"
+        "若二者为同一天且用户要分析某次活动，先不传 activity_id 调用一次以获取候选活动；"
+        "再把候选中精确的 activity_id 传回，读取该单次活动的时长、距离、心率和负荷等白名单指标。"
+        "不得编造活动 ID，不得传入用户 ID。"
+    )
 )
-def get_fitness_summary() -> str:
-    # 从请求级 ContextVar 取 user_id（chat 端点会在调用 Agent 前设置）
-    ctx = _user_context.get()
-    user_id = ctx.get("user_id")
+def get_fitness_summary(
+    start_day: str = "", end_day: str = "", activity_id: str = ""
+) -> str:
+    """从后端注入的当前用户范围内读取默认、区间或单次活动摘要。"""
+
+    user_id = _user_context.get().get("user_id")
     if not user_id:
         return "未获取到用户信息，请让用户先登录。"
 
-    # Agent 工具不走 FastAPI Depends，改用与 HTTP 请求相同的事务边界。
+    start_day = start_day.strip()
+    end_day = end_day.strip()
+    activity_id = activity_id.strip()
+    if bool(start_day) != bool(end_day):
+        return "start_day 和 end_day 必须同时提供，格式为 YYYYMMDD。"
+    if not start_day and activity_id:
+        return "读取单次活动时必须同时提供相同的 start_day 和 end_day。"
+
+    start_date = _parse_fitness_day(start_day)
+    end_date = _parse_fitness_day(end_day)
+    if start_day and (start_date is None or end_date is None):
+        return "日期格式必须是 YYYYMMDD。"
+    if start_date and end_date:
+        if start_date > end_date:
+            return "start_day 不能晚于 end_day。"
+        if end_date > date.today():
+            return "不能查询未来日期的运动数据。"
+        if (end_date - start_date).days + 1 > _MAX_FITNESS_RANGE_DAYS:
+            return f"单次查询最多支持 {_MAX_FITNESS_RANGE_DAYS} 天。"
+        if activity_id and start_date != end_date:
+            return "activity_id 只能用于 start_day 与 end_day 相同的一天。"
+
     with get_db_session() as db:
-        # 查近4周所有健身数据
-        since = date.today() - timedelta(weeks=4)
-        records = (
-            db.query(FitnessData)
-            .filter(FitnessData.user_id == user_id, FitnessData.date >= since)
-            .all()
-        )
-
-        if not records:
-            return (
-                "用户近4周暂无运动数据。请引导用户去 Dashboard 点击「同步」按钮获取"
-                "高驰设备数据，同步后即可基于真实运动数据提供个性化建议。"
+        if activity_id:
+            activity = load_activity_snapshot(
+                db,
+                user_id=user_id,
+                activity_date=start_date,
+                external_id=activity_id,
             )
+            if activity is None:
+                return "未找到该日期下对应 activity_id 的活动，请先获取当天候选活动后再选择。"
+            return activity.to_prompt()
 
-        # 按 data_type 分三类，同时解析 JSON 字符串为 dict
-        daily_list, sleep_list, activities = [], [], []
-        for r in records:
-            parsed = json.loads(r.data) if isinstance(r.data, str) else r.data
-            if r.data_type == "daily_metrics":
-                daily_list.append(parsed)
-            elif r.data_type == "sleep":
-                sleep_list.append(parsed)
-            else:
-                activities.append(parsed)
+        snapshot = load_fitness_snapshot(
+            db,
+            user_id=user_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        summary = snapshot.to_prompt()
+        if start_date is None or start_date != end_date:
+            return summary
 
-        lines = ["用户近4周运动数据摘要："]
-
-        # === 日指标聚合：恢复(rhr+hrv) + 负荷(tl+ratio) + 状态(tired) + 能力(vo2max) ===
-        if daily_list:
-            # filter 用 .get() 排掉缺字段的记录，值用 [] 直接取（filter 已保证 key 存在）
-            rhr_vals = [d["rhr"] for d in daily_list if d.get("rhr")]
-            hrv_vals = [d["avg_sleep_hrv"] for d in daily_list if d.get("avg_sleep_hrv")]
-            tl_vals = [d["training_load"] for d in daily_list if d.get("training_load")]
-            ratio_vals = [
-                d["training_load_ratio"] for d in daily_list if d.get("training_load_ratio")
-            ]
-            tired_vals = [d["tired_rate"] for d in daily_list if d.get("tired_rate")]
-            vo2_vals = [d["vo2max"] for d in daily_list if d.get("vo2max")]
-
-            lines.append(f"- 有效日指标数据：{len(daily_list)}天")
-            if rhr_vals:
-                avg_rhr = sum(rhr_vals) / len(rhr_vals)
-                # 静息心率偏低=恢复好、偏高=疲劳；给 LLM 一个可直接引用的中文状态标签
-                label = (
-                    "偏低，恢复良好"
-                    if avg_rhr < 60
-                    else ("偏高，注意恢复" if avg_rhr > 75 else "正常")
-                )
-                lines.append(f"- 平均静息心率：{avg_rhr:.0f} bpm（{label}）")
-            if hrv_vals:
-                lines.append(f"- 平均睡眠HRV(RMSSD)：{sum(hrv_vals) / len(hrv_vals):.0f} ms")
-            if tl_vals:
-                lines.append(
-                    f"- 训练负荷：日均{sum(tl_vals) / len(tl_vals):.0f}，单日最高{max(tl_vals)}"
-                )
-            if ratio_vals:
-                avg_ratio = sum(ratio_vals) / len(ratio_vals)
-                # 急/慢性比 > 1.3 通常表示短期负荷远超长期平均，overtraining 风险信号
-                ratio_label = "急性负荷偏高，注意恢复" if avg_ratio > 1.3 else "负荷比例正常"
-                lines.append(f"- 训练负荷比(急性/慢性)：{avg_ratio:.1f}（{ratio_label}）")
-            if tired_vals:
-                lines.append(f"- 平均疲劳度：{sum(tired_vals) / len(tired_vals):.1f}")
-            if vo2_vals:
-                # VO2max 取最新值（非平均），反映当前心肺能力
-                lines.append(f"- 最新VO2max：{vo2_vals[-1]}")
-
-        # === 睡眠聚合：总时长 + 深度睡眠（恢复质量的核心指标）===
-        if sleep_list:
-            durations = [
-                s["total_duration_minutes"] for s in sleep_list if s.get("total_duration_minutes")
-            ]
-            # phases 是嵌套 dict，用海象运算符 := 避免重复取值
-            deep_vals = []
-            for s in sleep_list:
-                if (phases := s.get("phases")) and phases.get("deep_minutes"):
-                    deep_vals.append(phases["deep_minutes"])
-            if durations:
-                average_hours = sum(durations) / len(durations) / 60
-                lines.append(f"- 平均睡眠时长：{average_hours:.1f}小时（{len(durations)}天）")
-            if deep_vals:
-                lines.append(f"- 平均深度睡眠：{sum(deep_vals) / len(deep_vals):.0f}分钟")
-
-        # === 运动聚合：次数 + 类型分布 + 总时长 ===
-        if activities:
-            sport_counts = {}
-            total_sec = 0
-            for a in activities:
-                # name 是用户在手表中看到的运动中文名（如"跑步""骑行"），比 sport_name 更友好
-                sport = a.get("name", "未知运动")
-                sport_counts[sport] = sport_counts.get(sport, 0) + 1
-                if a.get("duration_seconds"):
-                    total_sec += a["duration_seconds"]
-            lines.append(f"- 运动次数：{len(activities)}次")
-            # 按出现次数降序取前5种运动类型，避免长列表塞爆输出
-            top_sports = sorted(sport_counts.items(), key=lambda x: -x[-1])[:5]
-            lines.append(f"- 运动类型分布：{'、'.join(f'{k}x{v}' for k, v in top_sports)}")
-            if total_sec:
-                lines.append(f"- 总运动时长：{total_sec / 3600:.1f}小时")
-
-        return "\n".join(lines)
+        candidates = list_activity_candidates(db, user_id=user_id, activity_date=start_date)
+        if not candidates:
+            return summary
+        candidate_text = "\n".join(candidate.to_prompt() for candidate in candidates)
+        return (
+            f"{summary}\n\n当天可定位活动如下。若用户指定其中某一次，请使用相同日期和对应 "
+            f"activity_id 再调用本工具：\n{candidate_text}"
+        )
 
 
 @tool(

@@ -58,6 +58,5 @@ def load_training_plan_prompt() -> str:
         logger.error("[load_training_plan_prompt]读取训练计划提示词失败：%s", error)
         raise
 
-
 if __name__ == "__main__":
     print(load_system_prompts())

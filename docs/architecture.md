@@ -108,7 +108,7 @@ FitAgent 不把 MCP 的完整工具列表交给 Agent。依赖注入层固定传
 - 活动：优先 Coros `activity_id/activityId/id/uuid`，旧载荷缺少 ID 时基于开始时间、名称、运动类型、时长和距离生成稳定哈希；
 - Alembic 迁移先创建新索引再删除旧索引，以维持 MySQL 外键的左前缀索引要求。
 
-`FitnessSnapshot` 是 Agent 和训练计划共享的服务层聚合：只输出近 4 周的心率、HRV、负荷、睡眠、活动次数/时长/类型等受限指标，避免把原始设备 payload 直接塞进 prompt。
+`FitnessSnapshot` 是 Agent 和训练计划共享的服务层聚合：默认输出近 4 周、也可按受限日期闭区间输出心率、HRV、负荷、睡眠、活动次数/时长/类型等指标，避免把原始设备 payload 直接塞进 prompt。单日活动先返回开始时间和稳定 `external_id` 候选；只有 Agent 用该 ID 精确二次查询时，才返回一项活动的白名单摘要，绝不按日期猜测晨跑或夜跑。
 
 ## 5. 主要接口契约
 
