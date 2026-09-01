@@ -58,7 +58,7 @@ _PERSONAL_QUERY_TERMS = (
 
 
 class MemoryService:
-    """Keep the write, retrieval, confirmation, and expiry rules in one testable service."""
+    """将记忆写入、检索、确认和过期规则集中于可测试服务中。"""
 
     def extract_candidates(self, message: Message) -> list[MemoryCandidate]:
         """从用户消息确定性生成审核候选；后续模型提取器也不能直接确认记忆。"""
@@ -88,8 +88,7 @@ class MemoryService:
     def propose_from_user_message(
         self, db: DBSession, *, user_id: int, message: Message
     ) -> list[MemoryFact]:
-        """按最近更新时间查询用户记忆，并可排除已撤销项。"""
-        """Persist de-duplicated proposals without making them available to the Agent."""
+        """持久化去重后的待审核用户记忆候选，且不向 Agent 开放。"""
 
         proposals = []
         for candidate in self.extract_candidates(message):
@@ -134,7 +133,7 @@ class MemoryService:
 
     @staticmethod
     def confirm(db: DBSession, memory: MemoryFact) -> MemoryFact:
-        """Confirm a proposal and revoke the conflicting fact it explicitly replaces."""
+        """确认候选记忆，并撤销其明确替代的冲突事实。"""
 
         if memory.status == "revoked":
             raise ValueError("已撤销的记忆不能直接确认，请重新创建")
@@ -153,7 +152,7 @@ class MemoryService:
 
     @staticmethod
     def format_relevant_memories(db: DBSession, *, user_id: int, query: str) -> str:
-        """Return a bounded, user-scoped context only when the request is personal in nature."""
+        """仅在请求具个人属性时返回受限且限定用户范围的记忆上下文。"""
 
         if not any(term in query for term in _PERSONAL_QUERY_TERMS):
             return "当前问题不需要读取长期记忆。"
@@ -185,7 +184,7 @@ class MemoryService:
         messages: list[Message],
         recent_message_limit: int = RECENT_MESSAGE_LIMIT,
     ) -> str:
-        """Persist an auditable state summary for history outside the recent-message window."""
+        """为最近消息窗口外的历史持久化可审计状态摘要。"""
 
         older_messages = (
             messages[:-recent_message_limit] if len(messages) > recent_message_limit else []

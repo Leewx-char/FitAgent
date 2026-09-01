@@ -53,8 +53,7 @@ def create_memory(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """更新当前用户记忆的显示文本、到期时间或确认状态。"""
-    """保存用户主动输入的已确认记忆。"""
+    """创建并确认当前用户主动提交的记忆。"""
 
     memory = MemoryFact(
         id=uuid.uuid4().hex,
@@ -79,7 +78,7 @@ def update_memory(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """撤销当前用户指定的记忆。"""
+    """更新记忆文本、到期时间或确认与撤销状态。"""
     memory = (
         db.query(MemoryFact)
         .filter(MemoryFact.id == memory_id, MemoryFact.user_id == current_user.id)

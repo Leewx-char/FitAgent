@@ -242,9 +242,7 @@ class RagSummarizeService:
 
         vector_results: list[tuple[Document, float]] = []
         bm25_results: list[tuple[Document, float]] = []
-        # Keep result aggregation in query-plan order. Completing futures are
-        # intentionally not used as an ordering source: otherwise identical
-        # requests can receive different RRF ranks under different latencies.
+        # 按查询计划顺序聚合结果，不以完成顺序排序，避免不同延迟导致相同请求得到不同 RRF 排名。
         tasks: list[tuple[str, str, Future]] = []
         with ThreadPoolExecutor(max_workers=max(2, len(plan.search_queries) * 2)) as executor:
             for search_query in plan.search_queries:

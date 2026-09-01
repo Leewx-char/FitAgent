@@ -1,4 +1,4 @@
-"""Structured, evidence-aware and safety-bounded weekly plan generation."""
+"""生成结构化、包含证据且受安全策略约束的周训练计划。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from app.utils.prompt_loader import load_training_plan_prompt
 
 
 class PlanGenerationError(RuntimeError):
-    """An expected, user-facing generation failure that never persists a partial plan."""
+    """面向用户的预期生成失败，不会持久化不完整计划。"""
 
 
 def _parse_json_field(value: str | dict | list | None, default):
@@ -37,7 +37,7 @@ def _parse_json_field(value: str | dict | list | None, default):
 
 
 def _extract_json(content: object) -> dict[str, Any]:
-    """Accept plain JSON or a fenced model response, then reject any non-object response."""
+    """接受普通或代码围栏 JSON，并拒绝非对象形式的模型响应。"""
 
     raw = str(content or "").strip()
     if raw.startswith("```"):
@@ -69,7 +69,7 @@ class SafetyAssessment:
 
 
 class TrainingSafetyPolicy:
-    """Deterministic policy gate. The model may plan only within this envelope."""
+    """确定性安全策略门槛，模型只能在其限定范围内制定计划。"""
 
     @staticmethod
     def assess(
@@ -116,7 +116,7 @@ class TrainingSafetyPolicy:
 
 
 class TrainingPlanService:
-    """Orchestrate retrieval, constrained LLM generation and persistent feedback state."""
+    """编排检索、受约束的模型生成与持久化训练反馈状态。"""
 
     def __init__(self, *, model=None, rag_service: RagSummarizeService | None = None) -> None:
         """接收可注入模型和 RAG 服务，便于测试与替换。"""

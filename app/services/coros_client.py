@@ -1,9 +1,5 @@
-"""A serial, restartable stdio MCP client for Coros data.
-
-The Coros MCP server is a local subprocess with one stdin/stdout stream. A single stream
-cannot safely service interleaved JSON-RPC requests, so this client owns one process and
-serializes an entire request/response exchange. Timeout reads use a small reader thread
-instead of ``select.select`` because Windows does not support ``select`` on pipe handles.
+"""用于 Coros 数据的串行、可重启标准输入输出 MCP 客户端。
+客户端独占本地子进程并串行处理请求与响应；Windows 下以读取线程实现管道超时。
 """
 
 from __future__ import annotations
@@ -25,12 +21,9 @@ load_dotenv()
 
 
 class CorosClient:
-    """Own the lifecycle and serialized JSON-RPC communication of ``coros-mcp serve``.
-
-    The local server is an external, community-maintained integration. FitAgent passes an
-    explicit readonly toolset to the child process and only exposes three read methods below.
-    Authentication happens with the provider CLI before this process is started.
-    """
+    """管理 ``coros-mcp serve`` 生命周期和串行 JSON-RPC 通信。
+该社区服务仅以只读工具集启动，认证须在启动子进程前通过服务方 CLI 完成。
+"""
 
     _RESPONSE_TIMEOUT_SECONDS = 30.0
 
@@ -60,15 +53,14 @@ class CorosClient:
         self._start_process()
 
     def _build_environment(self) -> dict[str, str]:
-        """Explicitly propagate Coros settings to the isolated MCP process."""
+        """将 Coros 配置显式传递给隔离的 MCP 子进程。"""
 
         env = os.environ.copy()
         for key in ("COROS_EMAIL", "COROS_PASSWORD", "COROS_REGION"):
             if key not in env:
                 env[key] = os.getenv(key, "")
         env.update(self._environment)
-        # MCP stdio is UTF-8 JSON. Windows otherwise inherits a GBK console encoding, which
-        # makes the provider CLI/server fail when it emits Chinese text or status symbols.
+        # MCP 标准输入输出使用 UTF-8 JSON，避免 Windows 继承 GBK 后无法处理中文或状态符号。
         env["PYTHONUTF8"] = "1"
         return env
 
@@ -160,7 +152,7 @@ class CorosClient:
         *,
         ensure_running: bool = True,
     ) -> dict[str, Any]:
-        """Send one JSON-RPC request and wait for its matching response under a process lock."""
+        """在进程锁保护下发送 JSON-RPC 请求并等待其匹配响应。"""
 
         with self._lock:
             if ensure_running:
@@ -189,8 +181,7 @@ class CorosClient:
             while time.monotonic() < deadline:
                 response = json.loads(self._read_response_line())
                 if response.get("id") != request_id:
-                    # JSON-RPC notifications do not have an id. Do not let them corrupt an
-                    # ordered request/response exchange, but preserve observability.
+                    # JSON-RPC 通知没有标识，不能破坏有序请求响应交换，但仍保留可观测性。
                     logger.debug("忽略 Coros MCP 非匹配消息：method=%s", response.get("method", ""))
                     continue
                 if "error" in response:
@@ -252,8 +243,7 @@ class CorosClient:
             except OSError as error:
                 raise RuntimeError("无法启动 coros-mcp 数据同步命令") from error
             if result.returncode != 0:
-                # Provider output can contain upstream implementation details. Keep it out of
-                # API responses and logs; the user can diagnose via `coros-mcp auth-status`.
+                # 服务方输出可能包含上游实现细节，不写入 API 响应或日志；用户可运行认证状态命令排查。
                 raise RuntimeError("coros-mcp 数据同步失败，请检查认证状态后重试")
             try:
                 summary = json.loads(result.stdout.strip() or "{}")
