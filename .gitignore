@@ -54,3 +54,4 @@ Thumbs.db
 coros-mcp/
 .tools/
 .impeccable/
+.worktrees/
