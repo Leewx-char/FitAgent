@@ -243,7 +243,8 @@ class CorosClient:
             except OSError as error:
                 raise RuntimeError("无法启动 coros-mcp 数据同步命令") from error
             if result.returncode != 0:
-                # 服务方输出可能包含上游实现细节，不写入 API 响应或日志；用户可运行认证状态命令排查。
+                # 服务方输出可能包含上游实现细节，不写入 API 响应或日志。
+                # 用户可运行认证状态命令排查。
                 raise RuntimeError("coros-mcp 数据同步失败，请检查认证状态后重试")
             try:
                 summary = json.loads(result.stdout.strip() or "{}")
