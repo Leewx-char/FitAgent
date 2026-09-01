@@ -8,13 +8,8 @@
 
 以下文档以当前代码为准，发生架构变更时必须同步更新：
 
-- [架构说明](./docs/architecture.md)：系统边界、数据流和关键可靠性策略；
-- [HTTP API 契约](./docs/api-contract.md)：接口、SSE 事件与前端消费约定；
 - [项目学习路线](./docs/learning-guide.md)：按真实请求链路阅读代码；
-- [项目决策记录](./docs/decisions.md) 与 [优化执行计划](./docs/execution-plan.md)：已做取舍和下一轮未实现项；
-- [面试材料](./docs/interview/) 与 [面试演示指南](./docs/interview-demo.md)：项目介绍、亮点、问答、简历写法和演示脚本。
-
-`docs/refactoring/` 记录各阶段的实现演进。阅读其中内容时，以本 README、架构说明和学习路线为当前口径；文档内标明“历史快照”的内容不代表现状。
+- [面试材料](./docs/interview/)：项目介绍、亮点、问答和简历写法。
 
 ## 项目能力
 
@@ -240,9 +235,7 @@ FitAgent/
 ├── prompts/                    # 系统提示词
 ├── data/                       # 经审核的知识源（Markdown / TXT / PDF）
 ├── frontend/                   # Vue 3 前端
-├── docs/                       # 架构文档
-│   ├── architecture.md          # 当前系统架构与数据流
-│   ├── decisions.md
+├── docs/                       # 学习路线与面试文档
 │   ├── learning-guide.md        # 按事件流阅读代码的学习路线
 │   └── interview/               # 项目简介、技术亮点、问答与简历写法
 ├── alembic/                     # 数据库迁移
@@ -264,7 +257,7 @@ FitAgent/
   └── 取 Top-6 返回
 ```
 
-更多设计决策和技术细节请查看 [架构说明](./docs/architecture.md)、[执行计划](./docs/execution-plan.md)、[决策记录](./docs/decisions.md)、[02 离线索引](./docs/refactoring/02-rag-offline-pipeline.md)、[03 在线检索](./docs/refactoring/03-rag-online-pipeline.md)、[面试演示指南](./docs/interview-demo.md)、[AI 应用开发岗位面试准备文档](./docs/ai-application-interview-prep.md)，以及独立的 [项目简介](./docs/interview/项目简介.md)、[技术亮点](./docs/interview/技术亮点.md)、[常见面试题](./docs/interview/常见面试题.md)、[简历写法](./docs/interview/简历写法.md)。
+更多设计决策和技术细节请查看 [项目学习路线](./docs/learning-guide.md)，以及独立的 [项目简介](./docs/interview/项目简介.md)、[技术亮点](./docs/interview/技术亮点.md)、[常见面试题](./docs/interview/常见面试题.md)、[简历写法](./docs/interview/简历写法.md)。
 
 ## Qdrant 演进 Demo
 

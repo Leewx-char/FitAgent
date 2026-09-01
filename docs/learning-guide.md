@@ -6,7 +6,7 @@
 
 ## 0. 先建立全局地图（20 分钟）
 
-先读 [architecture.md](./architecture.md)，然后只浏览下面这些入口，不深入实现：
+先读本 README 的项目能力与目录说明，然后只浏览下面这些入口，不深入实现：
 
 | 入口 | 先确认的问题 |
 | --- | --- |
@@ -105,7 +105,7 @@ flowchart LR
 3. 为什么使用 RRF 而不混合相似度分数？——不同检索器分数没有可比的量纲，按排名融合更稳妥。
 4. 为什么上下文要预算？——召回多不等于应该全部塞给模型，需控制成本与噪声。
 
-配合阅读 [docs/refactoring/02-rag-offline-pipeline.md](./refactoring/02-rag-offline-pipeline.md)、[docs/refactoring/03-rag-online-pipeline.md](./refactoring/03-rag-online-pipeline.md) 与 [test_retrieval_evaluator.py](../app/tests/test_retrieval_evaluator.py)。
+配合阅读 [test_retrieval_evaluator.py](../app/tests/test_retrieval_evaluator.py)。
 
 ## 4. 重点补课：记忆不是“全量聊天记录”（45–60 分钟）
 
@@ -161,7 +161,7 @@ flowchart LR
 5. 未佩戴手表导致睡眠数组为空是完整成功；只有真实上游错误才返回 `partial`，已成功的数据源仍会落库。
 6. 活动按 `(user_id, data_type, external_id)` 幂等，而不是按日期，故同一天晨跑和夜跑不会互相覆盖。
 
-日志出现“子进程不可用，正在重建连接”不一定是故障：显式同步主动关闭旧读取进程后，下一次读缓存会按设计完成握手重建。具体部署与边界见 [architecture.md](./architecture.md#4-coros-mcp-与运动数据)。
+日志出现“子进程不可用，正在重建连接”不一定是故障：显式同步主动关闭旧读取进程后，下一次读缓存会按设计完成握手重建。具体部署与边界可结合 `coros_client.py`、`coros_mcp_runner.py` 与对应测试阅读。
 
 ## 7. 健康文档：上传后必须由用户确认（30 分钟）
 
@@ -186,7 +186,7 @@ sequenceDiagram
 
 ## 8. 最后再读数据模型、迁移、API 契约与前端页面（45 分钟）
 
-此时再读 [models.py](../app/models.py)、[schemas.py](../app/schemas.py)、[alembic/versions](../alembic/versions) 和 [api-contract.md](./api-contract.md)，你会知道每一张表和每个 Schema 为哪条事件流服务。
+此时再读 [models.py](../app/models.py)、[schemas.py](../app/schemas.py) 和 [alembic/versions](../alembic/versions)，你会知道每一张表和每个 Schema 为哪条事件流服务。
 
 前端按用户闭环读：
 
@@ -206,7 +206,7 @@ sequenceDiagram
 | Day 4 | 三层记忆 | 解释候选—确认—撤销与防模型污染 |
 | Day 5 | 训练计划 | 解释“先规则、后生成、再校验” |
 | Day 6 | Coros/MCP 与幂等 | 解释 stdio 串行、缓存隔离、partial、external id |
-| Day 7 | 演示与面试 | 按 [interview-demo.md](./interview-demo.md) 演练，并回答 [interview/常见面试题.md](./interview/常见面试题.md) |
+| Day 7 | 演示与面试 | 参考 [interview/项目简介.md](./interview/项目简介.md) 演练，并回答 [interview/常见面试题.md](./interview/常见面试题.md) |
 
 ## 卡住时的排查顺序
 
