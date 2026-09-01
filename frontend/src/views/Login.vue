@@ -74,6 +74,7 @@ const rules = {
   password: { required: true, message: '请输入密码', trigger: 'blur' },
 }
 
+/** 校验登录表单，登录后按是否已有档案跳转到对应页面。 */
 async function handleLogin() {
   try {
     await formRef.value?.validate()

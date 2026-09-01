@@ -57,10 +57,12 @@ const loading = ref(false)
 const proposed = computed(() => memories.value.filter((item) => item.status === 'proposed'))
 const confirmed = computed(() => memories.value.filter((item) => item.status === 'confirmed'))
 
+/** 将记忆到期时间格式化为页面显示文案。 */
 function expiresText(item) {
   return item.expires_at ? `到期：${item.expires_at.slice(0, 10)}` : '不会自动到期'
 }
 
+/** 读取记忆列表，供待确认与已确认分组展示。 */
 async function load() {
   loading.value = true
   try {
@@ -73,6 +75,7 @@ async function load() {
   }
 }
 
+/** 将待确认记忆设为已确认，并刷新列表。 */
 async function confirm(item) {
   try {
     await updateMemory(item.id, { status: 'confirmed' })
@@ -83,6 +86,7 @@ async function confirm(item) {
   }
 }
 
+/** 撤销指定记忆，并刷新列表反映最新状态。 */
 async function revoke(item) {
   try {
     await revokeMemory(item.id)

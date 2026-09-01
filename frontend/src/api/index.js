@@ -28,6 +28,7 @@ api.interceptors.response.use(
   },
 )
 
+/** 优先拼接服务端返回的错误消息，缺失时使用调用方提供的兜底文案。 */
 export function getErrorMessage(error, fallback = '请求失败，请稍后重试') {
   const messages = error.response?.data?.messages
   return Array.isArray(messages) && messages.length > 0 ? messages.join('；') : fallback

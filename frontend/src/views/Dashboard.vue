@@ -123,11 +123,13 @@ const SPORT_COLORS = {
   'Sport 1002': '#42A5F5',
 }
 
+/** 将设备返回的运动类型转为中文名称，未知类型保留原值。 */
 function sportName(name) {
   if (!name) return '--'
   return SPORT_MAP[name] || name
 }
 
+/** 为运动类型选择图标标签的预设颜色，缺失或未知类型使用兜底色。 */
 function sportColor(name) {
   if (!name) return '#ccc'
   return SPORT_COLORS[name] || '#90A4AE'
@@ -163,6 +165,7 @@ const avgRhr = computed(() => {
   return (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(0)
 })
 
+/** 用当前每日指标重建训练负荷与 HRV 的双轴折线图。 */
 function buildTloadHrvChart() {
   if (!tloadChartRef.value) return
   const sorted = [...dailyMetrics.value].sort((a, b) => a.date.localeCompare(b.date))
@@ -200,6 +203,7 @@ function buildTloadHrvChart() {
   })
 }
 
+/** 用当前睡眠记录重建各睡眠阶段的堆叠柱状图。 */
 function buildSleepChart() {
   if (!sleepChartRef.value) return
   const sorted = [...sleepRecords.value].sort((a, b) => a.date.localeCompare(b.date))
@@ -221,22 +225,26 @@ function buildSleepChart() {
   })
 }
 
+/** 在窗口尺寸变化时同步调整两个 ECharts 图表。 */
 function handleResize() {
   tloadChart?.resize()
   sleepChart?.resize()
 }
 
+/** 将完整日期截为月日格式，以便活动列表紧凑展示。 */
 function formatDate(dateStr) {
   if (!dateStr) return ''
   return dateStr.slice(5)
 }
 
+/** 将秒数格式化为小时和分钟的中文时长。 */
 function formatDuration(seconds) {
   const h = Math.floor(seconds / 3600)
   const m = Math.floor((seconds % 3600) / 60)
   return h > 0 ? `${h}小时${m}分` : `${m}分`
 }
 
+/** 并行加载近四周指标、睡眠和活动，并在 DOM 更新后绘制图表。 */
 async function loadData() {
   loading.value = true
   try {
@@ -259,6 +267,7 @@ async function loadData() {
   }
 }
 
+/** 触发设备数据同步，重新加载面板并提示完整或部分同步结果。 */
 async function handleSync() {
   syncing.value = true
   try {

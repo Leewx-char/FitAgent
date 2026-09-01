@@ -217,15 +217,18 @@ const hasUnresolvedConflicts = computed(() =>
   Object.keys(uploadResult.value?.data?.conflicts || {}).length > 0,
 )
 
+/** 判断提取出的指定健康指标是否有可保存的数值。 */
 function hasEditableValue(key) {
   const value = editableHealthData.value?.[key]?.value
   return value !== null && value !== undefined && value !== ''
 }
 
+/** 深拷贝文档提取结果，避免在冲突选择中直接改动原始响应。 */
 function prepareEditableHealthData(data) {
   editableHealthData.value = JSON.parse(JSON.stringify(data || {}))
 }
 
+/** 采用用户选择的冲突指标，并将该指标从待解决冲突中移除。 */
 function selectConflict(key, metric) {
   editableHealthData.value[key] = JSON.parse(JSON.stringify(metric))
   delete uploadResult.value.data.conflicts[key]
@@ -238,15 +241,18 @@ const quickActions = [
   '新手健身注意事项',
 ]
 
+/** 将助手 Markdown 渲染为已净化的 HTML，供消息内容安全展示。 */
 function renderMarkdown(text) {
   if (!text) return ''
   return DOMPurify.sanitize(marked.parse(text))
 }
 
+/** 切换指定消息的证据卡片展开状态。 */
 function toggleEvidence(index) {
   expandedEvidence.value[index] = !expandedEvidence.value[index]
 }
 
+/** 等待消息 DOM 更新后，将消息容器滚动到末尾。 */
 async function scrollToBottom() {
   await nextTick()
   if (messagesRef.value) {
@@ -254,6 +260,7 @@ async function scrollToBottom() {
   }
 }
 
+/** 处理发送按钮和回车事件，忽略换行、空内容及忙碌状态。 */
 function handleSend(e) {
   if (e?.shiftKey) return
   if (!inputText.value.trim() || streaming.value || uploading.value) return
@@ -262,11 +269,13 @@ function handleSend(e) {
   inputText.value = ''
 }
 
+/** 发送预设快捷问题，上传或流式回复期间不重复发起请求。 */
 function sendQuick(text) {
   if (streaming.value || uploading.value) return
   sendMessage(text)
 }
 
+/** 追加用户消息并消费聊天接口的 SSE 流，持续更新助手回复和工具状态。 */
 function sendMessage(text) {
   chatStore.addMessage({ role: 'user', content: text })
   chatStore.currentSessionId = chatStore.currentSessionId || null
@@ -317,6 +326,7 @@ function sendMessage(text) {
       let msgAdded = false
       let sseBuffer = ''
 
+      /** 递归读取 SSE 数据块，按事件类型同步聊天、证据和工具链状态。 */
       function read() {
         return reader.read().then(({ done, value }) => {
           if (done) {
@@ -406,6 +416,7 @@ function sendMessage(text) {
     })
 }
 
+/** 经用户确认后打开健康文档文件选择框。 */
 function triggerUpload() {
   const acknowledged = window.confirm(
     '提醒：文件会发送至 DashScope 模型提取指标，处理结束后会清理临时文件。是否继续选择文件？',
@@ -415,6 +426,7 @@ function triggerUpload() {
   }
 }
 
+/** 上传选中文档，保存提取结果并初始化可编辑健康指标。 */
 async function handleFileSelect(e) {
   const file = e.target.files?.[0]
   if (!file) return
@@ -436,6 +448,7 @@ async function handleFileSelect(e) {
   }
 }
 
+/** 在所有冲突已选择后，将可编辑健康指标保存到用户档案。 */
 async function confirmHealthData() {
   if (hasUnresolvedConflicts.value) {
     message.warning('请先选择冲突指标的保存值')

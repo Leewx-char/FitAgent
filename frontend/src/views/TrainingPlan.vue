@@ -72,11 +72,14 @@ const feedback = reactive({ completed: true, rpe: null, pain_score: null, notes:
 const weekdays = ['一', '二', '三', '四', '五', '六', '日']
 const sortedDays = computed(() => [...(plan.value?.plan.days || [])].sort((a, b) => a.day_of_week - b.day_of_week))
 
+/** 将计划日类型映射为用于标签展示的 Naive UI 主题。 */
 function tagType(kind) { return kind === '训练' ? 'success' : kind === '恢复' ? 'warning' : 'default' }
+/** 加载当前周计划并维护页面加载状态。 */
 async function load() {
   loading.value = true
   try { plan.value = (await getCurrentPlan()).data.data } catch (error) { message.error(getErrorMessage(error, '读取本周计划失败')) } finally { loading.value = false }
 }
+/** 请求生成计划；请求超时时展示检索和模型生成的专用提示。 */
 async function generate() {
   generating.value = true
   try {
@@ -89,6 +92,7 @@ async function generate() {
     message.error(getErrorMessage(error, fallback))
   } finally { generating.value = false }
 }
+/** 为指定计划日重置反馈表单并打开反馈弹窗。 */
 function openFeedback(day, completed) {
   feedbackDay.value = day
   feedback.completed = completed
@@ -97,6 +101,7 @@ function openFeedback(day, completed) {
   feedback.notes = ''
   feedbackVisible.value = true
 }
+/** 将当前计划日的执行反馈提交到服务端。 */
 async function submitFeedback() {
   if (!plan.value || !feedbackDay.value) return
   try {

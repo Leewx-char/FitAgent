@@ -93,6 +93,7 @@ const rules = {
   ],
 }
 
+/** 校验注册表单，成功注册后提示用户前往登录。 */
 async function handleRegister() {
   try {
     await formRef.value?.validate()

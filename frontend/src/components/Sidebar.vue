@@ -92,12 +92,14 @@ const showUserMenu = ref(false)
 const sessionListRef = ref(null)
 const sessionScrollTop = ref(false)
 
+/** 根据会话列表的滚动距离切换顶部阴影。 */
 function onSessionScroll() {
   if (sessionListRef.value) {
     sessionScrollTop.value = sessionListRef.value.scrollTop > 4
   }
 }
 
+/** 加载服务端会话列表，供侧边栏展示和切换。 */
 async function loadSessions() {
   try {
     const res = await getSessions()
@@ -107,6 +109,7 @@ async function loadSessions() {
   }
 }
 
+/** 切换到所选会话并加载其历史消息，随后返回聊天页。 */
 async function switchSession(sessionId) {
   if (chatStore.currentSessionId === sessionId) return
   chatStore.currentSessionId = sessionId
@@ -119,6 +122,7 @@ async function switchSession(sessionId) {
   router.push('/')
 }
 
+/** 创建空会话，将其置为当前会话并清空消息视图。 */
 async function newSession() {
   try {
     const res = await createSession()
@@ -131,6 +135,7 @@ async function newSession() {
   }
 }
 
+/** 删除会话；若删除的是当前会话，同时清除当前消息。 */
 async function handleDeleteSession(sessionId) {
   try {
     await deleteSession(sessionId)
@@ -144,6 +149,7 @@ async function handleDeleteSession(sessionId) {
   }
 }
 
+/** 退出登录并导航到登录页。 */
 function handleLogout() {
   authStore.logout()
   router.push('/login')

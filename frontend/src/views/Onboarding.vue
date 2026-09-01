@@ -16,7 +16,7 @@
         </n-steps>
       </div>
 
-      <!-- Step 1: 基本信息 -->
+      <!-- 第一步：填写基本信息。 -->
       <div v-show="currentStep === 1" class="step-content">
         <h3>你的性别是？</h3>
         <n-radio-group v-model:value="form.gender" size="large">
@@ -36,7 +36,7 @@
         />
       </div>
 
-      <!-- Step 2: 身体数据 -->
+      <!-- 第二步：填写身体数据。 -->
       <div v-show="currentStep === 2" class="step-content">
         <h3>你的身高和体重是？</h3>
         <div class="body-inputs">
@@ -66,7 +66,7 @@
         </div>
       </div>
 
-      <!-- Step 3: 健身目标 -->
+      <!-- 第三步：选择健身目标。 -->
       <div v-show="currentStep === 3" class="step-content">
         <h3>你的健身目标是什么？</h3>
         <n-radio-group v-model:value="form.goal">
@@ -80,7 +80,7 @@
         </n-radio-group>
       </div>
 
-      <!-- Step 4: 训练经验 -->
+      <!-- 第四步：选择训练经验。 -->
       <div v-show="currentStep === 4" class="step-content">
         <h3>你的运动经验如何？</h3>
         <n-radio-group v-model:value="form.experience">
@@ -96,7 +96,7 @@
         <p style="color: var(--text-secondary); margin-top: 8px">每周 {{ form.weekly_days }} 天训练</p>
       </div>
 
-      <!-- Step 5: 特殊情况 -->
+      <!-- 第五步：补充特殊情况与偏好。 -->
       <div v-show="currentStep === 5" class="step-content">
         <h3>你有伤病史吗？</h3>
         <n-checkbox-group v-model:value="form.injuries">
@@ -213,14 +213,17 @@ const canNext = computed(() => {
   }
 })
 
+/** 返回上一个填写步骤，不低于第一步。 */
 function prevStep() {
   if (currentStep.value > 1) currentStep.value--
 }
 
+/** 当前步骤信息完整时进入下一步，不超过第五步。 */
 function nextStep() {
   if (canNext.value && currentStep.value < 5) currentStep.value++
 }
 
+/** 在已选偏好中切换单个选项。 */
 function togglePref(pref) {
   const idx = form.selectedPrefs.indexOf(pref)
   if (idx >= 0) {
@@ -230,6 +233,7 @@ function togglePref(pref) {
   }
 }
 
+/** 将表单偏好归纳为档案字段，保存成功后进入聊天页。 */
 async function handleSubmit() {
   submitting.value = true
   try {

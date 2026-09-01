@@ -219,18 +219,21 @@ const hasHealthData = computed(() => {
   return Object.values(hd).some(field => field?.value != null)
 })
 
+/** 从档案健康数据中读取指定指标的数值，缺失时返回空值。 */
 function getHealthValue(key) {
   const field = profile.value?.health_data?.[key]
   if (!field || typeof field !== 'object') return null
   return field.value != null ? field.value : null
 }
 
+/** 从档案健康数据中读取指定指标的单位，缺失时返回空值。 */
 function getHealthUnit(key) {
   const field = profile.value?.health_data?.[key]
   if (!field || typeof field !== 'object') return null
   return field.unit || null
 }
 
+/** 加载档案到页面状态；失败时清空展示并提示用户。 */
 async function loadProfile() {
   loading.value = true
   try {
@@ -245,6 +248,7 @@ async function loadProfile() {
   }
 }
 
+/** 将当前档案复制到编辑表单并进入编辑模式。 */
 function startEdit() {
   if (!profile.value) return
   editing.value = true
@@ -261,10 +265,12 @@ function startEdit() {
   })
 }
 
+/** 退出编辑模式，不提交编辑表单内容。 */
 function cancelEdit() {
   editing.value = false
 }
 
+/** 仅提交编辑表单中与当前档案不同的字段。 */
 async function saveEdit() {
   saving.value = true
   try {
