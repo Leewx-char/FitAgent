@@ -162,8 +162,8 @@ class BlockingOutput:
         if not self._served:
             self._served = True
             return self._first
-        # The daemon reader is intentionally left blocked; the client must tear down this
-        # poisoned protocol stream instead of reusing it for the next request.
+        # 守护读取线程会被刻意保持阻塞；客户端必须销毁这条已损坏的协议流，
+        # 而不能在下一次请求中继续复用它。
         import threading
 
         threading.Event().wait()
