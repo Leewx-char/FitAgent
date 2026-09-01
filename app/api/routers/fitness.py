@@ -16,8 +16,7 @@ from app.api.response import success_response
 router = APIRouter(prefix="/api/fitness", tags=["fitness"])
 
 
-# 先尝试插入。如果已经存在（user_id + date + data_type 三个字段重复了）
-# ，那就只更新 data 字段的内容。
+# 唯一键为 user_id、data_type 与 external_id；冲突时仅更新 data 字段。
 def _record_external_id(data_type: str, record: dict, date_str: str) -> str:
     """生成幂等键，且不合并同日的多条活动记录。
     日指标和睡眠按日期标识；活动优先使用上游标识，缺失时使用稳定指纹。
@@ -49,7 +48,7 @@ def _upsert_fitness(
     external_id: str,
     data: dict,
 ):
-    """按用户、日期、类型和外部标识写入或更新运动数据。"""
+    """按用户、类型和外部标识写入运动数据；冲突时仅更新数据载荷。"""
     stmt = (
         mysql_upsert(FitnessData)
         .values(
