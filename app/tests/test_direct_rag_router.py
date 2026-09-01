@@ -8,23 +8,27 @@ from app.services.react_agent import ReactAgent
 
 
 def test_direct_rag_accepts_generic_knowledge_question():
+    """验证通用动作知识问题可进入直接 RAG 快速路径。"""
     assert ReactAgent._should_use_direct_rag(
         [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}]
     )
 
 
 def test_direct_rag_keeps_personalized_question_in_full_agent_flow():
+    """验证包含个人条件的问题仍走完整 Agent 流程。"""
     assert not ReactAgent._should_use_direct_rag(
         [{"role": "user", "content": "结合我的体重和目标，帮我安排减脂训练。"}]
     )
 
 
 def test_direct_rag_streams_real_evidence_before_answer(monkeypatch):
+    """验证直接 RAG 在答案前依次输出工具与真实证据事件。"""
     captured = {}
 
     class FakeRagService:
         @staticmethod
         def build_context(query, history):
+            """捕获直接 RAG 的查询与历史，并返回固定检索结果。"""
             captured["query"] = query
             captured["history"] = history
             return SimpleNamespace(content="[证据:1] 深蹲资料", result="retrieval-result")
@@ -32,6 +36,7 @@ def test_direct_rag_streams_real_evidence_before_answer(monkeypatch):
     class FakeModel:
         @staticmethod
         def stream(_messages):
+            """返回一条带证据标记的固定模型输出。"""
             return [SimpleNamespace(content="膝盖跟随脚尖。[证据:1]")]
 
     monkeypatch.setattr(react_agent, "_get_rag_service", lambda: FakeRagService())

@@ -31,6 +31,7 @@ class TestFitness:
         assert "未返回可写入" in resp.json()["messages"][0]
 
     def test_sync_cache_failure_returns_502(self, auth_client, coros_mock):
+        """验证 Coros 缓存同步失败会返回可识别的 502 错误。"""
         coros_mock.sync_cache.side_effect = RuntimeError("provider unavailable")
 
         resp = auth_client.post("/api/fitness/sync", json={})
@@ -41,6 +42,7 @@ class TestFitness:
     def test_sync_persists_available_sources_when_sleep_is_unavailable(
         self, auth_client, coros_mock
     ):
+        """验证睡眠源不可用时仍持久化其他可用运动数据。"""
         today = datetime.now().strftime("%Y%m%d")
         coros_mock.sync_cache.return_value = {
             "partial": True,

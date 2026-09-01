@@ -1,4 +1,4 @@
-"""Unit tests for the deterministic safety gate around LLM plan generation."""
+"""LLM 训练计划生成前确定性安全门的单元测试。"""
 
 import pytest
 
@@ -15,6 +15,7 @@ from app.services.training_plan_service import (
 def _week_plan(
     *, intensity: str = "低", evidence_ids: list[str] | None = None
 ) -> WeeklyTrainingPlan:
+    """构造指定训练强度和证据标识的七天周计划。"""
     days = []
     for day_of_week in range(1, 8):
         if day_of_week in {1, 3, 5}:
@@ -49,6 +50,7 @@ def _week_plan(
 
 
 def test_safety_policy_downgrades_for_injury_load_sleep_and_pain():
+    """验证伤病、高负荷、睡眠不足和疼痛会降低安全强度上限。"""
     profile = UserProfile(experience="advanced", injuries='["膝盖"]')
     snapshot = FitnessSnapshot(max_training_load_ratio=1.4, avg_sleep_hours=5.5)
     feedback = [type("Feedback", (), {"pain_score": 5, "rpe": 8})()]
@@ -61,6 +63,7 @@ def test_safety_policy_downgrades_for_injury_load_sleep_and_pain():
 
 
 def test_plan_validator_rejects_intensity_above_deterministic_safety_limit():
+    """验证计划验证器拒绝超过确定性安全上限的训练强度。"""
     profile = UserProfile(experience="beginner", injuries='["腰部不适"]')
     safety = TrainingSafetyPolicy.assess(profile, FitnessSnapshot(), [])
 
@@ -74,6 +77,7 @@ def test_plan_validator_rejects_intensity_above_deterministic_safety_limit():
 
 
 def test_plan_validator_rejects_hallucinated_evidence_id():
+    """验证计划验证器拒绝检索结果中不存在的证据标识。"""
     safety = TrainingSafetyPolicy.assess(UserProfile(), FitnessSnapshot(), [])
 
     with pytest.raises(PlanGenerationError, match="证据"):

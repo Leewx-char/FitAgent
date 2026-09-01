@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 class TestUploadHealthDoc:
     def test_upload_without_auth(self, anon_client, image_file):
+        """验证匿名用户无法上传健康文档。"""
         with open(image_file, "rb") as f:
             response = anon_client.post(
                 "/api/upload/health-doc",
@@ -11,6 +12,7 @@ class TestUploadHealthDoc:
         assert response.status_code == 401
 
     def test_upload_unsupported_file_type(self, client):
+        """验证不支持的文本文件上传返回统一 400 错误。"""
         fake_txt = b"this is a text file, not an image or pdf"
         response = client.post(
             "/api/upload/health-doc",
@@ -23,6 +25,7 @@ class TestUploadHealthDoc:
         assert "不支持" in data["messages"][0]
 
     def test_upload_image_success(self, client, image_file, mock_health_data):
+        """验证图片上传调用视觉解析并返回标准健康指标。"""
         with patch("app.services.doc_parser._extract_with_vl", return_value=mock_health_data):
             with open(image_file, "rb") as f:
                 response = client.post(
@@ -39,6 +42,7 @@ class TestUploadHealthDoc:
         assert data["data"]["metrics"]["heart_rate"]["value"] == 72
 
     def test_upload_text_pdf_success(self, client, text_pdf, mock_health_data):
+        """验证文本型 PDF 上传调用文本解析并返回健康数据。"""
         with patch("app.services.doc_parser._extract_with_llm", return_value=mock_health_data):
             with open(text_pdf, "rb") as f:
                 response = client.post(
@@ -51,6 +55,7 @@ class TestUploadHealthDoc:
         assert data["data"] is not None
 
     def test_upload_encrypted_pdf(self, client, encrypted_pdf):
+        """验证加密 PDF 上传被拒绝且不返回健康数据。"""
         with open(encrypted_pdf, "rb") as f:
             response = client.post(
                 "/api/upload/health-doc",

@@ -1,4 +1,4 @@
-"""API-level test for structured plan persistence without a real LLM or Qdrant."""
+"""结构化训练计划持久化的 API 测试，不依赖真实 LLM 或 Qdrant。"""
 
 import json
 from types import SimpleNamespace
@@ -8,6 +8,7 @@ from app.services.training_plan_service import TrainingPlanService
 
 
 def _model_plan() -> dict:
+    """构造包含训练日与恢复日的七天模型计划载荷。"""
     days = []
     for day_of_week in range(1, 8):
         if day_of_week in {1, 3, 5}:
@@ -50,15 +51,18 @@ def _model_plan() -> dict:
 
 class FakePlanModel:
     def invoke(self, messages):
+        """忽略提示消息并返回序列化的受控周计划。"""
         return SimpleNamespace(content=json.dumps(_model_plan(), ensure_ascii=False))
 
 
 class FakeRagService:
     def build_context(self, query):
+        """忽略查询并返回不含命中项的固定训练证据。"""
         return SimpleNamespace(content="训练与恢复证据", result=SimpleNamespace(hits=[]))
 
 
 def test_generate_plan_and_upsert_feedback(auth_client, monkeypatch):
+    """验证生成训练计划后，同日反馈会按计划和日期幂等更新。"""
     profile = auth_client.post(
         "/api/profile",
         json={

@@ -10,6 +10,7 @@ from app.utils.path_tool import get_abs_path
 
 
 def _result_for(query: str) -> RetrievalResult:
+    """构造包含单条营养证据的受控检索结果。"""
     return RetrievalResult(
         request=RetrievalRequest(query=query),
         expanded_query=query,
@@ -40,6 +41,7 @@ def _result_for(query: str) -> RetrievalResult:
 
 
 def test_evaluator_calculates_source_and_evidence_metrics():
+    """验证评测器正确计算来源召回、首位准确率与证据支持率。"""
     case = RetrievalEvaluationCase(
         case_id="nutrition-protein",
         category="营养",
@@ -56,6 +58,7 @@ def test_evaluator_calculates_source_and_evidence_metrics():
 
 
 def test_curated_chinese_evaluation_set_is_loadable_and_diverse():
+    """验证内置中文评测集可加载且覆盖多个知识类别。"""
     cases = load_cases(get_abs_path("app/evaluation/retrieval_cases.json"))
 
     assert len(cases) == 24

@@ -10,6 +10,7 @@ def assert_envelope(payload: dict, *, status_code: int) -> None:
 
 
 def test_request_validation_uses_unified_envelope(anon_client):
+    """验证请求校验失败也使用统一 JSON 响应信封。"""
     response = anon_client.post("/api/auth/register", json={"username": "a", "password": "short"})
 
     assert response.status_code == 422
@@ -20,6 +21,7 @@ def test_request_validation_uses_unified_envelope(anon_client):
 
 
 def test_health_check_uses_unified_envelope(anon_client):
+    """验证健康检查成功响应遵循统一 JSON 信封。"""
     response = anon_client.get("/api/health")
 
     assert response.status_code == 200
@@ -28,6 +30,7 @@ def test_health_check_uses_unified_envelope(anon_client):
 
 
 def test_resource_endpoints_use_unified_envelope(auth_client):
+    """验证资料、会话和运动资源端点共用统一响应结构。"""
     profile_response = auth_client.post(
         "/api/profile",
         json={

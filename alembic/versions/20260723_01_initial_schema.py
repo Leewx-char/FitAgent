@@ -16,6 +16,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    """创建用户、会话、消息与运动数据的初始数据表和索引。"""
     op.create_table(
         "users",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -91,6 +92,7 @@ def upgrade() -> None:
     )
 
 def downgrade() -> None:
+    """按依赖反序删除初始 schema 创建的索引和数据表。"""
     op.drop_index("ix_fitness_user_date_type", table_name="fitness_data")
     op.drop_table("fitness_data")
     op.drop_table("messages")

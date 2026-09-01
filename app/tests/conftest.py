@@ -15,6 +15,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_after_all():
+    """在测试会话结束后删除运行期间生成的临时夹具文件。"""
     yield
     for generated_fixture in ("test.jpg", "test_encrypted.pdf"):
         fixture_path = FIXTURES_DIR / generated_fixture
@@ -24,6 +25,7 @@ def cleanup_after_all():
 
 @pytest.fixture
 def client():
+    """提供将当前用户依赖替换为固定测试用户的 HTTP 客户端。"""
     app.dependency_overrides[get_current_user] = lambda: User(id=1, username="testuser")
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -31,12 +33,14 @@ def client():
 
 @pytest.fixture
 def anon_client():
+    """提供不覆盖鉴权依赖的匿名 HTTP 客户端。"""
     app.dependency_overrides.clear()
     yield TestClient(app)
 
 
 @pytest.fixture
 def mock_health_data():
+    """返回上传健康报告解析成功时使用的标准指标响应。"""
     return {
         "code": 0,
         "messages": [],
@@ -57,6 +61,7 @@ def mock_health_data():
 
 @pytest.fixture
 def image_file():
+    """生成并返回用于上传测试的红色 JPEG 临时文件。"""
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     path = FIXTURES_DIR / "test.jpg"
     from PIL import Image
@@ -68,11 +73,13 @@ def image_file():
 
 @pytest.fixture
 def text_pdf():
+    """返回仓库中可被正常解析的文本型健康报告 PDF。"""
     return FIXTURES_DIR / "text_health_report.pdf"
 
 
 @pytest.fixture
 def encrypted_pdf():
+    """生成并返回带密码的 PDF，用于验证加密文件拒绝逻辑。"""
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     path = FIXTURES_DIR / "test_encrypted.pdf"
     from pypdf import PdfWriter

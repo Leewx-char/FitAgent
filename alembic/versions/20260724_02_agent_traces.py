@@ -12,6 +12,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    """创建 Agent 运行轨迹及其工具调用明细表和索引。"""
     op.create_table(
         "agent_runs",
         sa.Column("id", sa.CHAR(length=32), nullable=False),
@@ -56,6 +57,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """删除 Agent 运行轨迹相关的索引和数据表。"""
     op.drop_index("ix_agent_tool_calls_run_sequence", table_name="agent_tool_calls")
     op.drop_table("agent_tool_calls")
     op.drop_index("ix_agent_runs_request_id", table_name="agent_runs")

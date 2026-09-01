@@ -13,6 +13,7 @@ def _make_flaky(fail_flag: dict, threshold=2, recovery=0.2):
     @_with_circuit_breaker(name="test", failure_threshold=threshold, recovery_timeout=recovery)
     @_with_retry(max_retries=0)
     def flaky():
+        """按失败标记模拟网络异常或返回正常结果。"""
         calls["n"] += 1
         if fail_flag["on"]:
             raise URLError("service down")
@@ -73,6 +74,7 @@ class TestCircuitBreaker:
         @_with_circuit_breaker(name="ok", failure_threshold=2)
         @_with_retry(max_retries=0)
         def healthy():
+            """返回正常业务结果以验证不会触发熔断。"""
             breaker_calls["n"] += 1
             return "正常结果"
 

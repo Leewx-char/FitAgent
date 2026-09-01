@@ -5,6 +5,7 @@ from app.utils.file_handler import get_file_sha256_hex
 
 
 def test_bm25_source_filter_and_offline_artifact(tmp_path):
+    """验证离线 BM25 索引加载后能按来源过滤检索结果。"""
     artifact = tmp_path / "bm25_documents.json"
     artifact.write_text(
         json.dumps(
@@ -36,6 +37,7 @@ def test_bm25_source_filter_and_offline_artifact(tmp_path):
 
 
 def test_file_checksum_is_stable_for_index_revisions(tmp_path):
+    """验证同一源文件的 SHA-256 校验和稳定可用于索引版本。"""
     source = tmp_path / "source.txt"
     source.write_text("健身知识", encoding="utf-8")
 
@@ -47,6 +49,7 @@ def test_file_checksum_is_stable_for_index_revisions(tmp_path):
 
 
 def test_bm25_returns_parent_context_but_keeps_child_evidence(tmp_path):
+    """验证 BM25 返回父级上下文，同时保留命中的子级证据文本。"""
     artifact = tmp_path / "bm25_documents.json"
     artifact.write_text(
         json.dumps(

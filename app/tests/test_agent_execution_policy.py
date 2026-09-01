@@ -5,6 +5,7 @@ from app.services.react_agent import ReactAgent
 
 
 def test_tool_audit_keeps_argument_shape_without_raw_user_value():
+    """验证审计记录仅保留工具参数类型而不泄露用户原始值。"""
     shape = _tool_argument_shape({"query": "我的体重是75kg", "city": "广州", "limit": 6})
 
     assert shape == {"query": "str", "city": "str", "limit": "int"}
@@ -13,6 +14,7 @@ def test_tool_audit_keeps_argument_shape_without_raw_user_value():
 
 
 def test_tool_budget_blocks_only_calls_after_limit():
+    """验证调用预算在达到上限前放行，超限后的调用被拒绝。"""
     context = {"tool_call_limit": 2}
 
     assert _consume_tool_budget(context) == (True, 1, 2)
@@ -21,11 +23,13 @@ def test_tool_budget_blocks_only_calls_after_limit():
 
 
 def test_full_agent_flow_passes_recursion_limit_to_langgraph():
+    """验证 Agent 执行流向 LangGraph 传递递归与工具调用限制。"""
     captured = {}
 
     class FakeGraph:
         @staticmethod
         def stream(_input, **kwargs):
+            """记录 LangGraph 流式调用参数并返回空事件序列。"""
             captured.update(kwargs)
             return iter(())
 

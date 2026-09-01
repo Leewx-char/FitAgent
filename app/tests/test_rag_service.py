@@ -11,9 +11,11 @@ class FakeVectorStore:
     """不连接 Qdrant 的只读检索替身。"""
 
     def __init__(self) -> None:
+        """初始化记录向量查询文本的列表。"""
         self.queries: list[str] = []
 
     def similarity_search(self, query, _limit, _source_filter):
+        """记录查询并返回两条固定向量证据。"""
         self.queries.append(query)
         return [
             ScoredChunk(
@@ -46,10 +48,12 @@ class FakeVectorStore:
 
     @staticmethod
     def active_revision():
+        """返回固定的活动索引版本。"""
         return "revision-1"
 
     @staticmethod
     def health():
+        """返回可用状态的固定仓储健康信息。"""
         return {"status": "ready"}
 
 
@@ -58,10 +62,12 @@ class FakeBM25:
 
     @staticmethod
     def load_artifact(_path):
+        """模拟加载与向量索引版本匹配的 BM25 工件。"""
         return "revision-1"
 
     @staticmethod
     def search(_query, k, source_filter=None):
+        """忽略筛选参数并返回一条固定 BM25 证据。"""
         del k, source_filter
         return [
             (
@@ -85,6 +91,7 @@ class SplitQueryPlanner:
 
     @staticmethod
     def plan(query, _history):
+        """将输入查询规划为两个固定的训练与饮食子查询。"""
         return QueryPlan(
             original_query=query,
             rewritten_query="新手减脂训练与饮食安排",
@@ -98,6 +105,7 @@ class MetadataVectorStore:
 
     @staticmethod
     def similarity_search(_query, _limit, _source_filter):
+        """返回带动作和防护标签的两个接近分数候选。"""
         return [
             ScoredChunk(
                 Document(
@@ -129,20 +137,24 @@ class MetadataVectorStore:
 
     @staticmethod
     def active_revision():
+        """返回固定的活动索引版本。"""
         return "revision-1"
 
     @staticmethod
     def health():
+        """返回可用状态的固定仓储健康信息。"""
         return {"status": "ready"}
 
 
 class EmptyBM25:
     @staticmethod
     def load_artifact(_path):
+        """模拟无可用工件的空 BM25 检索器。"""
         return None
 
     @staticmethod
     def search(_query, _k, _source_filter=None):
+        """返回空列表以关闭词法候选干扰。"""
         return []
 
 
@@ -151,6 +163,7 @@ class SourceQualityVectorStore:
 
     @staticmethod
     def similarity_search(_query, _limit, _source_filter):
+        """返回外部与精选来源的两个接近分数候选。"""
         return [
             ScoredChunk(
                 Document(
@@ -180,10 +193,12 @@ class SourceQualityVectorStore:
 
     @staticmethod
     def active_revision():
+        """返回固定的活动索引版本。"""
         return "revision-1"
 
     @staticmethod
     def health():
+        """返回可用状态的固定仓储健康信息。"""
         return {"status": "ready"}
 
 
@@ -192,6 +207,7 @@ class NearTieReranker:
 
     @staticmethod
     def rerank(_query, candidates):
+        """为候选返回受控的近似精排分数。"""
         scores = {"external/fitkg-cn/fitkg-cn-train.md\x1fexternal": 0.90}
         return [
             type(
@@ -204,6 +220,7 @@ class NearTieReranker:
 
 
 def test_retrieve_returns_stable_evidence_contract():
+    """验证混合检索返回稳定的证据字段、排序信息和脱敏日志。"""
     vector_store = FakeVectorStore()
     service = RagSummarizeService(vector_store=vector_store, bm25=FakeBM25())
 
@@ -220,6 +237,7 @@ def test_retrieve_returns_stable_evidence_contract():
 
 
 def test_build_context_includes_citable_evidence_markers():
+    """验证构建上下文包含可引用的证据标记与来源标识。"""
     service = RagSummarizeService(vector_store=FakeVectorStore(), bm25=FakeBM25())
 
     context = service.build_context("深蹲时膝盖怎么放？").content
@@ -230,6 +248,7 @@ def test_build_context_includes_citable_evidence_markers():
 
 
 def test_retrieve_runs_each_controlled_subquery_and_records_plan():
+    """验证检索服务执行每个受控子查询并记录查询规划结果。"""
     vector_store = FakeVectorStore()
     service = RagSummarizeService(
         vector_store=vector_store,
@@ -249,6 +268,7 @@ def test_retrieve_runs_each_controlled_subquery_and_records_plan():
 
 
 def test_metadata_tags_boost_matching_evidence_without_hard_filtering():
+    """验证匹配标签仅提升候选排序，不作为硬性筛选条件。"""
     service = RagSummarizeService(vector_store=MetadataVectorStore(), bm25=EmptyBM25())
     service.reranker_enabled = False
 
@@ -261,6 +281,7 @@ def test_metadata_tags_boost_matching_evidence_without_hard_filtering():
 
 
 def test_source_quality_penalty_softly_demotes_low_information_external_source():
+    """验证来源质量惩罚会温和降低外部低信息证据的排序。"""
     service = RagSummarizeService(
         vector_store=SourceQualityVectorStore(),
         bm25=EmptyBM25(),
@@ -277,9 +298,11 @@ def test_source_quality_penalty_softly_demotes_low_information_external_source()
 
 
 def test_query_planner_can_be_disabled_without_calling_the_model():
+    """验证关闭查询规划后不会调用规划器且使用原始查询。"""
     class UnexpectedPlanner:
         @staticmethod
         def plan(_query, _history):
+            """若禁用规划后仍被调用则使测试失败。"""
             raise AssertionError("关闭查询规划后不应调用规划器")
 
     service = RagSummarizeService(

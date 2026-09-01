@@ -13,6 +13,7 @@ def audit_records():
 
     class _CaptureHandler(logging.Handler):
         def emit(self, record):
+            """将审计日志记录解析为 JSON 并存入捕获列表。"""
             records.append(json.loads(record.getMessage()))
 
     audit_logger = logging.getLogger("audit")

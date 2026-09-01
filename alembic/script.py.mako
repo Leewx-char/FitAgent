@@ -16,8 +16,10 @@ depends_on: Union[str, Sequence[str], None] = ${repr(depends_on)}
 
 
 def upgrade() -> None:
+    """执行该版本定义的数据库结构升级。"""
     ${upgrades if upgrades else "pass"}
 
 
 def downgrade() -> None:
+    """撤销该版本定义的数据库结构升级。"""
     ${downgrades if downgrades else "pass"}

@@ -1,9 +1,10 @@
-"""Tests for deterministic conversation fact extraction."""
+"""确定性会话事实提取测试。"""
 
 from app.services.session_facts import extract_session_facts
 
 
 def test_extract_session_facts_collects_supported_facts_without_duplicates():
+    """验证提取器汇总用户事实，并去除重复伤病信息。"""
     facts = extract_session_facts(
         [
             {"role": "user", "content": "我住在成都，想减脂，膝盖和肩关节都有不适。"},
@@ -21,6 +22,7 @@ def test_extract_session_facts_collects_supported_facts_without_duplicates():
 
 
 def test_extract_session_facts_ignores_empty_messages_and_invalid_city_questions():
+    """验证空消息和询问城市的问题不会产生用户事实。"""
     facts = extract_session_facts(
         [
             {"role": "user", "content": ""},

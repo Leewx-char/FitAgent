@@ -8,6 +8,7 @@ from app.services import doc_parser
 
 
 def _health_data(height_cm: float) -> dict:
+    """构造仅含身高指标的标准健康解析成功响应。"""
     return {
         "code": 0,
         "messages": [],
@@ -16,6 +17,7 @@ def _health_data(height_cm: float) -> dict:
 
 
 def test_scanned_pdf_processes_every_page_and_retries_only_failed_page(monkeypatch):
+    """验证扫描 PDF 逐页识别，且仅对失败页使用备用 DPI 重试。"""
     settings = SimpleNamespace(
         health_document_max_pages=20,
         health_document_render_dpi=200,
@@ -48,6 +50,7 @@ def test_scanned_pdf_processes_every_page_and_retries_only_failed_page(monkeypat
 
 
 def test_merge_conflicts_requires_user_choice():
+    """验证不同页的同一指标冲突时保留候选而不擅自合并。"""
     first = HealthDataSchema.model_validate(_health_data(170)["data"])
     second = HealthDataSchema.model_validate(_health_data(180)["data"])
 
@@ -58,6 +61,7 @@ def test_merge_conflicts_requires_user_choice():
 
 
 def test_rejects_model_result_without_unified_envelope():
+    """验证缺少统一响应信封的模型结果会被判定为解析失败。"""
     code, data, messages = doc_parser._parse_model_result(
         {"height_cm": {"value": 175, "unit": "cm"}}
     )
@@ -68,6 +72,7 @@ def test_rejects_model_result_without_unified_envelope():
 
 
 def test_result_always_uses_the_unified_envelope():
+    """验证解析失败结果仍包含统一的 code、messages 与 data 字段。"""
     result = doc_parser._result(doc_parser.HEALTH_CODE_PARSE_FAILED, ["无法识别"])
 
     assert set(result) == {"code", "messages", "data"}
@@ -75,6 +80,7 @@ def test_result_always_uses_the_unified_envelope():
 
 
 def test_rejects_pdf_that_exceeds_page_limit(monkeypatch):
+    """验证页数超过配置上限的 PDF 被拒绝解析。"""
     monkeypatch.setattr(doc_parser, "_extract_pdf_text_and_page_count", lambda _: ("", 21))
     monkeypatch.setattr(
         doc_parser,

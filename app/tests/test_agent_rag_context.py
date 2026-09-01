@@ -6,11 +6,13 @@ from app.services import agent_tools
 
 
 def test_rag_tool_forwards_recent_history_to_rag_service(monkeypatch):
+    """验证 RAG 工具将当前查询和最近会话历史传给检索服务。"""
     captured = {}
 
     class FakeRagService:
         @staticmethod
         def build_context(query, source_filter, history):
+            """捕获 RAG 上下文构建参数并返回固定证据内容。"""
             captured["query"] = query
             captured["source_filter"] = source_filter
             captured["history"] = history
@@ -38,6 +40,7 @@ def test_rag_tool_forwards_recent_history_to_rag_service(monkeypatch):
 
 
 def test_build_evidence_cards_keeps_only_display_safe_hit_fields():
+    """验证证据卡片只暴露前端展示所需的安全检索字段。"""
     hit = SimpleNamespace(
         rank=1,
         evidence_id="guide.md#chunk-1",

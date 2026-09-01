@@ -1,7 +1,7 @@
-"""Add user-controlled memory, adaptive plan storage, and stable fitness record ids.
+"""新增用户可控记忆、自适应计划存储与稳定运动记录标识。
 
-Revision ID: 20260817_03
-Revises: 20260724_02
+修订编号：20260817_03
+依赖版本：20260724_02
 """
 
 from collections.abc import Sequence
@@ -17,6 +17,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    """扩展运动幂等键，并创建会话记忆、训练计划和反馈结构。"""
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     column_names = {column["name"] for column in inspector.get_columns("fitness_data")}
@@ -24,8 +25,8 @@ def upgrade() -> None:
 
     if "external_id" not in column_names:
         op.add_column("fitness_data", sa.Column("external_id", sa.String(length=128), nullable=True))
-    # Historical rows predate a stable Coros activity id. Preserve their old daily idempotency
-    # behavior while all new activity records receive a true activity-level key.
+    # 历史记录早于稳定的 Coros 活动标识；保留其原有按日幂等行为，
+    # 同时让新活动记录使用真正的活动级标识。
     op.execute(
         "UPDATE fitness_data SET external_id = CONCAT(data_type, ':', DATE_FORMAT(date, '%Y%m%d')) "
         "WHERE external_id IS NULL"
@@ -116,6 +117,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """删除记忆与训练计划结构，并还原运动数据的按日唯一索引。"""
     op.drop_table("training_feedbacks")
     op.drop_index("ix_training_plans_user_week", table_name="training_plans")
     op.drop_table("training_plans")

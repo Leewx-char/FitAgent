@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-Install the community Coros MCP server in a virtual environment isolated from FitAgent.
+在与 FitAgent 隔离的虚拟环境中安装社区 Coros MCP 服务。
 
 .DESCRIPTION
-coros-mcp depends on FastMCP, which can require a Starlette version different from the
-FastAPI application's fixed dependency. Keeping it in .tools/coros-mcp-venv preserves
-the API server's dependency graph while still providing a local stdio MCP executable.
+coros-mcp 依赖 FastMCP，后者可能要求与 FastAPI 应用锁定版本不同的 Starlette。
+将其安装在 .tools/coros-mcp-venv 中，既保持 API 服务的依赖图稳定，也提供本地
+stdio MCP 可执行程序。
 
-The source revision is intentionally pinned for reproducible interview demos. Upgrade it
-only after validating the tool contracts in app/services/coros_client.py and real sync.
+源代码版本被固定，以便面试演示可复现。只有验证 app/services/coros_client.py 的
+工具契约和真实同步后，才应升级该版本。
 #>
 
 [CmdletBinding()]
@@ -17,8 +17,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-# coros-mcp writes Unicode status symbols. Force UTF-8 so Windows PowerShell's legacy GBK
-# console encoding cannot make `auth-status` or an interactive login crash.
+# coros-mcp 会输出 Unicode 状态符号。强制 UTF-8，避免 Windows PowerShell 的旧版 GBK
+# 控制台编码导致 `auth-status` 或交互式登录崩溃。
 $env:PYTHONUTF8 = "1"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $VenvPath = Join-Path $ProjectRoot ".tools\coros-mcp-venv"

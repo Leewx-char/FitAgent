@@ -13,19 +13,22 @@ class FakeQueryModel:
     """返回受控 JSON 的查询模型替身。"""
 
     def __init__(self, content: str) -> None:
+        """保存待返回的受控模型内容并初始化提示词记录。"""
         self.content = content
         self.prompts: list[str] = []
 
     def invoke(self, prompt: str):
+        """记录查询规划提示词并返回预设内容。"""
         self.prompts.append(prompt)
         return SimpleNamespace(content=self.content)
 
 
 class OrderedQueryPlanner:
-    """Use two queries to verify that aggregation ignores completion order."""
+    """提供两个受控查询，用于验证聚合结果不受完成顺序影响。"""
 
     @staticmethod
     def plan(query, _history):
+        """返回两个固定子查询及其原始查询顺序。"""
         return SimpleNamespace(
             original_query=query,
             rewritten_query=query,
@@ -36,10 +39,11 @@ class OrderedQueryPlanner:
 
 
 class OutOfOrderVectorStore:
-    """Make the second planned query finish first without changing its rank."""
+    """让第二个计划查询先完成，同时保持各自的原始排序位置。"""
 
     @staticmethod
     def similarity_search(query, _limit, _source_filter):
+        """让慢查询延迟完成并返回对应的单条向量命中。"""
         if query == "slow query":
             time.sleep(0.02)
             chunk_id = "slow"
@@ -57,11 +61,14 @@ class OutOfOrderVectorStore:
 
     @staticmethod
     def active_revision():
+        """返回供检索结果使用的固定索引版本。"""
         return "revision-1"
 
 
 def test_query_planner_keeps_normal_question_on_fast_path():
+    """验证普通问题不调用模型，直接走查询规划快速路径。"""
     def unexpected_model_factory():
+        """若普通问题错误触发模型创建则使测试失败。"""
         raise AssertionError("不应调用模型")
 
     planner = QueryPlanner(model_factory=unexpected_model_factory)
@@ -73,6 +80,7 @@ def test_query_planner_keeps_normal_question_on_fast_path():
 
 
 def test_query_planner_resolves_reference_with_history():
+    """验证指代性问题结合历史后由模型改写为多个子查询。"""
     model = FakeQueryModel(
         '{"rewritten_query":"杠铃深蹲的标准动作和常见错误","subqueries":["杠铃深蹲标准动作","杠铃深蹲常见错误"]}'
     )
@@ -90,6 +98,7 @@ def test_query_planner_resolves_reference_with_history():
 
 
 def test_query_planner_falls_back_when_model_returns_invalid_payload():
+    """验证模型返回无效载荷时规划器回退到原始查询。"""
     planner = QueryPlanner(model_factory=lambda: FakeQueryModel("不是 JSON"))
 
     plan = planner.plan(
@@ -103,6 +112,7 @@ def test_query_planner_falls_back_when_model_returns_invalid_payload():
 
 
 def test_lexical_reranker_promotes_candidate_matching_query_terms():
+    """验证词法重排序提升包含查询关键词的候选证据。"""
     reranker = LexicalReranker(base_score_weight=0.7)
 
     results = reranker.rerank(
@@ -117,6 +127,7 @@ def test_lexical_reranker_promotes_candidate_matching_query_terms():
 
 
 def test_context_builder_keeps_child_evidence_inside_budget():
+    """验证上下文预算截断时仍保留子级证据附近的关键文本。"""
     parent = "前言" * 180 + "关键证据：深蹲时膝盖追踪脚尖方向。" + "补充" * 180
     hit = RetrievalHit(
         evidence_id="动作指南大全.txt#chunk-1",
@@ -141,11 +152,13 @@ def test_context_builder_keeps_child_evidence_inside_budget():
 
 
 def test_parallel_retrieval_keeps_query_plan_order_when_requests_finish_out_of_order():
+    """验证并行检索即使乱序完成，结果仍按查询计划排列。"""
     from app.services.rag_service import RagSummarizeService
 
     class EmptyBM25:
         @staticmethod
         def load_artifact(_path):
+            """模拟空 BM25 工件加载，不提供词法检索结果。"""
             return None
 
     service = RagSummarizeService(

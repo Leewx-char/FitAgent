@@ -6,6 +6,7 @@ from app.services.knowledge_indexer import KnowledgeIndexer
 
 
 def test_deep_cleaner_removes_navigation_and_repeated_lines():
+    """验证深度清洗器移除导航、链接和重复文本行。"""
     cleaner = DeepTextCleaner()
 
     cleaned = cleaner.clean(
@@ -17,6 +18,7 @@ def test_deep_cleaner_removes_navigation_and_repeated_lines():
 
 
 def test_content_deduplicator_removes_exact_content_duplicates():
+    """验证内容去重器将规范化后相同的文本识别为重复。"""
     deduplicator = ContentDeduplicator()
 
     assert deduplicator.is_duplicate("深蹲时保持脊柱中立。") is False
@@ -25,6 +27,7 @@ def test_content_deduplicator_removes_exact_content_duplicates():
 
 
 def test_metadata_enricher_creates_reusable_tags_without_unused_summary():
+    """验证元数据增强器产生可复用标签而不生成未使用摘要。"""
     enricher = MetadataEnricher()
     enriched = enricher.enrich("深蹲训练前应热身；膝部疼痛时停止训练。", title="下肢动作防护")
 
@@ -34,6 +37,7 @@ def test_metadata_enricher_creates_reusable_tags_without_unused_summary():
 
 
 def test_indexer_keeps_child_retrieval_text_and_parent_context():
+    """验证索引切片保留子级检索文本及共享的父级上下文。"""
     indexer = object.__new__(KnowledgeIndexer)
     indexer.config = {"near_duplicate_hamming_distance": 3}
     indexer.parent_splitter = RecursiveCharacterTextSplitter(

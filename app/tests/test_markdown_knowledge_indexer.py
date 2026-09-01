@@ -10,6 +10,7 @@ from app.utils.file_handler import txt_loader
 
 
 def test_fitkg_markdown_uses_explicit_title_boundaries():
+    """验证 FitKG Markdown 使用明确的文档和样本标题层级。"""
     markdown = render_markdown(
         [
             {
@@ -30,6 +31,7 @@ def test_fitkg_markdown_uses_explicit_title_boundaries():
 
 
 def test_markdown_is_split_by_heading_before_recursive_chunking():
+    """验证 Markdown 先按标题分段，再进行递归切片。"""
     indexer = object.__new__(KnowledgeIndexer)
     indexer.markdown_header_splitter = MarkdownHeaderTextSplitter(
         headers_to_split_on=[("#", "文档标题"), ("##", "章节标题")],
@@ -59,6 +61,7 @@ def test_markdown_is_split_by_heading_before_recursive_chunking():
 
 
 def test_text_loader_reads_utf8_markdown(tmp_path):
+    """验证文本加载器以 UTF-8 正确读取中文 Markdown。"""
     source = tmp_path / "fitkg.md"
     source.write_text("# 中文标题\n\n## 样本\n深蹲。", encoding="utf-8")
 
@@ -68,11 +71,14 @@ def test_text_loader_reads_utf8_markdown(tmp_path):
 
 
 def test_indexer_cleans_unpublished_collection_when_batch_embedding_fails(monkeypatch):
+    """验证批量向量化失败时删除尚未发布的临时集合。"""
     class FailingEmbeddingModel:
         def __init__(self):
+            """初始化批量调用次数，用于在第二批模拟连接失败。"""
             self.calls = 0
 
         def embed_documents(self, _texts):
+            """首批返回向量，后续批次模拟代理连接异常。"""
             self.calls += 1
             if self.calls == 1:
                 return [[0.1, 0.2]]
@@ -80,16 +86,20 @@ def test_indexer_cleans_unpublished_collection_when_batch_embedding_fails(monkey
 
     class FakeRepository:
         def __init__(self):
+            """初始化记录创建与删除集合名称的列表。"""
             self.created: list[str] = []
             self.deleted: list[str] = []
 
         def create_collection(self, collection_name, _vector_size):
+            """记录创建临时集合的请求。"""
             self.created.append(collection_name)
 
         def upsert(self, _collection_name, _chunks, _vectors):
+            """若向量化失败后仍写入集合，则使测试失败。"""
             raise AssertionError("向量化失败后不应继续写入")
 
         def delete_collection(self, collection_name):
+            """记录删除未发布临时集合的请求。"""
             self.deleted.append(collection_name)
 
     repository = FakeRepository()
@@ -115,6 +125,7 @@ def test_indexer_cleans_unpublished_collection_when_batch_embedding_fails(monkey
 
 
 def test_preflight_blocks_dataset_that_does_not_meet_chunk_gate():
+    """验证预检在有效切片数低于质量门槛时阻止构建。"""
     indexer = object.__new__(KnowledgeIndexer)
     indexer.config = {"min_source_count": 1, "min_chunk_count": 2}
     indexer._last_build_stats = {"indexed_chunks": 1}
@@ -131,7 +142,9 @@ def test_preflight_blocks_dataset_that_does_not_meet_chunk_gate():
 
 
 def test_preflight_mode_does_not_initialize_qdrant_client(monkeypatch):
+    """验证仅预检的索引器不初始化 Qdrant 客户端。"""
     def fail_if_created(*_args, **_kwargs):
+        """若预检错误地创建 Qdrant 客户端则使测试失败。"""
         raise AssertionError("预检不应创建 Qdrant 客户端")
 
     monkeypatch.setattr(knowledge_indexer, "QdrantVectorRepository", fail_if_created)
@@ -142,6 +155,7 @@ def test_preflight_mode_does_not_initialize_qdrant_client(monkeypatch):
 
 
 def test_preflight_report_contains_source_level_counts_and_warnings():
+    """验证预检报告包含各来源切片计数及重复数据警告。"""
     indexer = object.__new__(KnowledgeIndexer)
     indexer.config = {"min_source_count": 1, "min_chunk_count": 1}
     indexer._last_build_stats = {
