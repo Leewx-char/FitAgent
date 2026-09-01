@@ -13,10 +13,12 @@ from app.models import FitnessData
 
 
 def _mean(values: list[float]) -> float | None:
+    """计算数值列表均值；空列表返回空值。"""
     return sum(values) / len(values) if values else None
 
 
 def _numeric(records: list[dict[str, Any]], key: str) -> list[float]:
+    """提取记录中指定键的非布尔数值并转为浮点数。"""
     values: list[float] = []
     for record in records:
         value = record.get(key)
@@ -36,10 +38,12 @@ def _record_payload(record: FitnessData) -> dict[str, Any] | None:
 
 
 def _activity_name(payload: dict[str, Any]) -> str:
+    """从活动载荷取得名称或运动类型的回退名称。"""
     return str(payload.get("name") or payload.get("sport_name") or "未知运动")
 
 
 def _activity_duration_minutes(payload: dict[str, Any]) -> int | None:
+    """将活动秒数转换为分钟，缺失或无效时返回空值。"""
     duration = payload.get("duration_seconds")
     if isinstance(duration, (int, float)) and not isinstance(duration, bool):
         return round(float(duration) / 60)
@@ -47,6 +51,7 @@ def _activity_duration_minutes(payload: dict[str, Any]) -> int | None:
 
 
 def _first_numeric(payload: dict[str, Any], *keys: str) -> float | None:
+    """按给定键顺序返回首个有效数值。"""
     for key in keys:
         value = payload.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -75,9 +80,11 @@ class FitnessSnapshot:
 
     @property
     def has_data(self) -> bool:
+        """判断快照是否包含任何日指标、睡眠或活动数据。"""
         return self.days_observed > 0 or self.sleep_days > 0 or self.activity_count > 0
 
     def to_prompt(self) -> str:
+        """将周期运动快照格式化为供模型使用的中文摘要。"""
         if not self.has_data:
             return (
                 f"用户{self.period_label}暂无运动数据。请引导用户去 Dashboard 点击「同步」按钮获取"
@@ -135,6 +142,7 @@ class ActivityCandidate:
     duration_minutes: int | None
 
     def to_prompt(self) -> str:
+        """将候选活动格式化为用于选择活动标识的一行文本。"""
         duration = (
             f"，时长约{self.duration_minutes}分钟" if self.duration_minutes is not None else ""
         )
@@ -159,6 +167,7 @@ class ActivitySnapshot:
     calories: float | None
 
     def to_prompt(self) -> str:
+        """将单次活动白名单数据格式化为中文摘要。"""
         lines = [
             "单次活动摘要：",
             f"- 活动ID：{self.external_id}",
@@ -187,6 +196,7 @@ def _resolve_period(
     weeks: int,
     today: date | None,
 ) -> tuple[date, date, str]:
+    """校验或推导运动数据查询日期范围及其展示标签。"""
     if (start_date is None) != (end_date is None):
         raise ValueError("start_date 和 end_date 必须同时提供")
     if start_date is not None and end_date is not None:

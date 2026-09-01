@@ -51,6 +51,7 @@ class ContentDeduplicator:
     """按规范化正文执行精确去重和 SimHash 近重复去重。"""
 
     def __init__(self, near_duplicate_hamming_distance: int = 3) -> None:
+        """初始化精确和近似重复检测所需的哈希状态。"""
         self.near_duplicate_hamming_distance = near_duplicate_hamming_distance
         self._exact_hashes: set[str] = set()
         self._bands: dict[tuple[int, int], list[int]] = defaultdict(list)
@@ -59,10 +60,12 @@ class ContentDeduplicator:
 
     @staticmethod
     def _canonical_text(text: str) -> str:
+        """移除非词字符并小写化，得到用于比对的规范文本。"""
         return re.sub(r"\W+", "", text).lower()
 
     @classmethod
     def _simhash(cls, text: str) -> int:
+        """根据规范文本的三元特征计算 64 位 SimHash。"""
         canonical = cls._canonical_text(text)
         features = [canonical[index : index + 3] for index in range(max(1, len(canonical) - 2))]
         weights = [0] * 64
@@ -114,6 +117,7 @@ class MetadataEnricher:
     }
 
     def __init__(self, max_tags: int = 4) -> None:
+        """设置每个文档最多抽取的元数据标签数量。"""
         self.max_tags = max_tags
 
     def extract_tags(self, text: str, title: str = "") -> tuple[str, ...]:

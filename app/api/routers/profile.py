@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 @router.get("", response_model=ApiResponse[ProfileResponse])
 def get_profile(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """返回当前用户的个人画像，不存在时提示先创建。"""
     profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="用户画像不存在，请先创建")
@@ -24,6 +25,7 @@ def create_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """为当前用户创建唯一的个人画像。"""
     existing = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
     if existing:
         raise HTTPException(status_code=400, detail="用户画像已存在，请用 PUT 更新")
@@ -54,6 +56,7 @@ def update_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """仅更新当前用户明确提交的个人画像字段。"""
     profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="用户画像不存在，请先创建")
@@ -61,9 +64,7 @@ def update_profile(
     # 只取用户传入字段，避免 ProfileUpdate 的默认 None 覆盖已有值。
     update_data = body.model_dump(exclude_unset=True)
 
-    # 单独处理 JSON 字段,json.dumps把 dict → 字符串才能存入数据库
-    # pop 是因为在 for key, value in update_data.items() 循环里，
-    # dict 类型不能直接 setattr 给 TEXT 列，必须单独处理
+    # JSON 字段需序列化为字符串，并从普通字段循环中移除。
     if "injuries" in update_data:
         profile.injuries = json.dumps(update_data.pop("injuries"), ensure_ascii=False)
     if "diet_restrict" in update_data:

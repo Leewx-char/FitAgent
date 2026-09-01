@@ -25,6 +25,7 @@ def get_file_sha256_hex(filepath: str) -> str | None:
 def listdir_with_allowed_type(
     path: str, allowed_types: tuple[str]
 ):  # 返回文件夹内的列表（允许的文件后缀）
+    """递归返回目录中后缀符合白名单的排序文件路径。"""
     files = []
 
     if not os.path.isdir(path):
@@ -43,6 +44,7 @@ def listdir_with_allowed_type(
 
 
 def pdf_loader(filepath: str, passwd=None) -> list[Document]:
+    """使用 PyPDFLoader 加载指定 PDF 的文档页。"""
     return PyPDFLoader(filepath, passwd).load()
 
 
@@ -88,11 +90,7 @@ def normalize_documents(documents: list[Document]) -> list[Document]:
 
 
 def split_qa_documents(documents: list[Document]) -> list[Document]:
-    """
-    把 FAQ/问答类长文本拆成独立的“问题-答案”文档。
-
-    提高知识库命中率，避免一整个 FAQ文件被当成长文切碎后难以命中
-    """
+    """将 FAQ 长文本拆为独立问答文档，避免相邻问答混入同一检索切片。"""
     qa_documents = []
     """命名捕获组，在编译时定义组名，匹配时自动分组，一个可重复使用的正则对象（提高性能）"""
     pattern = re.compile(

@@ -20,6 +20,7 @@ class ContextBuilder:
     """优先保留命中子片段附近的父段内容，避免长上下文挤掉其他证据。"""
 
     def __init__(self, max_context_chars: int = 6000, max_chars_per_evidence: int = 1200) -> None:
+        """设置整体上下文与单条证据的字符预算。"""
         self.max_context_chars = max_context_chars
         self.max_chars_per_evidence = max_chars_per_evidence
 
@@ -39,6 +40,7 @@ class ContextBuilder:
 
     @staticmethod
     def _clip_around_child_text(parent_text: str, child_text: str, budget: int) -> tuple[str, bool]:
+        """在字符预算内优先截取包含命中子片段的父文本窗口。"""
         if budget <= 0:
             return "", bool(parent_text)
         if len(parent_text) <= budget:
@@ -51,8 +53,7 @@ class ContextBuilder:
             return parent_text[:budget].rstrip() + "……", True
         if budget <= 4:
             return parent_text[:budget], True
-        # Reserve room for both boundary markers before choosing the text
-        # window so the configured context budget remains a hard limit.
+        # 先为首尾边界标记预留空间，使配置的上下文预算始终为硬上限。
         budget -= 4
         start = max(0, index - budget // 3)
         end = min(len(parent_text), start + budget)

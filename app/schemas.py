@@ -110,6 +110,7 @@ class AgentToolCallResponse(BaseModel):
     @field_validator("argument_shape", mode="before")
     @classmethod
     def parse_argument_shape(cls, value):
+        """将持久化的工具参数形状 JSON 还原为字典。"""
         return json.loads(value) if isinstance(value, str) else value
 
 
@@ -173,10 +174,11 @@ class ProfileResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    # ：MySQL 的 TEXT 列存 JSON 字符串，但 API 返回给前端时要转成 Python 原生类型
+    # MySQL TEXT 列保存 JSON 字符串，返回 API 前需还原为 Python 原生类型。
     @field_validator("injuries", "diet_restrict", mode="before")
     @classmethod
     def parse_json_list(cls, v):
+        """将列表字段的 JSON 字符串还原为列表。"""
         if isinstance(v, str):
             return json.loads(v)
         return v
@@ -184,6 +186,7 @@ class ProfileResponse(BaseModel):
     @field_validator("preferences", mode="before")
     @classmethod
     def parse_json_dict(cls, v):
+        """将偏好字段的 JSON 字符串还原为字典。"""
         if isinstance(v, str):
             return json.loads(v)
         return v
@@ -191,6 +194,7 @@ class ProfileResponse(BaseModel):
     @field_validator("health_data", mode="before")
     @classmethod
     def parse_json_health_data(cls, v):
+        """将健康数据 JSON 字符串还原为空字典或字典。"""
         if v is None:
             return {}
         if isinstance(v, str):
@@ -208,6 +212,7 @@ class HealthMetric(BaseModel):
     @field_validator("value", mode="before")
     @classmethod
     def normalize_value(cls, value: Any) -> Any:
+        """去除字符串指标值两端空白。"""
         if isinstance(value, str):
             return value.strip()
         return value
@@ -250,6 +255,7 @@ class FitnessSyncRequest(BaseModel):
     @field_validator("start_day", "end_day")
     @classmethod
     def validate_compact_date(cls, value: str) -> str:
+        """校验非空同步日期为 YYYYMMDD 格式。"""
         if not value:
             return value
         try:
@@ -260,13 +266,14 @@ class FitnessSyncRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_range(self):
+        """确保同步起始日期不晚于结束日期。"""
         if self.start_day and self.end_day and self.start_day > self.end_day:
             raise ValueError("start_day 不能晚于 end_day")
         return self
 
 
 class FitnessSyncResponse(BaseModel):
-    """Outcome of one explicit Coros-to-MySQL synchronization request."""
+    """一次显式 Coros 到 MySQL 同步请求的结果。"""
 
     upserted: int = Field(ge=0)
     partial: bool = False
@@ -287,6 +294,7 @@ class FitnessDataResponse(BaseModel):
     @field_validator("date", mode="before")
     @classmethod
     def format_date(cls, v):
+        """将日期对象或其他日期值格式化为字符串。"""
         if hasattr(v, "isoformat"):
             return v.isoformat()
         return str(v)
@@ -294,6 +302,7 @@ class FitnessDataResponse(BaseModel):
     @field_validator("data", mode="before")
     @classmethod
     def parse_json(cls, v):
+        """将持久化的数据 JSON 字符串还原为字典。"""
         if isinstance(v, str):
             return json.loads(v)
         return v
@@ -323,6 +332,7 @@ class MemoryFactResponse(BaseModel):
     @field_validator("value", mode="before")
     @classmethod
     def parse_memory_value(cls, value):
+        """将持久化的记忆值 JSON 字符串还原为字典。"""
         return json.loads(value) if isinstance(value, str) else value
 
 
@@ -363,6 +373,7 @@ class PlanDay(BaseModel):
 
     @model_validator(mode="after")
     def validate_rest_day(self):
+        """保证训练日有动作，恢复日和休息日不含动作。"""
         if self.kind != "训练" and self.exercises:
             raise ValueError("恢复日和休息日不能包含训练动作")
         if self.kind == "训练" and not self.exercises:
@@ -380,6 +391,7 @@ class WeeklyTrainingPlan(BaseModel):
 
     @model_validator(mode="after")
     def validate_days(self):
+        """保证周计划中每个星期仅出现一次。"""
         day_ids = [item.day_of_week for item in self.days]
         if len(day_ids) != len(set(day_ids)):
             raise ValueError("训练计划中不能出现重复星期")
@@ -421,9 +433,11 @@ class TrainingPlanResponse(BaseModel):
     @field_validator("plan", mode="before")
     @classmethod
     def parse_plan(cls, value):
+        """将持久化的计划 JSON 字符串还原为计划模型输入。"""
         return json.loads(value) if isinstance(value, str) else value
 
     @field_validator("safety", mode="before")
     @classmethod
     def parse_safety(cls, value):
+        """将持久化的安全评估 JSON 字符串还原为字典。"""
         return json.loads(value) if isinstance(value, str) else value

@@ -33,11 +33,15 @@ class ScoredChunk:
 class VectorRepository(Protocol):
     """RAG 服务使用的存储边界；第三方 SDK 类型不得越过此处。"""
 
-    def health(self) -> dict[str, int | str]: ...
+    def health(self) -> dict[str, int | str]:
+        """返回向量仓储的就绪状态摘要。"""
+        ...
 
     def search(
         self, query_vector: list[float], limit: int, source_filter: list[str] | None = None
-    ) -> list[ScoredChunk]: ...
+    ) -> list[ScoredChunk]:
+        """按向量查询并可限制结果来源。"""
+        ...
 
 
 class QdrantVectorRepository:
@@ -56,6 +60,7 @@ class QdrantVectorRepository:
         timeout_seconds: int = 60,
         client: QdrantClient | None = None,
     ) -> None:
+        """保存连接参数，并创建或接收 Qdrant 客户端。"""
         self.collection_name = collection_name
         self._url = url
         self._api_key = api_key

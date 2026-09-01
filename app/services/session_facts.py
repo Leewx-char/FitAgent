@@ -1,4 +1,4 @@
-"""Extract lightweight, non-sensitive facts from a conversation history."""
+"""从会话历史提取轻量且非敏感的事实。"""
 
 from __future__ import annotations
 
@@ -63,6 +63,7 @@ CITY_PATTERN = re.compile(
 
 
 def _first_matching_label(content: str, rules: dict[str, tuple[str, ...]]) -> str | None:
+    """返回规则中首个在文本出现关键词的规范标签。"""
     return next(
         (
             label
@@ -74,7 +75,7 @@ def _first_matching_label(content: str, rules: dict[str, tuple[str, ...]]) -> st
 
 
 def extract_session_facts(messages: Iterable[dict[str, Any]]) -> dict[str, str | list[str]]:
-    """Return deterministic session facts used by routing and prompt construction."""
+    """提取供路由和提示词构建使用的确定性会话事实。"""
 
     facts: dict[str, str | list[str]] = {}
     injuries: list[str] = []

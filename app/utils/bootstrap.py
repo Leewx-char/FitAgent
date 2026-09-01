@@ -5,6 +5,7 @@ from app.utils.path_tool import get_abs_path
 
 
 def validate_runtime() -> list[str]:
+    """检查密钥、配置、必要路径和提示词编码，返回全部问题。"""
     issues = []
 
     # 检查 1: API KEY

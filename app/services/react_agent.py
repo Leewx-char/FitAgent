@@ -82,6 +82,7 @@ class ReactAgent:
     )
 
     def __init__(self):
+        """初始化模型、工具编排图和配置的执行步数限制。"""
         settings = get_settings()
         self.model = get_chat_model()
         self.max_steps = settings.agent_max_steps
@@ -105,6 +106,7 @@ class ReactAgent:
 
     @staticmethod
     def _normalize_messages(messages: Iterable[dict]) -> list[dict]:
+        """过滤无效角色或空内容，规范化可传给 Agent 的消息。"""
         normalized = []
         for message in messages:
             role = message.get("role")
@@ -116,11 +118,7 @@ class ReactAgent:
 
     @classmethod
     def _should_use_direct_rag(cls, messages: list[dict]) -> bool:
-        """只让非个性化、明确的健身知识问题跳过首次 Agent 工具决策。
-
-        任何要求结合用户自身数据、天气或报告的请求仍由完整 Agent 编排，
-        防止快速路径遗漏必须读取的个性化信息。
-        """
+        """仅让非个性化明确知识问题走直接检索，避免遗漏必需的个人信息。"""
         if not messages or messages[-1].get("role") != "user":
             return False
         query = str(messages[-1].get("content", "")).strip()
@@ -132,6 +130,7 @@ class ReactAgent:
 
     @staticmethod
     def _content_to_text(content: object) -> str:
+        """将模型分块内容统一转换为文本。"""
         if isinstance(content, list):
             return "".join(
                 item.get("text", "") if isinstance(item, dict) else str(item) for item in content
@@ -190,6 +189,7 @@ class ReactAgent:
         session_summary: str = "",
         trace: AgentTrace | None = None,
     ):
+        """流式执行直接检索或完整 Agent，并产出工具、证据和文本事件。"""
         normalized_messages = self._normalize_messages(messages)
         session_facts = extract_session_facts(normalized_messages)
         input_dict = {"messages": normalized_messages}

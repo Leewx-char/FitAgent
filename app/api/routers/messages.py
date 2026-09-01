@@ -17,6 +17,7 @@ def list_messages(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """验证会话归属后，分页返回会话消息。"""
     # 先验会话归属
     session = (
         db.query(SessionModel)

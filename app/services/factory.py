@@ -33,7 +33,7 @@ def get_chat_model() -> BaseChatModel:
 
 @lru_cache(maxsize=1)
 def get_embedding_model() -> Embeddings:
-    """惰性获取embedding模型，并通过缓存避免重复初始化。"""
+    """惰性获取嵌入模型，并通过缓存避免重复初始化。"""
 
     api_key = _get_dashscope_api_key()
     return DashScopeEmbeddings(

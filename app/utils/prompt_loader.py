@@ -4,6 +4,7 @@ from app.utils.path_tool import get_abs_path
 
 
 def load_system_prompts():
+    """读取主对话系统提示词文本。"""
     try:
         system_prompt_path = get_abs_path(get_prompts_config()["main_prompt_path"])
     except KeyError as e:
@@ -18,6 +19,7 @@ def load_system_prompts():
 
 
 def load_report_prompts():
+    """读取报告生成提示词文本。"""
     try:
         report_prompt_path = get_abs_path(get_prompts_config()["report_prompt_path"])
     except KeyError as e:
@@ -32,6 +34,7 @@ def load_report_prompts():
 
 
 def load_health_extract_prompts():
+    """读取健康文档信息提取提示词文本。"""
     try:
         health_prompt_path = get_abs_path(get_prompts_config()["health_extract_prompt_path"])
     except KeyError as e:
@@ -46,7 +49,7 @@ def load_health_extract_prompts():
 
 
 def load_training_plan_prompt() -> str:
-    """Load the schema-bound prompt used solely for weekly-plan JSON generation."""
+    """读取仅用于生成周训练计划 JSON 的受约束提示词。"""
 
     try:
         prompt_path = get_abs_path(get_prompts_config()["training_plan_prompt_path"])

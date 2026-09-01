@@ -33,8 +33,7 @@ class Settings(BaseSettings):
     coros_mcp_command: str = "coros-mcp serve"
     coros_mcp_sync_command: str = "coros-mcp sync"
     coros_mcp_cache_home: str = ".tools/coros-mcp-home"
-    # FitAgent only consumes device data. Do not let an application setting widen the MCP
-    # server to include write tools, even though the community server supports them.
+    # FitAgent 仅消费设备数据，不能因应用配置放宽为包含写入工具的 MCP 服务。
     coros_mcp_toolset: Literal["readonly"] = "readonly"
     coros_mcp_hide_auth_tools: bool = True
 
@@ -49,18 +48,19 @@ class Settings(BaseSettings):
 
     @property
     def coros_mcp_command_parts(self) -> tuple[str, ...]:
-        """Parse a command string or a JSON argv array without invoking a shell."""
+        """将命令字符串或 JSON 参数数组解析为无需 shell 的参数元组。"""
 
         return self._parse_command(self.coros_mcp_command, "COROS_MCP_COMMAND")
 
     @property
     def coros_mcp_sync_command_parts(self) -> tuple[str, ...]:
-        """Return the one-shot cache synchronization command without invoking a shell."""
+        """返回无需 shell 执行的单次缓存同步命令参数。"""
 
         return self._parse_command(self.coros_mcp_sync_command, "COROS_MCP_SYNC_COMMAND")
 
     @staticmethod
     def _parse_command(value: str, setting_name: str) -> tuple[str, ...]:
+        """校验并解析单个命令配置，支持 JSON 数组和普通命令行格式。"""
         value = value.strip()
         if not value:
             raise ValueError(f"{setting_name} 不能为空")
@@ -77,14 +77,14 @@ class Settings(BaseSettings):
 
     @property
     def coros_mcp_cache_home_path(self) -> Path:
-        """Return an absolute private home directory for the external MCP cache."""
+        """将外部 MCP 缓存目录配置解析为绝对私有路径。"""
 
         configured = Path(self.coros_mcp_cache_home).expanduser()
         return configured if configured.is_absolute() else (Path.cwd() / configured).resolve()
 
     @property
     def project_root(self) -> Path:
-        """Return the repository root so the external Python runner can import ``app``."""
+        """返回仓库根目录，供外部 Python 运行器导入 ``app``。"""
 
         return Path(__file__).resolve().parents[2]
 

@@ -81,8 +81,10 @@ def _with_retry(max_retries: int = 1, delay: float = 1.0):
     业务异常直接透传；最终仍失败则 re-raise，交给外层熔断/降级处理。"""
 
     def decorator(func):
+        """返回为目标函数配置网络重试的装饰器。"""
         @wraps(func)
         def wrapper(*args, **kwargs):
+            """执行目标函数，并仅对网络错误按次数重试。"""
             for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
@@ -111,6 +113,7 @@ class CircuitBreaker:
     """
 
     def __init__(self, name: str, failure_threshold: int = 3, recovery_timeout: float = 30.0):
+        """初始化指定服务名、失败阈值和恢复窗口的熔断器。"""
         self.name = name
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
@@ -130,11 +133,13 @@ class CircuitBreaker:
             return True  # closed / half_open
 
     def on_success(self):
+        """在调用成功后清空失败计数并关闭熔断器。"""
         with self._lock:
             self.failure_count = 0
             self.state = "closed"
 
     def on_failure(self):
+        """记录一次失败，达到阈值或半开探测失败时打开熔断器。"""
         with self._lock:
             self.failure_count += 1
             # HALF_OPEN 下试探失败，或 CLOSED 下累计到阈值 → OPEN
@@ -144,15 +149,14 @@ class CircuitBreaker:
 
 
 def _with_circuit_breaker(name: str, failure_threshold: int = 3, recovery_timeout: float = 30.0):
-    """熔断 + 降级层：包在 _with_retry 外面。
-    - 熔断 OPEN 时直接返回降级 JSON，不真调（快速失败，给下游喘息）
-    - 放行时：调用异常→记失败+降级；成功→记成功。
-    每个被装饰函数持有独立熔断器（一个工具挂了不影响别的工具）。"""
+    """创建独立的熔断和降级装饰器；打开时快速失败，成功时恢复。"""
     breaker = CircuitBreaker(name, failure_threshold, recovery_timeout)
 
     def decorator(func):
+        """返回为目标函数配置熔断和降级响应的装饰器。"""
         @wraps(func)
         def wrapper(*args, **kwargs):
+            """受熔断器保护地调用目标函数，并在网络失败时降级。"""
             if not breaker.allow():
                 logger.warning(f"熔断器[{name}]OPEN，快速失败，跳过真实调用")
                 return _degradation_json(
@@ -178,6 +182,7 @@ def _with_circuit_breaker(name: str, failure_threshold: int = 3, recovery_timeou
 
 
 def _request_json(base_url: str, params: dict) -> dict:
+    """以查询参数请求 URL 并解析 JSON 响应。"""
     url = f"{base_url}?{urlencode(params)}"
     with urlopen(url, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
@@ -198,6 +203,7 @@ SOURCE_MAP = {
 @_with_circuit_breaker(name="rag_summarize")
 @_with_retry()
 def rag_summarize(query: str, source: str = "") -> str:
+    """检索问题并保存可展示证据，返回受预算约束的上下文。"""
     source_filter = SOURCE_MAP.get(source) if source else None
     context = _user_context.get()
     rag_context = _get_rag_service().build_context(
@@ -213,6 +219,7 @@ def rag_summarize(query: str, source: str = "") -> str:
 @_with_circuit_breaker(name="get_weather")
 @_with_retry()
 def get_weather(city: str):
+    """查询城市地理位置和天气，并返回面向 Agent 的 JSON 结果。"""
     city = city.strip()
     if not city:
         return json.dumps(
@@ -290,6 +297,7 @@ def get_weather(city: str):
 
 @tool(description="获取当前会话绑定的城市名称。未绑定时明确返回未知，不允许编造。")
 def get_user_location() -> str:
+    """优先返回会话城市，缺失时读取可选环境配置。"""
     ctx = _user_context.get()
     if ctx.get("city"):
         return ctx["city"]
@@ -299,6 +307,7 @@ def get_user_location() -> str:
 
 @tool(description="获取当前会话绑定的用户ID。未绑定时明确返回未知，不允许随机生成。")
 def get_user_id():
+    """返回当前会话用户标识或说明其缺失。"""
     ctx = _user_context.get()
     if ctx.get("user_id"):
         return str(ctx["user_id"])
@@ -307,6 +316,7 @@ def get_user_id():
 
 @tool(description="获取当前月份，格式为 YYYY-MM。")
 def get_current_month():
+    """返回当前年月的 YYYY-MM 格式字符串。"""
     return datetime.now().strftime("%Y-%m")
 
 
@@ -314,6 +324,7 @@ def get_current_month():
     description="获取当前用户的完整健身画像。仅当用户明确要求结合其个人情况、画像、目标、体重、伤病史、训练记录来给建议时调用；通用动作、营养或防护知识问答禁止调用。"
 )
 def get_user_profile():
+    """查询当前用户画像并格式化为 Agent 可使用的信息。"""
     ctx = _user_context.get()
     user_id = ctx.get("user_id")
     if not user_id:
@@ -360,7 +371,7 @@ def get_user_profile():
     )
 )
 def get_confirmed_memories(query: str) -> str:
-    """Read-only memory tool. Writes remain exclusively in the memory API."""
+    """只读查询已确认记忆；写入操作始终仅由记忆 API 负责。"""
 
     user_id = _user_context.get().get("user_id")
     if not user_id:
@@ -373,6 +384,7 @@ _MAX_FITNESS_RANGE_DAYS = 90
 
 
 def _parse_fitness_day(value: str) -> date | None:
+    """将紧凑日期字符串解析为日期，格式无效时返回空值。"""
     if not value:
         return None
     try:
@@ -457,10 +469,7 @@ def get_fitness_summary(
     description="无入参，当识别到用户想生成近期运动总结报告时调用，触发报告模式切换。仅在用户明确要求生成报告/总结时调用。"
 )
 def trigger_report():
-    """信号工具：调用后中间件（middleware.py 的 monitor_tool）会把
-    request.runtime.context['report'] 置为 True，下一轮 LLM 调用
-    通过 report_prompt_switch 切到 report_prompt。
-    本工具不返回数据，仅触发 prompt 切换。"""
+    """触发报告模式；中间件会在下一轮模型调用前切换相应提示词。"""
     return "已切换到报告模式，请基于用户近期运动数据生成报告"
 
 

@@ -30,6 +30,7 @@ memory_service = MemoryService()
 
 
 def _serialize(memory: MemoryFact) -> MemoryFactResponse:
+    """将记忆 ORM 对象转换为公开响应模型。"""
     return MemoryFactResponse.model_validate(memory)
 
 
@@ -39,6 +40,7 @@ def list_memories(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """列出当前用户的记忆，可选择包含已撤销项。"""
     memories = memory_service.list_for_user(
         db, user_id=current_user.id, include_revoked=include_revoked
     )
@@ -51,6 +53,7 @@ def create_memory(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """更新当前用户记忆的显示文本、到期时间或确认状态。"""
     """保存用户主动输入的已确认记忆。"""
 
     memory = MemoryFact(
@@ -76,6 +79,7 @@ def update_memory(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """撤销当前用户指定的记忆。"""
     memory = (
         db.query(MemoryFact)
         .filter(MemoryFact.id == memory_id, MemoryFact.user_id == current_user.id)
@@ -106,6 +110,7 @@ def revoke_memory(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """撤销当前用户指定的记忆。"""
     memory = (
         db.query(MemoryFact)
         .filter(MemoryFact.id == memory_id, MemoryFact.user_id == current_user.id)

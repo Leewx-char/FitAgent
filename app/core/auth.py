@@ -21,15 +21,18 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")  # 密码哈�
 
 
 def hash_password(plain: str) -> str:  # 注册调用
+    """对明文密码生成可存储的 bcrypt 哈希值。"""
     return pwd_context.hash(plain)
 
 
 def verify_password(plain: str, hashed: str) -> bool:  # 登录调用
+    """校验明文密码是否与已保存的哈希值匹配。"""
     return pwd_context.verify(plain, hashed)
 
 
 # 密钥是服务端私有的签名材料，缺失它就无法伪造合法 Token。
 def create_access_token(data: dict) -> str:  # 生成令牌
+    """复制载荷并加入过期时间后签发 JWT 访问令牌。"""
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
@@ -37,6 +40,7 @@ def create_access_token(data: dict) -> str:  # 生成令牌
 
 
 def decode_access_token(token: str) -> dict:  # 解析令牌
+    """验证并解码 JWT；令牌无效时返回 ``None``。"""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
@@ -48,6 +52,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
 def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    """从请求令牌解析用户身份，并返回仍存在的用户记录。"""
     payload = decode_access_token(token)
     if payload is None:
         raise HTTPException(
@@ -62,20 +67,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
             detail="无效的认证凭证",
         )
 
-    """
-        get_current_user
-        本身就是一个
-        Depends
-        依赖函数，它的参数已经是
-        Depends(oauth2_scheme)
-        了。FastAPI
-        的依赖注入可以嵌套，但
-        get_db
-        是通过
-        yield 提供数据库会话的，在
-        get_current_user
-        里直接用更简单清晰——手动创建、手动关闭。
-    """
+    # 此依赖需在当前函数内独立创建并关闭会话，避免嵌套使用 yield 依赖。
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == user_id).first()

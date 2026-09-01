@@ -20,6 +20,7 @@ def list_agent_runs(
     db: DBSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """校验会话归属后，返回当前用户最近的 Agent 执行轨迹。"""
     session = (
         db.query(SessionModel)
         .filter(SessionModel.id == session_id, SessionModel.user_id == current_user.id)

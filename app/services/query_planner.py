@@ -14,7 +14,9 @@ from app.utils.logger_handler import logger
 class QueryModel(Protocol):
     """查询规划器依赖的最小聊天模型接口。"""
 
-    def invoke(self, prompt: str): ...
+    def invoke(self, prompt: str):
+        """根据提示词返回可提取内容的聊天模型响应。"""
+        ...
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,7 @@ class QueryPlanner:
         history_turns: int = 3,
         max_subqueries: int = 2,
     ) -> None:
+        """配置查询规划模型工厂、历史窗口和子查询上限。"""
         self._model_factory = model_factory
         self.history_turns = history_turns
         self.max_subqueries = max_subqueries
@@ -75,11 +78,13 @@ class QueryPlanner:
             )
 
     def _needs_planning(self, query: str, history: list[dict]) -> bool:
+        """判断查询是否含指代或复合主题，因而需要 LLM 规划。"""
         has_reference = bool(history) and bool(self._REFERENTIAL_PATTERN.search(query))
         has_compound_question = bool(self._COMPOUND_PATTERN.search(query))
         return has_reference or has_compound_question
 
     def _normalize_history(self, history: list[dict]) -> list[dict[str, str]]:
+        """保留有限的用户与助手历史，并规范化其文本。"""
         messages = []
         for item in history[-self.history_turns * 2 :]:
             role = item.get("role")
@@ -89,6 +94,7 @@ class QueryPlanner:
         return messages
 
     def _build_prompt(self, query: str, history: list[dict[str, str]]) -> str:
+        """构造要求模型仅返回检索规划 JSON 的提示词。"""
         history_text = "\n".join(f"{item['role']}: {item['content']}" for item in history)
         return f"""你是中文健身知识库的检索查询规划器。只输出 JSON，不要 Markdown。
 根据历史消息补全当前问题的指代；若问题同时包含训练和饮食等独立主题，最多拆成两个可独立检索的子查询。
@@ -103,6 +109,7 @@ class QueryPlanner:
 
     @staticmethod
     def _content_to_text(response: object) -> str:
+        """提取聊天模型响应内容并统一为去空白文本。"""
         content = getattr(response, "content", response)
         if isinstance(content, list):
             return "".join(
@@ -111,6 +118,7 @@ class QueryPlanner:
         return str(content).strip()
 
     def _parse_response(self, content: str, original_query: str) -> tuple[str, tuple[str, ...]]:
+        """解析模型 JSON，去重并限制可执行的检索子查询。"""
         match = re.search(r"\{.*\}", content, flags=re.DOTALL)
         if not match:
             raise ValueError("查询规划器未返回 JSON")

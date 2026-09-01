@@ -59,6 +59,7 @@ class RagSummarizeService:
         reranker: Reranker | None = None,
         context_builder: ContextBuilder | None = None,
     ) -> None:
+        """按配置组装检索、规划、精排和上下文构建组件。"""
         config = get_vector_store_config()
         self.vector_store = vector_store or VectorStoreService()
         self.top_k = config["k"]
@@ -89,11 +90,7 @@ class RagSummarizeService:
 
     @staticmethod
     def _load_source_quality_penalties(config: dict) -> tuple[tuple[str, float], ...]:
-        """读取按来源前缀生效的最终排序软惩罚。
-
-        该规则只处理已进入候选集的文档：不影响 Dense/BM25 召回，也不会硬过滤
-        外部知识源。值为 0 到 1 之间的比例，例如 0.08 表示最终重排序分乘以 0.92。
-        """
+        """读取来源前缀软惩罚；仅调候选排序，不影响召回或执行硬过滤。"""
         raw_penalties = config.get("source_quality_penalties", {})
         if not isinstance(raw_penalties, dict):
             return ()
@@ -116,12 +113,14 @@ class RagSummarizeService:
         return self.vector_store.health()
 
     def _normalize_query(self, query: str) -> str:
+        """统一查询空白、大小写和配置的规范词替换。"""
         normalized = re.sub(r"\s+", " ", query.strip().lower())
         for source, target in self.normalize_map.items():
             normalized = normalized.replace(source, target)
         return normalized
 
     def _expand_query(self, query: str) -> str:
+        """为命中同义词规则的规范查询补充扩展词。"""
         normalized = self._normalize_query(query)
         expansions = [
             candidate
@@ -142,10 +141,12 @@ class RagSummarizeService:
 
     @staticmethod
     def _candidate_id(candidate: _FusedDocument) -> str:
+        """根据融合文档的稳定键生成候选标识。"""
         return "\x1f".join(RagSummarizeService._document_key(candidate.document))
 
     @staticmethod
     def _document_terms(content: str) -> set[str]:
+        """提取文档正文和标签中的规范词，用于元数据匹配。"""
         return set(re.findall(r"[一-鿿]{2,}|[a-z0-9]+", content.lower()))
 
     def _deduplicate_docs(
@@ -175,11 +176,7 @@ class RagSummarizeService:
     def _apply_metadata_tag_boost(
         self, candidates: list[_FusedDocument], query_tags: tuple[str, ...]
     ) -> list[_FusedDocument]:
-        """以小幅、可解释的标签匹配调整 RRF 候选顺序。
-
-        标签不是强制过滤条件：当查询或旧 revision 没有标签时，保持原有 RRF 顺序；
-        当标签命中时仅乘以受配置约束的小系数，避免规则标签覆盖语义召回。
-        """
+        """以有限标签匹配微调 RRF 候选排序；标签不硬过滤且不应压倒语义召回。"""
         if not self.metadata_tag_boost_enabled or not query_tags:
             return candidates
 
@@ -350,6 +347,7 @@ class RagSummarizeService:
 
     @staticmethod
     def _to_hit(candidate: _FusedDocument, rank: int) -> RetrievalHit:
+        """将融合候选及其排序信息转换为公开检索证据。"""
         metadata = {
             str(key): value
             for key, value in candidate.document.metadata.items()

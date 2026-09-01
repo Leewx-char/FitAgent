@@ -72,11 +72,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 @contextmanager
 def get_db_session() -> Iterator:
-    """提供统一的数据库事务边界。
-
-    HTTP 路由和 Agent 工具都通过该上下文管理器取得会话：正常结束时提交，
-    出现异常时回滚，无论结果如何都会关闭会话并归还连接池。
-    """
+    """提供统一数据库事务边界：成功提交，异常回滚，并始终关闭会话。"""
     db = SessionLocal()
     try:
         yield db

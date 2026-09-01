@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.post("/register", response_model=ApiResponse[UserResponse], status_code=201)
 def register(body: UserRegister, db: Session = Depends(get_db)):
+    """创建未重名的用户账户并返回其公开信息。"""
     existing = db.query(User).filter(User.username == body.username).first()
     if existing:
         raise HTTPException(status_code=400, detail="用户名已存在")
@@ -29,6 +30,7 @@ def register(body: UserRegister, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=ApiResponse[TokenResponse])
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """验证用户名和密码，成功后签发访问令牌。"""
     user = db.query(User).filter(User.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.password_hash):
         # 登录失败是关键安全事件（暴力破解线索），无 user_id 但记下尝试的用户名
@@ -41,4 +43,5 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
 @router.get("/me", response_model=ApiResponse[UserResponse])
 def get_me(current_user: User = Depends(get_current_user)):  # FastAPI 自动执行 get_current_user
+    """返回经认证的当前用户公开信息。"""
     return success_response(UserResponse.model_validate(current_user))

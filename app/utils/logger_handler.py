@@ -23,6 +23,7 @@ def get_logger(
     file_level: int = None,
     log_file=None,
 ) -> logging.Logger:
+    """创建或复用同时输出到控制台和文件的命名日志器。"""
     # Logger 是日志系统的"入口"和"管理者"
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)

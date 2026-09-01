@@ -55,16 +55,16 @@ class UserProfile(Base):
     user_id = Column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    gender = Column(String(10), default="")  # male / female / other
+    gender = Column(String(10), default="")  # 性别值，如 male、female 或 other
     age = Column(Integer, nullable=True)  # 年龄
     height = Column(Integer, nullable=True)  # 身高(cm)
     weight = Column(Float, nullable=True)  # 体重(kg)
-    goal = Column(String(20), default="")  # cut/bulk/recomp/endurance/health
+    goal = Column(String(20), default="")  # 目标值，如减脂、增肌、塑形、耐力或健康管理
     weekly_days = Column(Integer, default=3)  # 每周训练天数 1-7
-    experience = Column(String(20), default="beginner")  # beginner/intermediate/advanced
-    injuries = Column(Text, default="[]")  # JSON: ["膝盖", "腰椎"]
-    diet_restrict = Column(Text, default="[]")  # JSON: ["素食", "低碳"]
-    preferences = Column(Text, default="{}")  # JSON: {"preferred_time": "早上", "gym": true}
+    experience = Column(String(20), default="beginner")  # 经验等级，如 beginner、intermediate 或 advanced
+    injuries = Column(Text, default="[]")  # JSON 数组，例如 ["膝盖", "腰椎"]
+    diet_restrict = Column(Text, default="[]")  # JSON 数组，例如 ["素食", "低碳"]
+    preferences = Column(Text, default="{}")  # JSON 对象，例如训练时间和场馆偏好
     health_data = Column(Text, default="{}")  # JSON: 从文档提取的健康指标
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -75,7 +75,7 @@ class UserProfile(Base):
 class Session(Base):
     __tablename__ = "sessions"
 
-    id = Column(CHAR(32), primary_key=True)  # uuid hex
+    id = Column(CHAR(32), primary_key=True)  # UUID 的十六进制字符串
     title = Column(String(100), default="新对话")
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
@@ -112,8 +112,8 @@ class AgentRun(Base):
     request_id = Column(String(32), nullable=False, index=True)
     session_id = Column(CHAR(32), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    mode = Column(String(20), nullable=False)  # agent / direct_rag
-    status = Column(String(20), nullable=False)  # succeeded / failed
+    mode = Column(String(20), nullable=False)  # 执行模式：agent 或 direct_rag
+    status = Column(String(20), nullable=False)  # 执行状态：succeeded 或 failed
     elapsed_ms = Column(Integer, nullable=False)
     tool_call_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, server_default=func.now())

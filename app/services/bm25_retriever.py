@@ -9,6 +9,7 @@ from langchain_core.documents import Document
 
 class BM25Retriever:
     def __init__(self):
+        """初始化空的线程安全 BM25 索引及文档快照。"""
         self._index = None
         self._docs = []
         self._lock = threading.Lock()
@@ -17,6 +18,7 @@ class BM25Retriever:
     @staticmethod
     # 分词
     def _tokenize(text: str) -> list[str]:
+        """按中文单字及英文或数字连续片段切分检索词。"""
         tokens = []
         # 正则匹配：连续的中文字符 / 连续的英文 /数字
         for chunk in re.findall(r"[\u4e00-\u9fff]+|[a-z0-9]+", text.lower()):
@@ -32,9 +34,11 @@ class BM25Retriever:
 
     # 判断索引是否过期
     def is_stale(self, current_doc_count: int) -> bool:
+        """根据当前文档数量判断索引是否未建或过期。"""
         return self._index is None or self._doc_count_snapshot != current_doc_count
 
     def build(self, documents: list):
+        """从文档切词构建 BM25 索引并保存原始文档。"""
         with self._lock:
             self._docs = list(documents)  # 保存原始 Document 对象，后面检索时需要返回
             tokenized = [self._tokenize(doc.page_content) for doc in documents]
@@ -71,6 +75,7 @@ class BM25Retriever:
     def search(
         self, query: str, k: int = 15, source_filter: list[str] | None = None
     ) -> list[tuple]:
+        """按 BM25 分数检索文档，并可按来源筛选。"""
         if self._index is None:
             return []
 

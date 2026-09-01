@@ -15,6 +15,7 @@ class AgentTraceRepository:
 
     @staticmethod
     def save(db: DBSession, trace: AgentTrace, *, session_id: str, user_id: int) -> AgentRun:
+        """将一次执行轨迹及其工具调用安全元数据写入数据库。"""
         run = AgentRun(
             id=trace.run_id,
             request_id=trace.request_id,
@@ -46,6 +47,7 @@ class AgentTraceRepository:
     def list_for_session(
         db: DBSession, *, session_id: str, user_id: int, limit: int = 20
     ) -> list[AgentRun]:
+        """按创建时间倒序查询用户会话的有限执行轨迹。"""
         return (
             db.query(AgentRun)
             .filter(AgentRun.session_id == session_id, AgentRun.user_id == user_id)

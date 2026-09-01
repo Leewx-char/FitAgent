@@ -61,6 +61,7 @@ def _record_trace_event(
     elapsed_ms: int,
     detail: str = "",
 ) -> None:
+    """若运行上下文含执行轨迹，则记录一条工具调用事件。"""
     trace = runtime_ctx.get("agent_trace")
     if isinstance(trace, AgentTrace):
         trace.record_tool(
@@ -76,6 +77,7 @@ def _record_trace_event(
 def monitor_tool(
     request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command]
 ) -> ToolMessage | Command:
+    """执行工具并统一施加预算、审计、轨迹记录和安全失败响应。"""
     runtime_ctx = request.runtime.context or {}
     user_id = runtime_ctx.get("user_id")
     city = runtime_ctx.get("city", "")
@@ -179,6 +181,7 @@ def log_before_model(
     state: AgentState,  # 整个Agent智能体中的状态记录
     runtime: Runtime,  # 记录了整个执行过程的上下文信息
 ):  # 在模型执行前输出日志
+    """在模型执行前记录消息数量与最后一条消息的类型。"""
     logger.info(f"[log_before_model]即将调用模型，带有{len(state['messages'])}条消息。")
 
     last_message = state["messages"][-1]
@@ -194,6 +197,7 @@ def log_before_model(
 
 @dynamic_prompt  # 每一次在生成提示词之前，调用此函数
 def report_prompt_switch(request: ModelRequest):  # 动态切换提示词
+    """依据报告模式与可信会话事实选择并补全系统提示词。"""
     is_report = request.runtime.context.get("report", False)
     session_facts = request.runtime.context.get("session_facts", {})
     session_summary = request.runtime.context.get("session_summary", "")

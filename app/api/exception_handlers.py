@@ -30,10 +30,12 @@ DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
 
 async def http_exception_handler(request: Request, exc: HTTPException):
+    """将 HTTP 异常转换为统一错误响应。"""
     return error_response(exc.detail, status_code=exc.status_code)
 
 
 async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    """汇总请求字段校验错误并返回 422 响应。"""
     messages = [
         f"{'.'.join(str(part) for part in error['loc'])} 参数不合法" for error in exc.errors()
     ]
@@ -41,17 +43,20 @@ async def request_validation_exception_handler(request: Request, exc: RequestVal
 
 
 async def integrity_error_handler(request: Request, exc: IntegrityError):
+    """记录数据库约束冲突，并返回安全的客户端提示。"""
     logger.warning(f"数据库约束冲突: {str(exc)}")
     return error_response("数据已存在或关联数据不完整，请检查输入。", status_code=400)
 
 
 async def sqlalchemy_error_handler(request: Request, exc: SQLAlchemyError):
+    """记录 SQLAlchemy 错误，并按调试开关隐藏或展示详情。"""
     logger.error(f"数据库错误: {str(exc)}", exc_info=True)
     msg = "数据库服务异常，请稍后重试。" if not DEBUG_MODE else f"数据库错误: {str(exc)}"
     return error_response(msg, status_code=500)
 
 
 async def global_exception_handler(request: Request, exc: Exception):
+    """记录未处理异常，并返回统一的服务器错误响应。"""
     logger.error(f"未处理异常: {str(exc)}", exc_info=True)
     message = "服务器内部错误，请稍后重试。" if not DEBUG_MODE else f"内部错误: {str(exc)}"
     return error_response(message, status_code=500)
@@ -64,6 +69,7 @@ async def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded)
 
 
 def register_exception_handlers(app):
+    """为应用注册 HTTP、校验、数据库、限流及全局异常处理器。"""
     app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
     app.add_exception_handler(IntegrityError, integrity_error_handler)

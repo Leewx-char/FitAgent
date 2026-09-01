@@ -37,6 +37,7 @@ _SENSITIVE_PATTERNS = [
 
 
 def _redact_sensitive(text: str) -> str:
+    """替换文本中的手机号、身份证号和邮箱等敏感信息。"""
     for pattern, replacement in _SENSITIVE_PATTERNS:
         text = pattern.sub(replacement, text)
     return text
@@ -69,6 +70,7 @@ async def sse_generator(
     current_user: User,
     session_summary: str = "",
 ):
+    """执行 Agent 流式响应，转发 SSE 事件并保存回答与执行轨迹。"""
     # 获取当前事件循环
     loop = asyncio.get_event_loop()
     full_response = ""
@@ -77,6 +79,7 @@ async def sse_generator(
 
     # 调 next(gen) 取下一块，如果生成器结束了（抛出 StopIteration），返回哨兵而不是让异常冒泡
     def _next_chunk(gen):
+        """读取生成器下一块内容，并以哨兵表示正常结束。"""
         try:
             return next(gen)
         except StopIteration:
@@ -191,6 +194,7 @@ async def chat(
     agent: ReactAgent = Depends(get_agent),
     current_user: User = Depends(get_current_user),
 ):
+    """保存用户消息与短期会话状态，并返回 Agent 的 SSE 响应流。"""
     # 0. 输入校验：防 token 炸弹 + 空消息
     if not payload.message or not payload.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")

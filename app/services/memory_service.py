@@ -61,11 +61,7 @@ class MemoryService:
     """Keep the write, retrieval, confirmation, and expiry rules in one testable service."""
 
     def extract_candidates(self, message: Message) -> list[MemoryCandidate]:
-        """Create review-only candidates from an explicit user message.
-
-        The extractor is intentionally deterministic at this stage. A later schema-bound LLM
-        extractor can add candidates, but may never directly create confirmed facts.
-        """
+        """从用户消息确定性生成审核候选；后续模型提取器也不能直接确认记忆。"""
 
         if message.role != "user":
             return []
@@ -92,6 +88,7 @@ class MemoryService:
     def propose_from_user_message(
         self, db: DBSession, *, user_id: int, message: Message
     ) -> list[MemoryFact]:
+        """按最近更新时间查询用户记忆，并可排除已撤销项。"""
         """Persist de-duplicated proposals without making them available to the Agent."""
 
         proposals = []
@@ -129,6 +126,7 @@ class MemoryService:
     def list_for_user(
         db: DBSession, *, user_id: int, include_revoked: bool = False
     ) -> list[MemoryFact]:
+        """按最近更新时间查询用户记忆，并可排除已撤销项。"""
         query = db.query(MemoryFact).filter(MemoryFact.user_id == user_id)
         if not include_revoked:
             query = query.filter(MemoryFact.status != "revoked")
@@ -149,6 +147,7 @@ class MemoryService:
 
     @staticmethod
     def revoke(memory: MemoryFact) -> MemoryFact:
+        """将记忆标记为已撤销并返回该对象。"""
         memory.status = "revoked"
         return memory
 

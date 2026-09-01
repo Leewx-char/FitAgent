@@ -19,11 +19,8 @@ router = APIRouter(prefix="/api/fitness", tags=["fitness"])
 # 先尝试插入。如果已经存在（user_id + date + data_type 三个字段重复了）
 # ，那就只更新 data 字段的内容。
 def _record_external_id(data_type: str, record: dict, date_str: str) -> str:
-    """Return an idempotency key without collapsing separate same-day activities.
-
-    Coros daily and sleep records are one-per-day snapshots. Activities instead prefer the
-    upstream identifier and use a deterministic fingerprint only for older payloads that do
-    not contain one.
+    """生成幂等键，且不合并同日的多条活动记录。
+    日指标和睡眠按日期标识；活动优先使用上游标识，缺失时使用稳定指纹。
     """
 
     if data_type in {"daily_metrics", "sleep"}:
@@ -52,6 +49,7 @@ def _upsert_fitness(
     external_id: str,
     data: dict,
 ):
+    """按用户、日期、类型和外部标识写入或更新运动数据。"""
     stmt = (
         mysql_upsert(FitnessData)
         .values(
@@ -75,6 +73,7 @@ def sync_fitness(
     current_user: User = Depends(get_current_user),
     coros: CorosClient = Depends(get_coros),
 ):
+    """同步指定日期范围的 Coros 缓存与可用运动数据。"""
     today = datetime.now().strftime("%Y%m%d")
     default_start = (datetime.now() - timedelta(days=6)).strftime("%Y%m%d")
     start_day = body.start_day or default_start
@@ -87,11 +86,7 @@ def sync_fitness(
     upserted = 0
     unavailable_sources: list[str] = []
 
-    """
-    调 coros-mcp 拿到过去4周的每日指标（HRV、静息心率、训练负荷、VO2max等），
-    遍历每条记录，在日期范围内的就调 _upsert_fitness 写入数据库。
-    status_code=502 表示"上游服务错误"
-    """
+    # 同步缓存后写入指定范围内的日指标；上游同步失败返回 502。
     try:
         cache_summary = coros.sync_cache(start_day, end_day)
     except Exception as e:
@@ -115,9 +110,7 @@ def sync_fitness(
     except Exception:
         unavailable_sources.append("daily")
 
-    """
-    睡眠数据（睡眠数据需要手机API）
-    """
+    # 睡眠数据依赖移动端接口；只有缓存中不存在可用睡眠数据时跳过读取。
     cache_counts = cache_summary.get("cached_source_counts", {})
     sleep_unavailable = "sleep" in unavailable_sources and cache_counts.get("sleep", 0) == 0
     if not sleep_unavailable:
@@ -137,13 +130,10 @@ def sync_fitness(
         except Exception:
             unavailable_sources.append("sleep")
     else:
-        # The provider's mobile sleep endpoint failed during the explicit cache refresh.
-        # Do not issue a second upstream request from the read-only MCP process.
+        # 显式刷新已发现移动端睡眠接口不可用，不从只读 MCP 进程再次请求上游。
         unavailable_sources.append("sleep")
 
-    """
-    运动记录
-    """
+    # 活动记录按上游时间提取日期后写入。
     try:
         result = coros.list_activities(start_day, end_day, size=100)
         for act in result.get("activities", []):
@@ -183,6 +173,7 @@ def get_daily_data(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """返回当前用户近指定周数的日指标记录。"""
     since = datetime.now().date() - timedelta(weeks=weeks)
     records = (
         db.query(FitnessData)
@@ -203,6 +194,7 @@ def get_sleep_data(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """返回当前用户近指定周数的睡眠记录。"""
     since = datetime.now().date() - timedelta(weeks=weeks)
     records = (
         db.query(FitnessData)
@@ -224,6 +216,7 @@ def get_activities(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """按可选起止日期返回当前用户的活动记录。"""
     if start_day and end_day and start_day > end_day:
         raise HTTPException(status_code=422, detail="start_day 不能晚于 end_day")
     query = db.query(FitnessData).filter(

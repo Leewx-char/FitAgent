@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 @router.get("", response_model=ApiResponse[list[SessionResponse]])
 def list_sessions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """按最近更新时间倒序返回当前用户的全部会话。"""
     sessions = (
         db.query(SessionModel)
         .filter(SessionModel.user_id == current_user.id)
@@ -28,6 +29,7 @@ def create_session(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """为当前用户创建带随机标识的新会话。"""
     new_session = SessionModel(
         id=uuid.uuid4().hex[:32],
         title=body.title,
@@ -43,6 +45,7 @@ def create_session(
 def delete_session(
     session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ):
+    """删除属于当前用户的指定会话并记录审计事件。"""
     session = (
         db.query(SessionModel)
         .filter(SessionModel.id == session_id, SessionModel.user_id == current_user.id)
@@ -63,6 +66,7 @@ def update_session(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """更新属于当前用户的会话标题。"""
     session = (
         db.query(SessionModel)
         .filter(SessionModel.id == session_id, SessionModel.user_id == current_user.id)

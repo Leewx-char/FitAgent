@@ -1,9 +1,5 @@
-"""Launch the community Coros MCP with a FitAgent-owned SQLite cache location.
-
-This module is executed by the isolated ``.tools/coros-mcp-venv`` interpreter, not by the
-FastAPI dependency environment. It preserves the real Windows user profile so the provider
-can read its OS-managed authentication token, while redirecting only the provider cache that
-otherwise defaults to ``Path.home()/.config/coros-mcp/cache.db``.
+"""使用 FitAgent 管理的 SQLite 缓存位置启动社区 Coros MCP。
+本模块由隔离解释器运行，保留真实 Windows 用户配置中的认证令牌，只重定向服务方缓存。
 """
 
 from __future__ import annotations
@@ -17,7 +13,7 @@ from pathlib import Path
 
 
 def _configure_provider_cache() -> None:
-    """Override the provider module's cache path before importing its server or sync code."""
+    """在导入服务端或同步代码前覆盖服务方模块的缓存路径。"""
 
     raw_path = os.getenv("FITAGENT_COROS_MCP_CACHE_DIR", "").strip()
     if not raw_path:
@@ -30,7 +26,7 @@ def _configure_provider_cache() -> None:
 
 
 def _synchronize(start_day: str, end_day: str) -> int:
-    """Fetch a requested range into the private cache and emit only summary counts."""
+    """同步请求日期范围至私有缓存，并仅输出汇总数量。"""
 
     _configure_provider_cache()
     from coros_mcp.cache.sync import sync_all
@@ -60,14 +56,12 @@ def _synchronize(start_day: str, end_day: str) -> int:
             }
         )
     )
-    # A provider source may be temporarily unavailable (notably mobile sleep data) while
-    # daily/activity records are usable. Fail only when no data exists at all; otherwise let
-    # the API persist successful sources and report a structured partial result.
+    # 单个来源（尤其移动端睡眠）可能暂不可用；仅在没有任何可用数据时失败。
     return 1 if failed_sources and not any(cached_counts.values()) else 0
 
 
 def main() -> int:
-    """Dispatch the stdio server or the explicit user-triggered cache synchronization."""
+    """分派标准输入输出服务，或执行用户显式触发的缓存同步。"""
 
     parser = argparse.ArgumentParser(prog="fitagent-coros-mcp")
     subparsers = parser.add_subparsers(dest="command", required=True)

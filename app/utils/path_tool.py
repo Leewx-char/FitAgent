@@ -6,10 +6,7 @@ import os
 
 
 def get_project_root() -> str:
-    """
-    获取工程所在的根目录
-    :return: 字符串根目录
-    """
+    """返回当前工程的根目录绝对路径。"""
     # 当前文件的绝对路径
     current_file = os.path.abspath(__file__)
     # 获取工程的根目录，先获取文件所在的文件夹绝对路径
@@ -21,11 +18,7 @@ def get_project_root() -> str:
 
 
 def get_abs_path(relative_path: str) -> str:
-    """
-    传递相对路径，得到绝对路径
-    :param relative_path: 相对路径
-    :return: 绝对路径
-    """
+    """将工程内相对路径拼接为绝对路径。"""
     project_root = get_project_root()
     return os.path.join(project_root, relative_path)
 

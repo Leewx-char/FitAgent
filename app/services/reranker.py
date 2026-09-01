@@ -27,17 +27,21 @@ class RerankResult:
 class Reranker(Protocol):
     """候选集精排边界；未来可替换为 Cross-Encoder 或云端 rerank API。"""
 
-    def rerank(self, query: str, candidates: list[RerankCandidate]) -> list[RerankResult]: ...
+    def rerank(self, query: str, candidates: list[RerankCandidate]) -> list[RerankResult]:
+        """按查询对候选集精排并返回融合分数。"""
+        ...
 
 
 class LexicalReranker:
     """用查询词覆盖率微调 RRF 顺序，避免在 V1 再引入一套模型运行时。"""
 
     def __init__(self, base_score_weight: float = 0.7) -> None:
+        """设置原始 RRF 分数在最终精排分数中的权重。"""
         self.base_score_weight = base_score_weight
 
     @staticmethod
     def _terms(text: str) -> set[str]:
+        """提取英文数字词与中文单字构成的去重词集。"""
         terms = set(re.findall(r"[a-z0-9]+|[一-鿿]", text.lower()))
         return terms
 

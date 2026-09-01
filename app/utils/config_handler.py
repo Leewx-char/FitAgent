@@ -11,6 +11,7 @@ from app.utils.path_tool import get_abs_path
 
 
 def _load_yaml(relative_path: str) -> dict:
+    """读取指定相对路径的 YAML 配置并返回字典。"""
     abs_path = get_abs_path(relative_path)
     with open(abs_path, "r", encoding="utf-8") as f:
         return yaml.load(f, Loader=yaml.SafeLoader)
@@ -18,21 +19,25 @@ def _load_yaml(relative_path: str) -> dict:
 
 @lru_cache(maxsize=1)
 def get_models_config() -> dict:
+    """加载并缓存模型配置。"""
     return _load_yaml("config/models.yml")
 
 
 @lru_cache(maxsize=1)
 def get_vector_store_config() -> dict:
+    """加载并缓存向量存储配置。"""
     return _load_yaml("config/vector_store.yml")
 
 
 @lru_cache(maxsize=1)
 def get_synonyms_config() -> dict:
+    """加载并缓存同义词配置。"""
     return _load_yaml("config/synonyms.yml")
 
 
 @lru_cache(maxsize=1)
 def get_prompts_config() -> dict:
+    """加载并缓存提示词路径配置。"""
     return _load_yaml("config/prompts.yml")
 
 

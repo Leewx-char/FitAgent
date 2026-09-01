@@ -45,6 +45,7 @@ limiter = Limiter(key_func=get_remote_address)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """执行启动校验、预热离线检索器，并在关闭时释放 Coros 客户端。"""
     issues = validate_runtime()
     if issues:
         for issue in issues:
@@ -87,6 +88,7 @@ app.add_middleware(SlowAPIMiddleware)
 # request_id 中间件：每次请求生成唯一 ID，注入响应头 + ContextVar（供日志/业务代码使用）
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
+    """为请求写入追踪标识和耗时响应头。"""
     rid = uuid.uuid4().hex[:16]
     request_id_var.set(rid)
     request.state.request_id = rid
@@ -101,6 +103,7 @@ async def request_id_middleware(request: Request, call_next):
 
 @app.get("/api/health", response_model=ApiResponse[dict[str, str]])
 def health_check():
+    """返回 API 进程存活状态。"""
     return success_response({"status": "ok"})
 
 

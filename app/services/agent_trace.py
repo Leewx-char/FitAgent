@@ -36,6 +36,7 @@ class AgentTrace:
 
     @property
     def elapsed_ms(self) -> int:
+        """返回已结束耗时或当前运行耗时的毫秒数。"""
         return self._elapsed_ms or round((time.perf_counter() - self._started_at) * 1000)
 
     def record_tool(
@@ -47,6 +48,7 @@ class AgentTrace:
         elapsed_ms: int,
         detail: str = "",
     ) -> None:
+        """追加一条仅含安全元数据的工具调用轨迹。"""
         self.tool_calls.append(
             AgentToolTrace(
                 sequence=len(self.tool_calls) + 1,
@@ -59,5 +61,6 @@ class AgentTrace:
         )
 
     def finish(self, status: str) -> None:
+        """标记执行结束状态并冻结累计耗时。"""
         self.status = status
         self._elapsed_ms = round((time.perf_counter() - self._started_at) * 1000)

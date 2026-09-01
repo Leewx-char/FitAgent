@@ -37,8 +37,8 @@ _coros_creation_lock = Lock()
 
 @lru_cache(maxsize=1)
 def _coros_singleton() -> CorosClient:
-    # lru_cache protects its mapping but can execute a cold function more than once when
-    # concurrent callers race. The explicit lock guarantees exactly one MCP subprocess.
+    """在线程竞争的冷启动场景下创建唯一的 Coros MCP 客户端。"""
+    # lru_cache 的首次调用可能并发执行，显式锁确保只启动一个 MCP 子进程。
     with _coros_creation_lock:
         settings = get_settings()
         return CorosClient(
@@ -48,13 +48,9 @@ def _coros_singleton() -> CorosClient:
             environment={
                 "COROS_MCP_TOOLSET": settings.coros_mcp_toolset,
                 "COROS_MCP_HIDE_AUTH_TOOLS": "1" if settings.coros_mcp_hide_auth_tools else "0",
-                # The provider runner redirects only the community package's SQLite cache.
-                # Keep HOME / USERPROFILE intact: the provider's auth token is stored under
-                # the real Windows user profile / Credential Manager.
+                # 运行器只重定向社区包的 SQLite 缓存，认证令牌仍使用真实 Windows 用户配置。
                 "FITAGENT_COROS_MCP_CACHE_DIR": str(settings.coros_mcp_cache_home_path),
-                # Explicit sync owns freshness. Read tools must serve the prepared cache
-                # instead of issuing an unexpected second upstream fetch during a chat/API
-                # request. The provider accepts this integer without a lower bound.
+                # 显式同步负责刷新；只读工具只使用已准备缓存，避免请求中再次拉取上游数据。
                 "COROS_STABLE_DAYS": "-1",
             },
         )
@@ -84,7 +80,7 @@ def get_coros():
 
 
 def close_coros() -> None:
-    """Stop the process-level Coros client during application shutdown."""
+    """在应用关闭时终止进程级 Coros 客户端并清空缓存。"""
 
     if _coros_singleton.cache_info().currsize:
         _coros_singleton().close()

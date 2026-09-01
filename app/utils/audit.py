@@ -23,6 +23,7 @@ os.makedirs(LOG_ROOT, exist_ok=True)
 
 
 def _build_audit_logger() -> logging.Logger:
+    """创建或复用不向根日志器传播的审计日志器。"""
     audit_logger = logging.getLogger("audit")
     audit_logger.setLevel(logging.INFO)
     # 不向 root 传播，避免审计条目又被业务 logger 打一遍

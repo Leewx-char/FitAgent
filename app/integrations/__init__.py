@@ -1,1 +1,1 @@
-"""Third-party provider launchers and protocol bridges."""
+"""第三方服务启动器与协议适配桥接层。"""

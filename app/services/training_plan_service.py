@@ -25,6 +25,7 @@ class PlanGenerationError(RuntimeError):
 
 
 def _parse_json_field(value: str | dict | list | None, default):
+    """解析 JSON 字段；为空或格式异常时返回默认值。"""
     if not value:
         return default
     if isinstance(value, (dict, list)):
@@ -58,6 +59,7 @@ class SafetyAssessment:
     disclaimer: str
 
     def to_dict(self) -> dict[str, Any]:
+        """将安全评估转换为可序列化字典。"""
         return {
             "maximum_intensity": self.maximum_intensity,
             "constraints": self.constraints,
@@ -75,6 +77,7 @@ class TrainingSafetyPolicy:
         snapshot: FitnessSnapshot,
         recent_feedback: list[TrainingFeedback],
     ) -> SafetyAssessment:
+        """根据画像、运动快照和近期反馈评估训练强度上限。"""
         injuries = _parse_json_field(profile.injuries, [])
         constraints: list[str] = []
         signals: list[str] = []
@@ -116,19 +119,23 @@ class TrainingPlanService:
     """Orchestrate retrieval, constrained LLM generation and persistent feedback state."""
 
     def __init__(self, *, model=None, rag_service: RagSummarizeService | None = None) -> None:
+        """接收可注入模型和 RAG 服务，便于测试与替换。"""
         self._model = model
         self._rag_service = rag_service
 
     @property
     def model(self):
+        """返回注入模型或按默认配置创建的聊天模型。"""
         return self._model or get_chat_model()
 
     @property
     def rag_service(self) -> RagSummarizeService:
+        """返回注入的 RAG 服务或创建默认服务。"""
         return self._rag_service or RagSummarizeService()
 
     @staticmethod
     def _load_profile(db: DBSession, user_id: int) -> UserProfile:
+        """读取用户画像；缺失时阻止生成训练计划。"""
         profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).one_or_none()
         if profile is None:
             raise PlanGenerationError("请先完善健身画像，再生成训练计划")
@@ -136,6 +143,7 @@ class TrainingPlanService:
 
     @staticmethod
     def _recent_feedback(db: DBSession, user_id: int) -> list[TrainingFeedback]:
+        """读取用户最近十四条训练反馈。"""
         return (
             db.query(TrainingFeedback)
             .join(TrainingPlan, TrainingFeedback.plan_id == TrainingPlan.id)
@@ -147,6 +155,7 @@ class TrainingPlanService:
 
     @staticmethod
     def _profile_summary(profile: UserProfile) -> dict[str, Any]:
+        """提取生成计划所需的画像字段并解析 JSON 属性。"""
         return {
             "age": profile.age,
             "weight_kg": profile.weight,
@@ -160,6 +169,7 @@ class TrainingPlanService:
     def _retrieve_evidence(
         self, profile: UserProfile, safety: SafetyAssessment
     ) -> tuple[str, list[str]]:
+        """检索计划知识和证据标识，并附加安全信号。"""
         query = f"{profile.goal or '健康管理'} 每周训练计划 恢复 伤病预防"
         try:
             context = self.rag_service.build_context(query)
@@ -181,6 +191,7 @@ class TrainingPlanService:
         safety: SafetyAssessment,
         available_evidence_ids: list[str],
     ) -> None:
+        """校验模型计划覆盖、训练天数、强度和证据引用。"""
         expected_days = set(range(1, 8))
         if {item.day_of_week for item in plan.days} != expected_days:
             raise PlanGenerationError("模型未覆盖完整的一周计划，请重试")
@@ -199,6 +210,7 @@ class TrainingPlanService:
             raise PlanGenerationError("模型引用了不存在的证据，请重试")
 
     def generate(self, db: DBSession, *, user_id: int, week_start: date) -> TrainingPlan:
+        """生成并暂存新周计划，同时归档该周原有效版本。"""
         profile = self._load_profile(db, user_id)
         snapshot = load_fitness_snapshot(db, user_id=user_id)
         feedback = self._recent_feedback(db, user_id)
@@ -270,6 +282,7 @@ class TrainingPlanService:
         plan: TrainingPlan,
         feedback: TrainingFeedbackCreate,
     ) -> TrainingFeedback:
+        """校验星期后创建或更新训练计划的当日反馈。"""
         if feedback.day_of_week not in {
             day["day_of_week"] for day in _parse_json_field(plan.plan_data, {}).get("days", [])
         }:

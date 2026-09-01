@@ -1,4 +1,4 @@
-"""Weekly training-plan API backed by constrained generation and user feedback."""
+"""基于受约束生成和用户反馈的周训练计划 API。"""
 
 from __future__ import annotations
 
@@ -27,11 +27,12 @@ service = TrainingPlanService()
 
 
 def _monday(value: date) -> date:
+    """返回给定日期所在周的周一。"""
     return value - timedelta(days=value.weekday())
 
 
 def _serialize(plan: TrainingPlan) -> TrainingPlanResponse:
-    """Map persistence names to the public API contract without leaking ORM field names."""
+    """映射持久化对象为公开 API 契约，避免暴露 ORM 字段名。"""
 
     return TrainingPlanResponse(
         id=plan.id,
@@ -52,6 +53,7 @@ def get_current_plan(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """查询当前用户指定周的最新有效训练计划。"""
     start = week_start or _monday(date.today())
     if start.weekday() != 0:
         raise HTTPException(status_code=422, detail="week_start 必须是周一")
@@ -74,6 +76,7 @@ def generate_plan(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """生成当前用户指定周的安全训练计划并持久化。"""
     start = body.week_start or _monday(date.today())
     if start.weekday() != 0:
         raise HTTPException(status_code=422, detail="week_start 必须是周一")
@@ -100,6 +103,7 @@ def record_feedback(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """为当前用户的训练计划记录一条反馈。"""
     plan = (
         db.query(TrainingPlan)
         .filter(TrainingPlan.id == plan_id, TrainingPlan.user_id == current_user.id)

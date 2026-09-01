@@ -13,8 +13,7 @@ limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 
 
-# 前端上传文件 → 后端AI提取 → 返回提取结果给前端 → 用户确认 → 调PUT /api/profile保存
-# 上传接口
+# 上传健康文档后提取结构化信息，用户确认后再通过个人资料接口保存。
 @router.post("/health-doc", response_model=ApiResponse[HealthDocumentData])
 @limiter.limit("5/minute")
 async def upload_health_doc(
@@ -22,6 +21,7 @@ async def upload_health_doc(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
+    """解析当前用户上传的健康文档，并审计不含敏感内容的处理结果。"""
     if not file.filename:
         return error_response("文件名不能为空", status_code=400)
 

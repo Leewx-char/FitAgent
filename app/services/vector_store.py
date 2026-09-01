@@ -16,6 +16,7 @@ class VectorStoreService:
     """在线 RAG 使用的只读向量检索服务。"""
 
     def __init__(self, repository: QdrantVectorRepository | None = None) -> None:
+        """按配置创建仓储，或使用注入的 Qdrant 仓储。"""
         config = get_vector_store_config()
         settings = get_settings()
         self.repository = repository or QdrantVectorRepository(

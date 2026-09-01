@@ -87,6 +87,7 @@ class KnowledgeIndexer:
         *,
         initialize_repository: bool = True,
     ) -> None:
+        """加载索引配置、文本分割器和可选的向量仓储。"""
         self.config = get_vector_store_config()
         self._settings = get_settings()
         self.repository = repository
@@ -113,6 +114,7 @@ class KnowledgeIndexer:
         self._last_build_stats: dict[str, int] = {}
 
     def _create_repository(self) -> QdrantVectorRepository:
+        """按当前配置创建 Qdrant 向量仓储。"""
         return QdrantVectorRepository(
             collection_name=self.config["collection_alias"],
             url=self._settings.qdrant_url or self.config["url"],
@@ -278,12 +280,14 @@ class KnowledgeIndexer:
 
     @staticmethod
     def _attach_index_revision(chunks: list[IndexedChunk], revision: str) -> list[IndexedChunk]:
+        """为全部切片附加本次索引版本标识。"""
         return [
             IndexedChunk(chunk.chunk_id, chunk.text, {**chunk.metadata, "index_revision": revision})
             for chunk in chunks
         ]
 
     def _load_source_documents(self) -> tuple[list[tuple[str, list[Document]]], dict[str, str]]:
+        """加载知识目录文件，并返回按来源分组的文档及校验和。"""
         data_path = get_abs_path(self.config["data_path"])
         allowed_types = tuple(self.config["allow_knowledge_file_type"])
         paths = listdir_with_allowed_type(data_path, allowed_types)
@@ -308,6 +312,7 @@ class KnowledgeIndexer:
 
     @staticmethod
     def _load_file(path: str) -> list[Document]:
+        """按文件后缀加载文本、Markdown 或 PDF 文档。"""
         suffix = Path(path).suffix.lower()
         if suffix == ".txt":
             return txt_loader(path)
@@ -352,6 +357,7 @@ class KnowledgeIndexer:
         documents_by_source: list[tuple[str, list[Document]]],
         source_checksums: dict[str, str],
     ) -> list[IndexedChunk]:
+        """清洗、去重并切分来源文档，构建待索引切片。"""
         chunks: list[IndexedChunk] = []
         deduplicator = ContentDeduplicator(self.config["near_duplicate_hamming_distance"])
         dropped_empty = 0
@@ -406,6 +412,7 @@ class KnowledgeIndexer:
         return chunks
 
     def _build_revision(self, source_checksums: dict[str, str]) -> str:
+        """根据来源校验和与索引配置生成确定性版本号。"""
         revision_input = {
             "schema": 3,
             "sources": source_checksums,
@@ -428,6 +435,7 @@ class KnowledgeIndexer:
         source_checksums: dict[str, str],
         preflight: IndexPreflightResult,
     ) -> None:
+        """写入索引清单和供离线 BM25 使用的构建工件。"""
         manifest = {
             "index_revision": revision,
             "collection_name": collection_name,
@@ -459,6 +467,7 @@ class KnowledgeIndexer:
 
     @staticmethod
     def _write_json(relative_path: str, content: dict) -> None:
+        """通过临时文件原子写入 JSON 构建工件。"""
         path = Path(get_abs_path(relative_path))
         path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = path.with_suffix(path.suffix + ".tmp")

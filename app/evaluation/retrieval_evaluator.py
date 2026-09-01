@@ -67,6 +67,7 @@ class RetrievalEvaluator:
     """执行来源召回、Top-1 来源正确率与证据支持率评测。"""
 
     def __init__(self, retrieve: Callable[[str], RetrievalResult], top_k: int = 6) -> None:
+        """保存检索函数和用于评估的结果截断数量。"""
         self.retrieve = retrieve
         self.top_k = top_k
 
