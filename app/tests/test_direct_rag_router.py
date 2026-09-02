@@ -1,12 +1,15 @@
 """明确知识问答的 RAG 快速路径判定测试。"""
 
-import json
 from types import SimpleNamespace
 
 from app.services import react_agent
+from app.services.agent_trace import AgentTrace
 from app.services.chat_routing_graph import (
+    ChatRuntimeContext,
     IntentDecision,
     StructuredOutputIntentClassifier,
+    build_chat_routing_graph,
+    build_initial_chat_state,
     classify_intent,
 )
 from app.services.react_agent import ReactAgent
@@ -118,11 +121,13 @@ def test_direct_rag_keeps_personalized_question_in_full_agent_flow():
     )
 
 
-def test_direct_rag_streams_real_evidence_before_answer(monkeypatch):
-    """验证直接 RAG 在答案前依次输出工具与真实证据事件。"""
+def test_direct_rag_graph_emits_tool_evidence_then_text():
+    """验证图分支按工具、证据、文本顺序保存兼容事件。"""
     captured = {}
 
     class FakeRagService:
+        """记录请求并返回固定检索上下文。"""
+
         @staticmethod
         def build_context(query, history):
             """捕获直接 RAG 的查询与历史，并返回固定检索结果。"""
@@ -131,34 +136,89 @@ def test_direct_rag_streams_real_evidence_before_answer(monkeypatch):
             return SimpleNamespace(content="[证据:1] 深蹲资料", result="retrieval-result")
 
     class FakeModel:
+        """提供无需真实模型的固定文本流。"""
+
         @staticmethod
         def stream(_messages):
             """返回一条带证据标记的固定模型输出。"""
             return [SimpleNamespace(content="膝盖跟随脚尖。[证据:1]")]
 
-    monkeypatch.setattr(react_agent, "_get_rag_service", lambda: FakeRagService())
-    monkeypatch.setattr(
-        react_agent,
-        "build_evidence_cards",
-        lambda _result: [{"rank": 1, "evidence_id": "guide.md#1"}],
+    executor = react_agent.DirectRagExecutor(
+        model=FakeModel(),
+        rag_service_factory=FakeRagService,
+        evidence_builder=lambda _result: [{"rank": 1, "evidence_id": "guide.md#1"}],
     )
-    agent = object.__new__(ReactAgent)
-    agent.model = FakeModel()
-
-    events = [
-        json.loads(item)
-        for item in agent._execute_direct_rag(
-            [
+    graph = build_chat_routing_graph(
+        classifier=FakeIntentClassifier(IntentDecision(route="direct_rag"))
+    )
+    result = graph.invoke(
+        build_initial_chat_state(
+            messages=[
                 {"role": "user", "content": "先说深蹲。"},
                 {"role": "assistant", "content": "好的。"},
                 {"role": "user", "content": "那膝盖呢？"},
-            ]
-        )
-    ]
+            ],
+            session_summary="",
+        ),
+        context=ChatRuntimeContext(
+            user_id=1,
+            city="",
+            session_id="session-1",
+            trace=None,
+            dependencies=SimpleNamespace(direct_rag_executor=executor),
+        ),
+    )
 
-    assert [event["type"] for event in events] == ["tool", "evidence", "text"]
-    assert events[1]["items"][0]["evidence_id"] == "guide.md#1"
+    assert [event["type"] for event in result["events"]] == ["tool", "evidence", "text"]
+    assert result["events"][1]["items"][0]["evidence_id"] == "guide.md#1"
+    assert result["rag_evidence"] == [{"rank": 1, "evidence_id": "guide.md#1"}]
+    assert captured["query"] == "那膝盖呢？"
     assert captured["history"] == [
         {"role": "user", "content": "先说深蹲。"},
         {"role": "assistant", "content": "好的。"},
     ]
+
+
+def test_direct_rag_graph_marks_trace_mode_direct_rag():
+    """验证图分支将请求轨迹标记为直接检索模式。"""
+
+    class FakeRagService:
+        """提供无需外部服务的固定检索上下文。"""
+
+        @staticmethod
+        def build_context(_query, history):
+            """返回无证据的固定上下文。"""
+            return SimpleNamespace(content="未检索到资料", result=None)
+
+    class FakeModel:
+        """提供无需真实模型的固定文本流。"""
+
+        @staticmethod
+        def stream(_messages):
+            """返回固定回答分块。"""
+            return [SimpleNamespace(content="暂时没有可靠证据。")]
+
+    trace = AgentTrace(request_id="request-1")
+    executor = react_agent.DirectRagExecutor(
+        model=FakeModel(),
+        rag_service_factory=FakeRagService,
+    )
+    graph = build_chat_routing_graph(
+        classifier=FakeIntentClassifier(IntentDecision(route="direct_rag"))
+    )
+
+    graph.invoke(
+        build_initial_chat_state(
+            messages=[{"role": "user", "content": "解释一下深蹲。"}],
+            session_summary="",
+        ),
+        context=ChatRuntimeContext(
+            user_id=1,
+            city="",
+            session_id="session-1",
+            trace=trace,
+            dependencies=SimpleNamespace(direct_rag_executor=executor),
+        ),
+    )
+
+    assert trace.mode == "direct_rag"

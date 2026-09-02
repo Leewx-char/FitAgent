@@ -1,8 +1,23 @@
 """Agent 知识库工具的会话历史传递测试。"""
 
+import json
 from types import SimpleNamespace
 
-from app.services import agent_tools
+from app.services import agent_tools, react_agent
+from app.services.chat_routing_graph import (
+    ChatRuntimeContext,
+    IntentDecision,
+    build_chat_routing_graph,
+    build_initial_chat_state,
+)
+
+
+class FakeIntentClassifier:
+    """固定选择直接检索分支。"""
+
+    def classify(self, _prompt):
+        """返回受约束的直接检索决策。"""
+        return IntentDecision(route="direct_rag")
 
 
 def test_rag_tool_forwards_recent_history_to_rag_service(monkeypatch):
@@ -62,4 +77,56 @@ def test_build_evidence_cards_keeps_only_display_safe_hit_fields():
             "tags": "动作,下肢",
             "score": 0.9,
         }
+    ]
+
+
+def test_direct_rag_graph_records_retrieval_history_in_state():
+    """验证图状态只记录当前问题之前的最近检索历史。"""
+
+    class FakeRagService:
+        """提供无需外部服务的固定检索上下文。"""
+
+        @staticmethod
+        def build_context(_query, history):
+            """返回带单条证据的固定上下文。"""
+            return SimpleNamespace(content="[证据:1] 深蹲资料", result="retrieval-result")
+
+    class FakeModel:
+        """提供无需真实模型的固定文本流。"""
+
+        @staticmethod
+        def stream(_messages):
+            """返回带证据标记的固定回答。"""
+            return [SimpleNamespace(content="膝盖跟随脚尖。[证据:1]")]
+
+    executor = react_agent.DirectRagExecutor(
+        model=FakeModel(),
+        rag_service_factory=FakeRagService,
+        evidence_builder=lambda _result: [{"rank": 1, "evidence_id": "guide.md#1"}],
+    )
+    graph = build_chat_routing_graph(classifier=FakeIntentClassifier())
+    result = graph.invoke(
+        build_initial_chat_state(
+            messages=[
+                {"role": "user", "content": "先说深蹲。"},
+                {"role": "assistant", "content": "好的。"},
+                {"role": "user", "content": "那膝盖呢？"},
+            ],
+            session_summary="",
+        ),
+        context=ChatRuntimeContext(
+            user_id=1,
+            city="",
+            session_id="session-1",
+            trace=None,
+            dependencies=SimpleNamespace(direct_rag_executor=executor),
+        ),
+    )
+
+    assert result["retrieval_history"] == [
+        {"role": "user", "content": "先说深蹲。"},
+        {"role": "assistant", "content": "好的。"},
+    ]
+    assert json.loads(json.dumps(result, ensure_ascii=False))["rag_evidence"] == [
+        {"rank": 1, "evidence_id": "guide.md#1"}
     ]

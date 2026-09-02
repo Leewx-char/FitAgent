@@ -1,6 +1,6 @@
 import json
 import time
-from typing import Iterable
+from typing import Callable, Iterable, Iterator
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
@@ -35,6 +35,78 @@ TOOL_DISPLAY = {
     "trigger_report": "生成报告",
     "get_fitness_summary": "获取运动数据",
 }
+
+
+class DirectRagExecutor:
+    """封装无 HTTP 依赖的直接检索与模型事件生成流程。"""
+
+    def __init__(
+        self,
+        *,
+        model: object,
+        rag_service_factory: Callable[[], object] | None = None,
+        evidence_builder: Callable[[object], list[dict]] = build_evidence_cards,
+    ) -> None:
+        """注入模型、检索服务工厂和证据卡片转换器。"""
+        self._model = model
+        self._rag_service_factory = rag_service_factory or _get_rag_service
+        self._evidence_builder = evidence_builder
+
+    @staticmethod
+    def _content_to_text(content: object) -> str:
+        """将模型分块内容统一转换为文本。"""
+        if isinstance(content, list):
+            return "".join(
+                item.get("text", "") if isinstance(item, dict) else str(item) for item in content
+            )
+        return str(content or "")
+
+    def stream(
+        self,
+        *,
+        query: str,
+        history: list[dict],
+        trace: AgentTrace | None = None,
+    ) -> Iterator[dict]:
+        """按工具、证据、文本顺序生成兼容既有 SSE 的事件对象。"""
+        if trace:
+            trace.mode = "direct_rag"
+        yield {"type": "tool", "name": TOOL_DISPLAY["rag_summarize"]}
+        started_at = time.perf_counter()
+        try:
+            rag_context = self._rag_service_factory().build_context(query, history=history)
+        except Exception:
+            if trace:
+                trace.record_tool(
+                    tool_name="rag_summarize",
+                    argument_shape={"query": "str", "source": "str"},
+                    status="error",
+                    elapsed_ms=round((time.perf_counter() - started_at) * 1000),
+                    detail="internal_error",
+                )
+            raise
+        if trace:
+            trace.record_tool(
+                tool_name="rag_summarize",
+                argument_shape={"query": "str", "source": "str"},
+                status="success",
+                elapsed_ms=round((time.perf_counter() - started_at) * 1000),
+            )
+        cards = self._evidence_builder(rag_context.result)
+        if cards:
+            yield {"type": "evidence", "items": cards}
+
+        direct_prompt = (
+            "下面的知识库证据已经完成检索。请只依据这些证据回答用户，"
+            "不要调用工具、不要提及检索过程；采用证据时保留对应 [证据:N] 标记。\n\n"
+            f"用户问题：{query}\n\n知识库证据：\n{rag_context.content}"
+        )
+        for chunk in self._model.stream(
+            [("system", load_system_prompts()), ("human", direct_prompt)]
+        ):
+            content = self._content_to_text(getattr(chunk, "content", chunk))
+            if content:
+                yield {"type": "text", "content": content}
 
 
 class ReactAgent:
@@ -85,6 +157,7 @@ class ReactAgent:
         """初始化模型、工具编排图和配置的执行步数限制。"""
         settings = get_settings()
         self.model = get_chat_model()
+        self.direct_rag_executor = DirectRagExecutor(model=self.model)
         self.max_steps = settings.agent_max_steps
         self.max_tool_calls = settings.agent_max_tool_calls
         self.agent = create_agent(
@@ -128,58 +201,15 @@ class ReactAgent:
             and any(term in query for term in cls._KNOWLEDGE_TERMS)
         )
 
-    @staticmethod
-    def _content_to_text(content: object) -> str:
-        """将模型分块内容统一转换为文本。"""
-        if isinstance(content, list):
-            return "".join(
-                item.get("text", "") if isinstance(item, dict) else str(item) for item in content
-            )
-        return str(content or "")
-
     def _execute_direct_rag(self, messages: list[dict], trace: AgentTrace | None = None):
-        """检索一次后只调用一次模型生成答案，仍保留原始证据编号与 SSE 事件。"""
+        """将直接检索执行器的事件逐条编码为既有 JSON 行。"""
         query = str(messages[-1]["content"])
         history = messages[:-1][-6:]
-        yield (
-            json.dumps({"type": "tool", "name": TOOL_DISPLAY["rag_summarize"]}, ensure_ascii=False)
-            + "\n"
-        )
-        started_at = time.perf_counter()
-        try:
-            rag_context = _get_rag_service().build_context(query, history=history)
-        except Exception:
-            if trace:
-                trace.record_tool(
-                    tool_name="rag_summarize",
-                    argument_shape={"query": "str", "source": "str"},
-                    status="error",
-                    elapsed_ms=round((time.perf_counter() - started_at) * 1000),
-                    detail="internal_error",
-                )
-            raise
-        if trace:
-            trace.record_tool(
-                tool_name="rag_summarize",
-                argument_shape={"query": "str", "source": "str"},
-                status="success",
-                elapsed_ms=round((time.perf_counter() - started_at) * 1000),
-            )
-        cards = build_evidence_cards(rag_context.result)
-        if cards:
-            yield json.dumps({"type": "evidence", "items": cards}, ensure_ascii=False) + "\n"
-
-        direct_prompt = (
-            "下面的知识库证据已经完成检索。请只依据这些证据回答用户，"
-            "不要调用工具、不要提及检索过程；采用证据时保留对应 [证据:N] 标记。\n\n"
-            f"用户问题：{query}\n\n知识库证据：\n{rag_context.content}"
-        )
-        for chunk in self.model.stream(
-            [("system", load_system_prompts()), ("human", direct_prompt)]
-        ):
-            content = self._content_to_text(getattr(chunk, "content", chunk))
-            if content:
-                yield json.dumps({"type": "text", "content": content}, ensure_ascii=False) + "\n"
+        executor = getattr(self, "direct_rag_executor", None)
+        if executor is None:
+            executor = DirectRagExecutor(model=self.model)
+        for event in executor.stream(query=query, history=history, trace=trace):
+            yield json.dumps(event, ensure_ascii=False) + "\n"
 
     def execute_stream(
         self,
@@ -210,8 +240,6 @@ class ReactAgent:
             run_context["city"] = city
 
         if self._should_use_direct_rag(normalized_messages):
-            if trace:
-                trace.mode = "direct_rag"
             yield from self._execute_direct_rag(normalized_messages, trace)
             return
 

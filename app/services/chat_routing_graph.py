@@ -121,11 +121,14 @@ def _minimal_session_facts(session_facts: object) -> str:
     """将有限会话事实压缩为分类提示词可用的文本。"""
     if not isinstance(session_facts, dict):
         raise ValueError("session_facts 必须是字典")
-    return "\n".join(
-        f"{key}: {str(value)[:120]}"
-        for key, value in list(session_facts.items())[:5]
-        if isinstance(key, str) and value is not None
-    ) or "无"
+    return (
+        "\n".join(
+            f"{key}: {str(value)[:120]}"
+            for key, value in list(session_facts.items())[:5]
+            if isinstance(key, str) and value is not None
+        )
+        or "无"
+    )
 
 
 def _build_classifier_prompt(message: str, session_facts: str) -> str:
@@ -187,6 +190,31 @@ def _empty_execution_node(
     return {}
 
 
+def _direct_rag_node(
+    state: ChatGraphState, runtime: Runtime[ChatRuntimeContext]
+) -> dict[str, JsonValue]:
+    """运行请求上下文中的直接检索执行器并写回短期产物。"""
+    messages = state["messages"]
+    history = [dict(message) for message in messages[:-1][-6:]]
+    executor = getattr(runtime.context.dependencies, "direct_rag_executor")
+    events = list(
+        executor.stream(
+            query=messages[-1]["content"],
+            history=history,
+            trace=runtime.context.trace,
+        )
+    )
+    evidence = next(
+        (event["items"] for event in events if event.get("type") == "evidence"),
+        [],
+    )
+    return {
+        "retrieval_history": history,
+        "rag_evidence": evidence,
+        "events": events,
+    }
+
+
 def build_chat_routing_graph(
     *,
     classifier: IntentClassifier,
@@ -199,7 +227,7 @@ def build_chat_routing_graph(
         "classify_intent",
         partial(_classify_intent_node, classifier=classifier),
     )
-    graph.add_node("direct_rag", direct_rag_node or _empty_execution_node)
+    graph.add_node("direct_rag", direct_rag_node or _direct_rag_node)
     graph.add_node("personalized_agent", personalized_agent_node or _empty_execution_node)
     graph.add_edge(START, "classify_intent")
     graph.add_conditional_edges(
