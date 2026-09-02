@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, TypedDict
+from typing import Literal, Protocol, TypeAlias, TypedDict
 
 from pydantic import BaseModel
 
 
 Route = Literal["direct_rag", "personalized_agent"]
+JsonPrimitive: TypeAlias = str | int | float | bool | None
+JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"]
 
 
 class IntentDecision(BaseModel):
@@ -17,17 +19,24 @@ class IntentDecision(BaseModel):
     route: Route
 
 
+class ChatMessage(TypedDict):
+    """表示聊天图状态中可序列化的一条标准消息。"""
+
+    role: str
+    content: str
+
+
 class ChatGraphState(TypedDict):
     """描述一次聊天图执行中可变的短生命周期状态。"""
 
-    messages: list[dict[str, object]]
-    session_facts: dict[str, object]
+    messages: list[ChatMessage]
+    session_facts: dict[str, JsonValue]
     session_summary: str
-    retrieval_history: list[dict[str, object]]
+    retrieval_history: list[dict[str, JsonValue]]
     route: Route | None
-    rag_evidence: list[object]
+    rag_evidence: list[dict[str, JsonValue]]
     tool_call_count: int
-    events: list[dict[str, object]]
+    events: list[dict[str, JsonValue]]
 
 
 @dataclass(frozen=True)
@@ -65,12 +74,25 @@ class StructuredOutputIntentClassifier:
 def classify_intent(state: ChatGraphState, classifier: IntentClassifier) -> Route:
     """从最后一条用户消息分类，异常时保守回退个性化分支。"""
     try:
+        if not _is_json_value(state):
+            raise ValueError("图状态包含不可序列化值")
         message = _latest_user_message(state["messages"])
         facts = _minimal_session_facts(state["session_facts"])
         prompt = _build_classifier_prompt(message, facts)
         return IntentDecision.model_validate(classifier.classify(prompt)).route
     except Exception:
         return "personalized_agent"
+
+
+def _is_json_value(value: object) -> bool:
+    """递归判断值能否作为图状态中的 JSON 数据保存。"""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
+    return False
 
 
 def _latest_user_message(messages: object) -> str:

@@ -91,6 +91,19 @@ def test_invalid_structured_result_falls_back_to_personalized_agent():
     assert route == "personalized_agent"
 
 
+def test_classifier_rejects_runtime_object_from_graph_state():
+    route = classify_intent(
+        {
+            "messages": [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
+            "session_facts": {},
+            "events": [{"trace": object()}],
+        },
+        FakeIntentClassifier(IntentDecision(route="direct_rag")),
+    )
+
+    assert route == "personalized_agent"
+
+
 def test_direct_rag_accepts_generic_knowledge_question():
     """验证通用动作知识问题可进入直接 RAG 快速路径。"""
     assert ReactAgent._should_use_direct_rag(
