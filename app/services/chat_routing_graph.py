@@ -107,13 +107,19 @@ def _is_json_value(value: object) -> bool:
 
 def _latest_user_message(messages: object) -> str:
     """提取并校验消息列表中最后一条非空用户消息。"""
+    return _latest_user_turn(messages)[1]
+
+
+def _latest_user_turn(messages: object) -> tuple[int, str]:
+    """返回最后一条非空用户消息的位置与规范文本。"""
     if not isinstance(messages, list):
         raise ValueError("messages 必须是列表")
-    for item in reversed(messages):
+    for index in range(len(messages) - 1, -1, -1):
+        item = messages[index]
         if isinstance(item, dict) and item.get("role") == "user":
             content = item.get("content")
             if isinstance(content, str) and content.strip():
-                return content.strip()
+                return index, content.strip()
     raise ValueError("缺少用户消息")
 
 
@@ -195,15 +201,18 @@ def _direct_rag_node(
 ) -> dict[str, JsonValue]:
     """运行请求上下文中的直接检索执行器并写回短期产物。"""
     messages = state["messages"]
-    history = [dict(message) for message in messages[:-1][-6:]]
+    query_index, query = _latest_user_turn(messages)
+    history = [dict(message) for message in messages[:query_index][-6:]]
     executor = getattr(runtime.context.dependencies, "direct_rag_executor")
     events = list(
         executor.stream(
-            query=messages[-1]["content"],
+            query=query,
             history=history,
             trace=runtime.context.trace,
         )
     )
+    if not _is_json_value(events):
+        raise ValueError("直接检索事件包含不可序列化值")
     evidence = next(
         (event["items"] for event in events if event.get("type") == "evidence"),
         [],

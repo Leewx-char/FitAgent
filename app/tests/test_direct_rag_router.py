@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.services import react_agent
 from app.services.agent_trace import AgentTrace
 from app.services.chat_routing_graph import (
@@ -222,3 +224,34 @@ def test_direct_rag_graph_marks_trace_mode_direct_rag():
     )
 
     assert trace.mode == "direct_rag"
+
+
+def test_direct_rag_graph_rejects_non_json_executor_events():
+    """验证执行器的非 JSON 事件无法写入图状态。"""
+
+    class FakeDirectRagExecutor:
+        """生成包含运行时对象的非法事件。"""
+
+        @staticmethod
+        def stream(**_kwargs):
+            """返回无法序列化的证据事件。"""
+            yield {"type": "evidence", "items": [{"unsafe": object()}]}
+
+    graph = build_chat_routing_graph(
+        classifier=FakeIntentClassifier(IntentDecision(route="direct_rag"))
+    )
+
+    with pytest.raises(ValueError, match="不可序列化"):
+        graph.invoke(
+            build_initial_chat_state(
+                messages=[{"role": "user", "content": "解释一下深蹲。"}],
+                session_summary="",
+            ),
+            context=ChatRuntimeContext(
+                user_id=1,
+                city="",
+                session_id="session-1",
+                trace=None,
+                dependencies=SimpleNamespace(direct_rag_executor=FakeDirectRagExecutor()),
+            ),
+        )

@@ -80,15 +80,19 @@ def test_build_evidence_cards_keeps_only_display_safe_hit_fields():
     ]
 
 
-def test_direct_rag_graph_records_retrieval_history_in_state():
-    """验证图状态只记录当前问题之前的最近检索历史。"""
+def test_direct_rag_graph_uses_latest_user_and_records_prior_history():
+    """验证末尾有助手消息时仍检索最后用户问题及其之前的历史。"""
+
+    captured = {}
 
     class FakeRagService:
         """提供无需外部服务的固定检索上下文。"""
 
         @staticmethod
-        def build_context(_query, history):
+        def build_context(query, history):
             """返回带单条证据的固定上下文。"""
+            captured["query"] = query
+            captured["history"] = history
             return SimpleNamespace(content="[证据:1] 深蹲资料", result="retrieval-result")
 
     class FakeModel:
@@ -111,6 +115,7 @@ def test_direct_rag_graph_records_retrieval_history_in_state():
                 {"role": "user", "content": "先说深蹲。"},
                 {"role": "assistant", "content": "好的。"},
                 {"role": "user", "content": "那膝盖呢？"},
+                {"role": "assistant", "content": "我先想一下。"},
             ],
             session_summary="",
         ),
@@ -127,6 +132,13 @@ def test_direct_rag_graph_records_retrieval_history_in_state():
         {"role": "user", "content": "先说深蹲。"},
         {"role": "assistant", "content": "好的。"},
     ]
+    assert captured == {
+        "query": "那膝盖呢？",
+        "history": [
+            {"role": "user", "content": "先说深蹲。"},
+            {"role": "assistant", "content": "好的。"},
+        ],
+    }
     assert json.loads(json.dumps(result, ensure_ascii=False))["rag_evidence"] == [
         {"rank": 1, "evidence_id": "guide.md#1"}
     ]
