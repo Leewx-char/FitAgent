@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from typing import Literal, Protocol, TypeAlias, TypedDict
 
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.runtime import Runtime
 from pydantic import BaseModel
+
+from app.services.session_facts import extract_session_facts
 
 
 Route = Literal["direct_rag", "personalized_agent"]
 JsonPrimitive: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"]
+ChatGraphNode: TypeAlias = Callable[
+    ["ChatGraphState", Runtime["ChatRuntimeContext"]], dict[str, JsonValue]
+]
 
 
 class IntentDecision(BaseModel):
@@ -129,3 +139,77 @@ def _build_classifier_prompt(message: str, session_facts: str) -> str:
 
 最后一条用户消息：
 {message}"""
+
+
+def build_initial_chat_state(
+    messages: Iterable[Mapping[str, object]], session_summary: str
+) -> ChatGraphState:
+    """标准化消息并初始化一次图执行所需的短期状态。"""
+    normalized_messages = [
+        {"role": str(message["role"]), "content": str(message["content"]).strip()}
+        for message in messages
+    ]
+    return {
+        "messages": normalized_messages,
+        "session_facts": extract_session_facts(normalized_messages),
+        "session_summary": session_summary,
+        "retrieval_history": [],
+        "route": None,
+        "rag_evidence": [],
+        "tool_call_count": 0,
+        "events": [],
+    }
+
+
+def route_after_classification(state: ChatGraphState) -> Route:
+    """只让明确的直接检索结果通过，其余结果保守地进入个性化分支。"""
+    if state.get("route") == "direct_rag":
+        return "direct_rag"
+    return "personalized_agent"
+
+
+def _classify_intent_node(
+    state: ChatGraphState,
+    runtime: Runtime[ChatRuntimeContext],
+    *,
+    classifier: IntentClassifier,
+) -> dict[str, Route]:
+    """调用分类契约并仅将路由结果写回图状态。"""
+    del runtime
+    return {"route": classify_intent(state, classifier)}
+
+
+def _empty_execution_node(
+    _state: ChatGraphState, runtime: Runtime[ChatRuntimeContext]
+) -> dict[str, JsonValue]:
+    """为后续真实执行器保留不产生状态更新的可注入桩。"""
+    del runtime
+    return {}
+
+
+def build_chat_routing_graph(
+    *,
+    classifier: IntentClassifier,
+    direct_rag_node: ChatGraphNode | None = None,
+    personalized_agent_node: ChatGraphNode | None = None,
+) -> CompiledStateGraph:
+    """编译分类后按条件边进入两个可替换执行节点的聊天图。"""
+    graph = StateGraph(ChatGraphState, context_schema=ChatRuntimeContext)
+    graph.add_node(
+        "classify_intent",
+        partial(_classify_intent_node, classifier=classifier),
+    )
+    graph.add_node("direct_rag", direct_rag_node or _empty_execution_node)
+    graph.add_node("personalized_agent", personalized_agent_node or _empty_execution_node)
+    graph.add_edge(START, "classify_intent")
+    graph.add_conditional_edges(
+        "classify_intent",
+        route_after_classification,
+        {
+            "direct_rag": "direct_rag",
+            "personalized_agent": "personalized_agent",
+        },
+    )
+    graph.add_edge("direct_rag", END)
+    graph.add_edge("personalized_agent", END)
+    return graph.compile()
