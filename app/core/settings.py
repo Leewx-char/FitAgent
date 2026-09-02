@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # FitAgent 仅消费设备数据，不能因应用配置放宽为包含写入工具的 MCP 服务。
     coros_mcp_toolset: Literal["readonly"] = "readonly"
     coros_mcp_hide_auth_tools: bool = True
+    weatherstack_access_key: str = ""
 
     @property
     def database_url(self) -> str:

@@ -19,6 +19,7 @@ from app.services.fitness_insights import (
     load_fitness_snapshot,
 )
 from app.services.memory_service import MemoryService
+from app.core.settings import get_settings
 
 
 @lru_cache(maxsize=1)
@@ -228,70 +229,30 @@ def get_weather(city: str):
         )
 
     # 网络异常由 @_with_retry 兜底重试，这里只处理业务异常
-    geocode_data = _request_json(
-        "https://geocoding-api.open-meteo.com/v1/search",
-        {"name": city, "count": 1, "language": "zh", "format": "json"},
-    )
-    results = geocode_data.get("results") or []
-    if not results:
-        return f"未查询到城市 {city} 的地理信息，请确认城市名称。"
-
-    location = results[0]
-    latitude = location["latitude"]
-    longitude = location["longitude"]
-    resolved_name = location.get("name", city)
-    admin1 = location.get("admin1", "")
-    country = location.get("country", "")
-
-    weather_fields = (
-        "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,"
-        "wind_speed_10m,weather_code"
-    )
-    weather_data = _request_json(
-        "https://api.open-meteo.com/v1/forecast",
-        {
-            "latitude": latitude,
-            "longitude": longitude,
-            "current": weather_fields,
-            "timezone": "auto",
-        },
+    response = _request_json(
+        "https://api.weatherstack.com/current",
+        {"access_key": get_settings().weatherstack_access_key, "query": city},
     )
 
-    current = weather_data.get("current") or {}
-    if not current:
-        return f"已定位到 {resolved_name}，但未获取到实时天气数据。"
+    error = response.get("error")
+    if error:
+        return _degradation_json(f"Weatherstack 查询失败：{error.get('info', '未知错误')}")
 
-    weather_code_map = {
-        0: "晴",
-        1: "大部晴朗",
-        2: "局部多云",
-        3: "阴",
-        45: "雾",
-        48: "冻雾",
-        51: "小毛毛雨",
-        53: "毛毛雨",
-        55: "强毛毛雨",
-        61: "小雨",
-        63: "中雨",
-        65: "大雨",
-        71: "小雪",
-        73: "中雪",
-        75: "大雪",
-        80: "阵雨",
-        81: "较强阵雨",
-        82: "强阵雨",
-        95: "雷暴",
-    }
-    weather_text = weather_code_map.get(current.get("weather_code"), "未知天气")
+    location = response.get("location")
+    current = response.get("current")
+    if not isinstance(location, dict) or not isinstance(current, dict):
+        return _degradation_json("Weatherstack 未返回完整实时天气数据")
 
-    location_text = ", ".join(filter(None, [resolved_name, admin1, country]))
+    weather_text = (current.get("weather_descriptions") or ["未知天气"])[0]
+    temperature = current.get("temperature")
+    humidity = current.get("humidity")
+    wind_speed = current.get("wind_speed")
+
     return (
-        f"{location_text} 当前天气：{weather_text}；"
-        f"温度：{current.get('temperature_2m')}°C，"
-        f"体感温度：{current.get('apparent_temperature')}°C，"
-        f"相对湿度：{current.get('relative_humidity_2m')}%，"
-        f"降水：{current.get('precipitation')} mm，"
-        f"风速：{current.get('wind_speed_10m')} km/h。"
+        f"当前天气：{weather_text}，"
+        f"温度：{temperature}°C，"
+        f"湿度：{humidity}%，"
+        f"风速：{wind_speed} km/h。"
     )
 
 
@@ -474,4 +435,6 @@ def trigger_report():
 
 
 if __name__ == "__main__":
-    print(rag_summarize.invoke({"query": "深蹲标准动作"}))
+    # print(rag_summarize.invoke({"query": "深蹲标准动作"}))
+    text = get_weather.run("GuangZhou")
+    print(text)
