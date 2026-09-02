@@ -1,7 +1,25 @@
 """Agent 工具执行防护栏的无外部依赖测试。"""
 
 from app.services.middleware import _consume_tool_budget, _tool_argument_shape
+from app.services.chat_routing_graph import ChatRuntimeContext
 from app.services.react_agent import ReactAgent
+
+
+def test_chat_runtime_context_keeps_request_scoped_dependencies():
+    trace = object()
+    dependencies = object()
+
+    context = ChatRuntimeContext(
+        user_id=7,
+        city="广州",
+        session_id="session-1",
+        trace=trace,
+        dependencies=dependencies,
+    )
+
+    assert (context.user_id, context.city, context.session_id) == (7, "广州", "session-1")
+    assert context.trace is trace
+    assert context.dependencies is dependencies
 
 
 def test_tool_audit_keeps_argument_shape_without_raw_user_value():
