@@ -1,5 +1,6 @@
 import json
 import time
+from collections.abc import MutableMapping
 from typing import Callable
 from app.utils.prompt_loader import load_system_prompts, load_report_prompts
 from langchain.agents import AgentState
@@ -8,7 +9,6 @@ from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Command
-from app.services.agent_tools import _user_context
 from app.services.agent_trace import AgentTrace
 from app.core.request_context import request_id_var
 from app.utils.logger_handler import logger
@@ -21,11 +21,12 @@ def _tool_argument_shape(tool_args: object) -> dict[str, str]:
     return {str(key): type(value).__name__ for key, value in tool_args.items()}
 
 
-def _consume_tool_budget(runtime_ctx: dict) -> tuple[bool, int, int]:
-    """消耗一次请求级工具预算，防止模型陷入重复工具调用循环。"""
-    limit = int(runtime_ctx.get("tool_call_limit", 6))
-    count = int(runtime_ctx.get("tool_call_count", 0)) + 1
-    runtime_ctx["tool_call_count"] = count
+def _consume_tool_budget(
+    state: MutableMapping[str, object], *, limit: int
+) -> tuple[bool, int, int]:
+    """根据本次 Agent 状态计算下一次工具调用是否仍在预算内。"""
+    count = int(state.get("tool_call_count", 0)) + 1
+    state["tool_call_count"] = count
     return count <= limit, count, limit
 
 
@@ -53,7 +54,7 @@ def _log_tool_event(
 
 
 def _record_trace_event(
-    runtime_ctx: dict,
+    trace: object,
     *,
     tool_name: str,
     argument_shape: dict[str, str],
@@ -62,7 +63,6 @@ def _record_trace_event(
     detail: str = "",
 ) -> None:
     """若运行上下文含执行轨迹，则记录一条工具调用事件。"""
-    trace = runtime_ctx.get("agent_trace")
     if isinstance(trace, AgentTrace):
         trace.record_tool(
             tool_name=tool_name,
@@ -78,15 +78,14 @@ def monitor_tool(
     request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command]
 ) -> ToolMessage | Command:
     """执行工具并统一施加预算、审计、轨迹记录和安全失败响应。"""
-    runtime_ctx = request.runtime.context or {}
-    user_id = runtime_ctx.get("user_id")
-    city = runtime_ctx.get("city", "")
-    retrieval_history = runtime_ctx.get("retrieval_history", [])
-
     tool_name = request.tool_call.get("name", "unknown_tool")
     tool_args = request.tool_call.get("args", {})
     argument_shape = _tool_argument_shape(tool_args)
-    allowed, tool_call_count, tool_call_limit = _consume_tool_budget(runtime_ctx)
+    context = request.runtime.context
+    limit = int(getattr(context.dependencies, "max_tool_calls", 6))
+    allowed, tool_call_count, tool_call_limit = _consume_tool_budget(
+        request.state, limit=limit
+    )
     if not allowed:
         _log_tool_event(
             tool_name=tool_name,
@@ -97,28 +96,28 @@ def monitor_tool(
             detail=f"limit={tool_call_limit}",
         )
         _record_trace_event(
-            runtime_ctx,
+            context.trace,
             tool_name=tool_name,
             argument_shape=argument_shape,
             status="budget_exceeded",
             elapsed_ms=0,
             detail=f"limit={tool_call_limit}",
         )
-        return ToolMessage(
-            content=(
-                "本轮工具调用已达到上限。请不要继续调用工具，"
-                "应基于已获得的信息给出明确答复，并说明必要的不确定性。"
-            ),
-            tool_call_id=request.tool_call.get("id", tool_name),
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content=(
+                            "本轮工具调用已达到上限。请不要继续调用工具，"
+                            "应基于已获得的信息给出明确答复，并说明必要的不确定性。"
+                        ),
+                        tool_call_id=request.tool_call.get("id", tool_name),
+                    )
+                ],
+                "tool_call_count": tool_call_count,
+            }
         )
 
-    context_token = _user_context.set(
-        {
-            "user_id": user_id,
-            "city": city,
-            "retrieval_history": retrieval_history,
-        }
-    )
     started_at = time.perf_counter()
 
     try:
@@ -132,20 +131,13 @@ def monitor_tool(
             tool_call_count=tool_call_count,
         )
         _record_trace_event(
-            runtime_ctx,
+            context.trace,
             tool_name=tool_name,
             argument_shape=argument_shape,
             status="success",
             elapsed_ms=elapsed_ms,
         )
-        if tool_name == "rag_summarize":
-            # 工具函数在当前上下文记录真实命中的证据；将其转交给流式层，
-            # 不依赖解析 LLM 最终回答中的 [证据:N] 文本。
-            runtime_ctx["rag_evidence"] = _user_context.get().get("rag_evidence", [])
-            runtime_ctx["rag_evidence_emitted"] = False
-        if tool_name == "trigger_report":
-            request.runtime.context["report"] = True
-        return result
+        return _with_tool_call_count(result, tool_call_count, request)
     except Exception:
         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
         logger.exception("Agent 工具执行异常：%s", tool_name)
@@ -158,22 +150,36 @@ def monitor_tool(
             detail="internal_error",
         )
         _record_trace_event(
-            runtime_ctx,
+            context.trace,
             tool_name=tool_name,
             argument_shape=argument_shape,
             status="error",
             elapsed_ms=elapsed_ms,
             detail="internal_error",
         )
-        return ToolMessage(
-            content=(
-                f"工具“{tool_name}”暂时不可用。请不要暴露内部错误或反复重试；"
-                "可以基于已获得的信息继续回答，并建议用户稍后重试。"
-            ),
-            tool_call_id=request.tool_call.get("id", tool_name),
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content=(
+                            f"工具“{tool_name}”暂时不可用。请不要暴露内部错误或反复重试；"
+                            "可以基于已获得的信息继续回答，并建议用户稍后重试。"
+                        ),
+                        tool_call_id=request.tool_call.get("id", tool_name),
+                    )
+                ],
+                "tool_call_count": tool_call_count,
+            }
         )
-    finally:
-        _user_context.reset(context_token)
+
+
+def _with_tool_call_count(
+    result: ToolMessage | Command, tool_call_count: int, request: ToolCallRequest
+) -> Command:
+    """把中间件预算计数与工具原有的状态更新合并返回。"""
+    if isinstance(result, Command):
+        return Command(update={**result.update, "tool_call_count": tool_call_count})
+    return Command(update={"messages": [result], "tool_call_count": tool_call_count})
 
 
 @before_model
@@ -198,9 +204,9 @@ def log_before_model(
 @dynamic_prompt  # 每一次在生成提示词之前，调用此函数
 def report_prompt_switch(request: ModelRequest):  # 动态切换提示词
     """依据报告模式与可信会话事实选择并补全系统提示词。"""
-    is_report = request.runtime.context.get("report", False)
-    session_facts = request.runtime.context.get("session_facts", {})
-    session_summary = request.runtime.context.get("session_summary", "")
+    is_report = request.state.get("report", False)
+    session_facts = request.state.get("session_facts", {})
+    session_summary = request.state.get("session_summary", "")
 
     facts_prompt = ""
     if session_facts:

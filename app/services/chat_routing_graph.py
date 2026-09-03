@@ -196,6 +196,14 @@ def _empty_execution_node(
     return {}
 
 
+def _personalized_agent_node(
+    state: ChatGraphState, runtime: Runtime[ChatRuntimeContext]
+) -> dict[str, JsonValue]:
+    """复用内层 Agent 的工具循环，并保留本次运行生成的短期产物。"""
+    executor = runtime.context.dependencies.personalized_agent_executor
+    return executor.stream_personalized_events(state, runtime.context)
+
+
 def _direct_rag_node(
     state: ChatGraphState, runtime: Runtime[ChatRuntimeContext]
 ) -> dict[str, JsonValue]:
@@ -237,7 +245,9 @@ def build_chat_routing_graph(
         partial(_classify_intent_node, classifier=classifier),
     )
     graph.add_node("direct_rag", direct_rag_node or _direct_rag_node)
-    graph.add_node("personalized_agent", personalized_agent_node or _empty_execution_node)
+    graph.add_node(
+        "personalized_agent", personalized_agent_node or _personalized_agent_node
+    )
     graph.add_edge(START, "classify_intent")
     graph.add_conditional_edges(
         "classify_intent",

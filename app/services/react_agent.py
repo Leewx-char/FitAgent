@@ -1,7 +1,7 @@
 import json
 import time
 from typing import Callable, Iterable, Iterator
-from langchain.agents import create_agent
+from langchain.agents import AgentState, create_agent
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
 from app.services.factory import get_chat_model
@@ -21,6 +21,7 @@ from app.services.agent_tools import (
 )
 from app.services.middleware import monitor_tool, log_before_model, report_prompt_switch
 from app.services.agent_trace import AgentTrace
+from app.services.chat_routing_graph import ChatGraphState, ChatRuntimeContext
 from app.services.session_facts import extract_session_facts
 from app.core.settings import get_settings
 
@@ -35,6 +36,17 @@ TOOL_DISPLAY = {
     "trigger_report": "生成报告",
     "get_fitness_summary": "获取运动数据",
 }
+
+
+class PersonalizedAgentState(AgentState, total=False):
+    """声明内层 Agent 在单次个性化执行中可读写的短期字段。"""
+
+    session_facts: dict[str, object]
+    session_summary: str
+    retrieval_history: list[dict[str, object]]
+    rag_evidence: list[dict[str, object]]
+    tool_call_count: int
+    report: bool
 
 
 class DirectRagExecutor:
@@ -175,7 +187,80 @@ class ReactAgent:
                 trigger_report,
             ],
             middleware=[monitor_tool, log_before_model, report_prompt_switch],
+            state_schema=PersonalizedAgentState,
+            context_schema=ChatRuntimeContext,
         )
+
+    def stream_personalized_events(
+        self, state: ChatGraphState, context: ChatRuntimeContext
+    ) -> dict:
+        """将内层 Agent 的流事件转换为外层图可保存的短期状态。"""
+        if context.trace is not None:
+            context.trace.mode = "agent"
+        input_state = {
+            "messages": state["messages"],
+            "session_facts": state["session_facts"],
+            "session_summary": state["session_summary"],
+            "retrieval_history": state["retrieval_history"],
+            "rag_evidence": state["rag_evidence"],
+            "tool_call_count": state["tool_call_count"],
+            "report": False,
+        }
+        events = []
+        latest_state = input_state
+        seen_tool_ids = set()
+        last_tool_step = None
+        evidence_pending = False
+        evidence_emitted = False
+        for stream_mode, payload in self.agent.stream(
+            input_state,
+            stream_mode=["messages", "values"],
+            context=context,
+            config={"recursion_limit": self.max_steps},
+        ):
+            if stream_mode == "messages":
+                message, metadata = payload
+                if isinstance(message, AIMessageChunk):
+                    for tool_call in getattr(message, "tool_call_chunks", None) or []:
+                        tool_id = tool_call.get("id")
+                        tool_name = tool_call.get("name")
+                        if tool_id and tool_name and tool_id not in seen_tool_ids:
+                            seen_tool_ids.add(tool_id)
+                            last_tool_step = None
+                            events.append(
+                                {
+                                    "type": "tool",
+                                    "name": TOOL_DISPLAY.get(tool_name, tool_name),
+                                }
+                            )
+                    if message.content and (
+                        not seen_tool_ids
+                        or (
+                            last_tool_step is not None
+                            and metadata.get("langgraph_step", 0) > last_tool_step
+                        )
+                    ):
+                        events.append({"type": "text", "content": message.content})
+                elif isinstance(message, ToolMessage):
+                    last_tool_step = metadata.get("langgraph_step", 0)
+                    evidence_pending = True
+            elif stream_mode == "values":
+                latest_state = payload
+                evidence = latest_state.get("rag_evidence", [])
+                if evidence_pending and evidence and not evidence_emitted:
+                    events.append({"type": "evidence", "items": evidence})
+                    evidence_emitted = True
+                evidence_pending = False
+        return {
+            "retrieval_history": latest_state.get(
+                "retrieval_history", state["retrieval_history"]
+            ),
+            "rag_evidence": latest_state.get("rag_evidence", state["rag_evidence"]),
+            "tool_call_count": latest_state.get(
+                "tool_call_count", state["tool_call_count"]
+            ),
+            "events": events,
+        }
 
     @staticmethod
     def _normalize_messages(messages: Iterable[dict]) -> list[dict]:

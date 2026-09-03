@@ -33,11 +33,11 @@ def test_tool_audit_keeps_argument_shape_without_raw_user_value():
 
 def test_tool_budget_blocks_only_calls_after_limit():
     """验证调用预算在达到上限前放行，超限后的调用被拒绝。"""
-    context = {"tool_call_limit": 2}
+    state = {"tool_call_count": 0}
 
-    assert _consume_tool_budget(context) == (True, 1, 2)
-    assert _consume_tool_budget(context) == (True, 2, 2)
-    assert _consume_tool_budget(context) == (False, 3, 2)
+    assert _consume_tool_budget(state, limit=2) == (True, 1, 2)
+    assert _consume_tool_budget(state, limit=2) == (True, 2, 2)
+    assert _consume_tool_budget(state, limit=2) == (False, 3, 2)
 
 
 def test_full_agent_flow_passes_recursion_limit_to_langgraph():

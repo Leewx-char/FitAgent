@@ -3,6 +3,10 @@
 import json
 from types import SimpleNamespace
 
+from langchain.tools import ToolRuntime
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
+
 from app.services import agent_tools, react_agent
 from app.services.chat_routing_graph import (
     ChatRuntimeContext,
@@ -34,21 +38,33 @@ def test_rag_tool_forwards_recent_history_to_rag_service(monkeypatch):
             return SimpleNamespace(content="[证据:1] 测试资料", result=None)
 
     monkeypatch.setattr(agent_tools, "_get_rag_service", lambda: FakeRagService())
-    context_token = agent_tools._user_context.set(
-        {
-            "user_id": 1,
+    runtime = ToolRuntime(
+        state={
             "retrieval_history": [
                 {"role": "user", "content": "我刚才在问深蹲。"},
                 {"role": "assistant", "content": "深蹲需要注意膝盖方向。"},
             ],
-        }
+            "rag_evidence": [],
+        },
+        context=ChatRuntimeContext(
+            user_id=1,
+            city="",
+            session_id="session-1",
+            trace=None,
+            dependencies=SimpleNamespace(),
+        ),
+        config={},
+        stream_writer=lambda _event: None,
+        tool_call_id="rag-call-1",
+        store=None,
     )
-    try:
-        result = agent_tools.rag_summarize.invoke({"query": "那深蹲呢？"})
-    finally:
-        agent_tools._user_context.reset(context_token)
+    result = agent_tools.rag_summarize.func(query="那深蹲呢？", runtime=runtime)
 
-    assert result == "[证据:1] 测试资料"
+    assert isinstance(result, Command)
+    assert result.update["messages"] == [
+        ToolMessage(content="[证据:1] 测试资料", tool_call_id="rag-call-1")
+    ]
+    assert result.update["rag_evidence"] == []
     assert captured["query"] == "那深蹲呢？"
     assert captured["source_filter"] is None
     assert captured["history"][0]["content"] == "我刚才在问深蹲。"
