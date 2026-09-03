@@ -67,9 +67,7 @@ def _runtime_context_value(runtime: ToolRuntime, name: str, default=None):
     return getattr(context, name, default)
 
 
-def _tool_state_command(
-    content: str, runtime: ToolRuntime, **state_update: object
-) -> Command:
+def _tool_state_command(content: str, runtime: ToolRuntime, **state_update: object) -> Command:
     """返回工具消息并把短期产物写回本次 Agent 状态。"""
     return Command(
         update={
@@ -102,6 +100,7 @@ def _with_retry(max_retries: int = 1, delay: float = 1.0):
 
     def decorator(func):
         """返回为目标函数配置网络重试的装饰器。"""
+
         @wraps(func)
         def wrapper(*args, **kwargs):
             """执行目标函数，并仅对网络错误按次数重试。"""
@@ -174,6 +173,7 @@ def _with_circuit_breaker(name: str, failure_threshold: int = 3, recovery_timeou
 
     def decorator(func):
         """返回为目标函数配置熔断和降级响应的装饰器。"""
+
         @wraps(func)
         def wrapper(*args, **kwargs):
             """受熔断器保护地调用目标函数，并在网络失败时降级。"""
