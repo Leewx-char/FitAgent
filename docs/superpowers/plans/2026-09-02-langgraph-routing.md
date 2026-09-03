@@ -355,3 +355,9 @@ git commit -m "docs: document langgraph chat routing"
 - 已将 LLM 分类输出限制为 Pydantic 枚举，并定义保守回退策略。
 - 每个实现任务都先新增失败测试，再最小实现、验证并提交。
 - 已列出精确文件、测试命令、SSE 兼容要求和清理旧关键词路由的时机。
+
+## 实施结果
+
+- `ReactAgent.execute_stream` 已成为唯一的图调用门面：它构造初始 `ChatGraphState` 与 `ChatRuntimeContext`，并将图的自定义事件重新编码为既有 JSON SSE 行。
+- 直接 RAG 与个性化 Agent 分支均通过图的 `custom` 流实时输出 `tool`、`evidence`、`text` 事件；此实现采用计划中约定的“自定义流输出或适配层”方案，未改变 HTTP/SSE 对外契约。
+- 内层 Agent 以 `context_schema=ChatRuntimeContext` 接收请求身份和依赖，工具借助 `ToolRuntime`/状态更新保存本次短期产物；遗留 `ContextVar` 请求桥接和关键词路由已移除。

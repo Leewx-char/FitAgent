@@ -219,7 +219,8 @@ FitAgent/
 │   │   └── response.py
 │   ├── services/               # 业务逻辑层
 │   │   ├── factory.py          # LLM/VL/Embedding 模型工厂
-│   │   ├── react_agent.py      # LangGraph ReAct Agent
+│   │   ├── react_agent.py      # 聊天图执行门面与内层 ReAct Agent
+│   │   ├── chat_routing_graph.py # LangGraph 短期状态与意图路由图
 │   │   ├── agent_tools.py      # 工具定义
 │   │   ├── memory_service.py   # 候选、确认、过期与会话摘要
 │   │   ├── training_plan_service.py # 计划编排与安全策略
