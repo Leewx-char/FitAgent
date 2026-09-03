@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from threading import Barrier
 
+import pytest
 from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langgraph.types import Command
@@ -373,6 +374,34 @@ def test_personalized_agent_emits_evidence_for_each_rag_call():
         {"rank": 1, "evidence_id": "first.md#1"},
         {"rank": 1, "evidence_id": "second.md#1"},
     ]
+
+
+def test_personalized_graph_rejects_non_json_inner_state():
+    """个性化图节点不得把内层 Agent 的非 JSON 短期状态写回外层图。"""
+    class InvalidStateInnerAgent:
+        @staticmethod
+        def stream(input_state, **_kwargs):
+            yield "values", {**input_state, "rag_evidence": [{"unsafe": object()}]}
+
+    executor = object.__new__(ReactAgent)
+    executor.agent = InvalidStateInnerAgent()
+    executor.max_steps = 5
+    executor.max_tool_calls = 2
+
+    with pytest.raises(ValueError, match="个性化 Agent 产物包含不可序列化值"):
+        build_chat_routing_graph(classifier=PersonalizedClassifier()).invoke(
+            build_initial_chat_state(
+                messages=[{"role": "user", "content": "结合我的情况给建议"}],
+                session_summary="",
+            ),
+            context=ChatRuntimeContext(
+                user_id=5,
+                city="",
+                session_id="session-5",
+                trace=AgentTrace(),
+                dependencies=SimpleNamespace(personalized_agent_executor=executor),
+            ),
+        )
 
 
 def test_monitor_tool_uses_personalized_executor_limit_when_dependencies_only_hold_executor():

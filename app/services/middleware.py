@@ -22,12 +22,22 @@ def _tool_argument_shape(tool_args: object) -> dict[str, str]:
 
 
 def _consume_tool_budget(
-    state: MutableMapping[str, object], *, limit: int
+    state: MutableMapping[str, object], *, limit: int, tool_call_position: int = 0
 ) -> tuple[bool, int, int]:
-    """根据本次 Agent 状态计算下一次工具调用是否仍在预算内。"""
-    count = int(state.get("tool_call_count", 0)) + 1
+    """以同批工具调用的位置计算稳定的预算序号。"""
+    count = int(state.get("tool_call_count", 0)) + tool_call_position + 1
     state["tool_call_count"] = count
     return count <= limit, count, limit
+
+
+def _tool_call_position(request: ToolCallRequest) -> int:
+    """返回当前工具在最后一条 AIMessage 工具调用列表中的位置。"""
+    messages = request.state.get("messages", [])
+    tool_calls = getattr(messages[-1], "tool_calls", []) if messages else []
+    for position, tool_call in enumerate(tool_calls):
+        if tool_call.get("id") == request.tool_call.get("id"):
+            return position
+    return 0
 
 
 def _tool_call_limit(request: ToolCallRequest) -> int:
@@ -96,7 +106,9 @@ def monitor_tool(
     context = request.runtime.context
     limit = _tool_call_limit(request)
     allowed, tool_call_count, tool_call_limit = _consume_tool_budget(
-        request.state, limit=limit
+        request.state,
+        limit=limit,
+        tool_call_position=_tool_call_position(request),
     )
     if not allowed:
         _log_tool_event(

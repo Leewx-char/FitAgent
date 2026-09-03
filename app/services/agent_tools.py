@@ -234,7 +234,7 @@ def rag_summarize(query: str, runtime: ToolRuntime, source: str = "") -> Command
     return _tool_state_command(
         rag_context.content,
         runtime,
-        rag_evidence=[*runtime.state.get("rag_evidence", []), *evidence],
+        rag_evidence=evidence,
     )
 
 

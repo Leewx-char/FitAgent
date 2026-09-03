@@ -85,7 +85,7 @@ class StructuredOutputIntentClassifier:
 def classify_intent(state: ChatGraphState, classifier: IntentClassifier) -> Route:
     """从最后一条用户消息分类，异常时保守回退个性化分支。"""
     try:
-        if not _is_json_value(state):
+        if not is_json_value(state):
             raise ValueError("图状态包含不可序列化值")
         message = _latest_user_message(state["messages"])
         facts = _minimal_session_facts(state["session_facts"])
@@ -95,14 +95,14 @@ def classify_intent(state: ChatGraphState, classifier: IntentClassifier) -> Rout
         return "personalized_agent"
 
 
-def _is_json_value(value: object) -> bool:
+def is_json_value(value: object) -> bool:
     """递归判断值能否作为图状态中的 JSON 数据保存。"""
     if value is None or isinstance(value, (str, int, float, bool)):
         return True
     if isinstance(value, list):
-        return all(_is_json_value(item) for item in value)
+        return all(is_json_value(item) for item in value)
     if isinstance(value, dict):
-        return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
+        return all(isinstance(key, str) and is_json_value(item) for key, item in value.items())
     return False
 
 
@@ -224,7 +224,7 @@ def _direct_rag_node(
         history=history,
         trace=runtime.context.trace,
     ):
-        if not _is_json_value(event):
+        if not is_json_value(event):
             raise ValueError("直接检索事件包含不可序列化值")
         writer(event)
         events.append(event)

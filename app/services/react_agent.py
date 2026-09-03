@@ -1,7 +1,8 @@
 import json
 import time
+from operator import add, or_
 from types import SimpleNamespace
-from typing import Callable, Iterable, Iterator
+from typing import Annotated, Callable, Iterable, Iterator
 from langchain.agents import AgentState, create_agent
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
@@ -28,6 +29,7 @@ from app.services.chat_routing_graph import (
     StructuredOutputIntentClassifier,
     build_chat_routing_graph,
     build_initial_chat_state,
+    is_json_value,
 )
 from app.core.settings import get_settings
 
@@ -44,16 +46,21 @@ TOOL_DISPLAY = {
 }
 
 
+def _merge_tool_call_count(current: int, update: int) -> int:
+    """合并同批工具的绝对预算序号，保留最大的已尝试次数。"""
+    return max(current, update)
+
+
 class PersonalizedAgentState(AgentState, total=False):
     """声明内层 Agent 在单次个性化执行中可读写的短期字段。"""
 
     session_facts: dict[str, object]
     session_summary: str
     retrieval_history: list[dict[str, object]]
-    rag_evidence: list[dict[str, object]]
+    rag_evidence: Annotated[list[dict[str, object]], add]
     tool_call_limit: int
-    tool_call_count: int
-    report: bool
+    tool_call_count: Annotated[int, _merge_tool_call_count]
+    report: Annotated[bool, or_]
 
 
 class DirectRagExecutor:
@@ -191,6 +198,15 @@ class ReactAgent:
         last_tool_step = None
         evidence_pending = False
         emitted_evidence_count = len(input_state["rag_evidence"])
+
+        def emit(event: dict) -> None:
+            """仅将可序列化事件转发到外层图和 SSE 适配器。"""
+            if not is_json_value(event):
+                raise ValueError("个性化 Agent 事件包含不可序列化值")
+            if stream_writer:
+                stream_writer(event)
+            events.append(event)
+
         for stream_mode, payload in self.agent.stream(
             input_state,
             stream_mode=["messages", "values"],
@@ -210,9 +226,7 @@ class ReactAgent:
                                 "type": "tool",
                                 "name": TOOL_DISPLAY.get(tool_name, tool_name),
                             }
-                            if stream_writer:
-                                stream_writer(event)
-                            events.append(event)
+                            emit(event)
                     if message.content and (
                         not seen_tool_ids
                         or (
@@ -221,9 +235,7 @@ class ReactAgent:
                         )
                     ):
                         event = {"type": "text", "content": message.content}
-                        if stream_writer:
-                            stream_writer(event)
-                        events.append(event)
+                        emit(event)
                 elif isinstance(message, ToolMessage):
                     last_tool_step = metadata.get("langgraph_step", 0)
                     evidence_pending = True
@@ -233,17 +245,18 @@ class ReactAgent:
                 new_evidence = evidence[emitted_evidence_count:]
                 if evidence_pending and new_evidence:
                     event = {"type": "evidence", "items": new_evidence}
-                    if stream_writer:
-                        stream_writer(event)
-                    events.append(event)
+                    emit(event)
                 emitted_evidence_count = len(evidence)
                 evidence_pending = False
-        return {
+        output = {
             "retrieval_history": latest_state.get("retrieval_history", state["retrieval_history"]),
             "rag_evidence": latest_state.get("rag_evidence", state["rag_evidence"]),
             "tool_call_count": latest_state.get("tool_call_count", state["tool_call_count"]),
             "events": events,
         }
+        if not is_json_value(output):
+            raise ValueError("个性化 Agent 产物包含不可序列化值")
+        return output
 
     @staticmethod
     def _normalize_messages(messages: Iterable[dict]) -> list[dict]:
