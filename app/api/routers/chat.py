@@ -20,7 +20,6 @@ from app.core.auth import get_current_user, decode_access_token
 from app.models import Session as SessionModel, Message, User
 from app.services.react_agent import ReactAgent
 from app.services.agent_trace import AgentTrace
-from app.services.session_facts import extract_session_facts
 from app.services.memory_service import MemoryService, RECENT_MESSAGE_LIMIT
 from app.repositories.agent_trace_repository import AgentTraceRepository
 from app.core.database import get_db_session
@@ -85,16 +84,14 @@ async def sse_generator(
         except StopIteration:
             return _SENTINEL
 
-    # 把 gen 创建为能传递 user_id/city 的闭包
-    session_facts = extract_session_facts(messages)
+    # 服务层从图状态提取会话事实，HTTP 层仅传递身份与稳定会话标识。
     user_id = current_user.id
-    city = session_facts.get("city", "") or ""
     trace = AgentTrace()
     gen = iter(
         agent.execute_stream(
             messages,
             user_id=user_id,
-            city=city,
+            session_id=session_id,
             session_summary=session_summary,
             trace=trace,
         )

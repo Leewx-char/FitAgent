@@ -1,5 +1,6 @@
-"""明确知识问答的 RAG 快速路径判定测试。"""
+"""聊天路由图与公开流式入口的兼容性测试。"""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -109,18 +110,141 @@ def test_classifier_rejects_runtime_object_from_graph_state():
     assert route == "personalized_agent"
 
 
-def test_direct_rag_accepts_generic_knowledge_question():
-    """验证通用动作知识问题可进入直接 RAG 快速路径。"""
-    assert ReactAgent._should_use_direct_rag(
-        [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}]
-    )
+def _public_agent(classifier, *, direct_executor=None, inner_agent=None):
+    """构造只含图执行依赖的公开入口测试 Agent。"""
+    agent = object.__new__(ReactAgent)
+    agent.direct_rag_executor = direct_executor
+    agent.agent = inner_agent
+    agent.max_steps = 8
+    agent.max_tool_calls = 4
+    agent.routing_graph = build_chat_routing_graph(classifier=classifier)
+    return agent
 
 
-def test_direct_rag_keeps_personalized_question_in_full_agent_flow():
-    """验证包含个人条件的问题仍走完整 Agent 流程。"""
-    assert not ReactAgent._should_use_direct_rag(
-        [{"role": "user", "content": "结合我的体重和目标，帮我安排减脂训练。"}]
+def test_chat_sse_contract_is_unchanged_for_direct_rag_route():
+    """直接 RAG 图路径仍应输出既有工具、证据和文本 JSON 行。"""
+
+    class DirectExecutor:
+        """返回固定且可序列化的直接检索事件。"""
+
+        @staticmethod
+        def stream(**_kwargs):
+            """按既有 SSE 事件顺序生成响应。"""
+            yield {"type": "tool", "name": "检索知识库"}
+            yield {"type": "evidence", "items": [{"evidence_id": "guide#1"}]}
+            yield {"type": "text", "content": "膝盖跟随脚尖。"}
+
+    agent = _public_agent(
+        FakeIntentClassifier(IntentDecision(route="direct_rag")),
+        direct_executor=DirectExecutor(),
     )
+
+    events = [
+        json.loads(chunk)
+        for chunk in agent.execute_stream(
+            [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
+            user_id=7,
+            session_id="stable-session",
+        )
+    ]
+
+    assert events == [
+        {"type": "tool", "name": "检索知识库"},
+        {"type": "evidence", "items": [{"evidence_id": "guide#1"}]},
+        {"type": "text", "content": "膝盖跟随脚尖。"},
+    ]
+
+
+def test_chat_sse_contract_is_unchanged_for_personalized_route():
+    """个性化图路径仍应输出既有工具和文本 JSON 行。"""
+
+    class PersonalizedInnerAgent:
+        """模拟内层 Agent 的工具调用和最终文本。"""
+
+        @staticmethod
+        def stream(input_state, **_kwargs):
+            """返回工具通知后可消费的最终文本。"""
+            from langchain_core.messages import AIMessageChunk, ToolMessage
+
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="", tool_call_chunks=[{"id": "call-1", "name": "get_user_profile"}]
+                    ),
+                    {"langgraph_step": 1},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    ToolMessage(content="画像已读取", tool_call_id="call-1"),
+                    {"langgraph_step": 1},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="为你安排每周三练。"),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield "values", {**input_state, "rag_evidence": [], "tool_call_count": 1}
+
+    agent = _public_agent(
+        FakeIntentClassifier(IntentDecision(route="personalized_agent")),
+        inner_agent=PersonalizedInnerAgent(),
+    )
+
+    events = [
+        json.loads(chunk)
+        for chunk in agent.execute_stream(
+            [{"role": "user", "content": "结合我的目标安排训练"}],
+            user_id=7,
+            session_id="stable-session",
+        )
+    ]
+
+    assert events == [
+        {"type": "tool", "name": "获取用户画像"},
+        {"type": "text", "content": "为你安排每周三练。"},
+    ]
+
+
+def test_classifier_exception_returns_successful_personalized_sse_flow():
+    """分类异常时必须保守回退，并保持个性化 SSE 成功输出。"""
+
+    class PersonalizedInnerAgent:
+        """提供分类回退后使用的固定文本流。"""
+
+        @staticmethod
+        def stream(input_state, **_kwargs):
+            """返回个性化分支的最终文本。"""
+            from langchain_core.messages import AIMessageChunk
+
+            yield "messages", (AIMessageChunk(content="请补充你的训练频率。"), {})
+            yield "values", {**input_state, "rag_evidence": [], "tool_call_count": 0}
+
+    agent = _public_agent(
+        FakeIntentClassifier(RuntimeError("classifier unavailable")),
+        inner_agent=PersonalizedInnerAgent(),
+    )
+
+    events = [
+        json.loads(chunk)
+        for chunk in agent.execute_stream(
+            [{"role": "user", "content": "深蹲怎么做？"}],
+            user_id=7,
+            session_id="stable-session",
+        )
+    ]
+
+    assert events == [{"type": "text", "content": "请补充你的训练频率。"}]
+
+
+def test_execute_stream_no_longer_uses_keyword_router():
+    """公开入口不应再暴露由关键词决定的旧路由器。"""
+    assert not hasattr(ReactAgent, "_should_use_direct_rag")
 
 
 def test_direct_rag_graph_emits_tool_evidence_then_text():

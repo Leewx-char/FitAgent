@@ -40,8 +40,8 @@ def test_tool_budget_blocks_only_calls_after_limit():
     assert _consume_tool_budget(state, limit=2) == (False, 3, 2)
 
 
-def test_full_agent_flow_passes_recursion_limit_to_langgraph():
-    """验证 Agent 执行流向 LangGraph 传递递归与工具调用限制。"""
+def test_execute_stream_passes_request_context_to_routing_graph():
+    """公开入口应向外层路由图传递请求级上下文与值流模式。"""
     captured = {}
 
     class FakeGraph:
@@ -52,10 +52,20 @@ def test_full_agent_flow_passes_recursion_limit_to_langgraph():
             return iter(())
 
     agent = object.__new__(ReactAgent)
-    agent.agent = FakeGraph()
+    agent.direct_rag_executor = object()
+    agent.routing_graph = FakeGraph()
     agent.max_steps = 9
     agent.max_tool_calls = 4
 
-    assert list(agent.execute_stream([{"role": "user", "content": "你好"}])) == []
-    assert captured["config"] == {"recursion_limit": 9}
-    assert captured["context"]["tool_call_limit"] == 4
+    assert (
+        list(
+            agent.execute_stream(
+                [{"role": "user", "content": "你好"}], user_id=7, session_id="session-7"
+            )
+        )
+        == []
+    )
+    assert captured["stream_mode"] == "values"
+    assert captured["context"].user_id == 7
+    assert captured["context"].session_id == "session-7"
+    assert captured["context"].dependencies.max_tool_calls == 4

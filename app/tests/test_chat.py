@@ -26,6 +26,17 @@ class TestChat:
             text_events = [e for e in events if e != "[DONE]" and '"type": "text"' in e]
             assert text_events
 
+    def test_chat_passes_stable_session_id_without_city_routing_data(self, auth_client, agent_mock):
+        """聊天路由只把稳定会话标识交给服务层，不参与业务路由。"""
+        response = auth_client.post("/api/chat", json={"message": "我在成都，怎么训练？"})
+
+        assert response.status_code == 200
+        assert (
+            agent_mock.execute_stream.call_args.kwargs["session_id"]
+            == response.headers["X-Session-Id"]
+        )
+        assert "city" not in agent_mock.execute_stream.call_args.kwargs
+
     def test_chat_forwards_rag_evidence_cards(self, auth_client, agent_mock):
         """RAG 证据事件必须穿过聊天路由，前端才能渲染来源卡片。"""
         agent_mock.execute_stream.return_value = iter(

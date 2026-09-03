@@ -1,5 +1,6 @@
 import json
 import time
+from types import SimpleNamespace
 from typing import Callable, Iterable, Iterator
 from langchain.agents import AgentState, create_agent
 from langchain_core.messages import AIMessageChunk, ToolMessage
@@ -21,8 +22,13 @@ from app.services.agent_tools import (
 )
 from app.services.middleware import monitor_tool, log_before_model, report_prompt_switch
 from app.services.agent_trace import AgentTrace
-from app.services.chat_routing_graph import ChatGraphState, ChatRuntimeContext
-from app.services.session_facts import extract_session_facts
+from app.services.chat_routing_graph import (
+    ChatGraphState,
+    ChatRuntimeContext,
+    StructuredOutputIntentClassifier,
+    build_chat_routing_graph,
+    build_initial_chat_state,
+)
 from app.core.settings import get_settings
 
 TOOL_DISPLAY = {
@@ -123,48 +129,7 @@ class DirectRagExecutor:
 
 
 class ReactAgent:
-    """面向多工具场景的 Agent，并为明确知识问答提供单次模型的 RAG 快速路径。"""
-
-    _KNOWLEDGE_TERMS = (
-        "深蹲",
-        "硬拉",
-        "卧推",
-        "引体",
-        "跑步",
-        "动作",
-        "训练",
-        "热身",
-        "拉伸",
-        "增肌",
-        "减脂",
-        "蛋白",
-        "营养",
-        "饮食",
-        "膝",
-        "肩",
-        "腰",
-        "疼痛",
-        "受伤",
-        "恢复",
-    )
-    _PERSONALIZATION_TERMS = (
-        "我的",
-        "我自己",
-        "结合我",
-        "根据我",
-        "给我制定",
-        "我的画像",
-        "我的体重",
-        "我的身高",
-        "我的目标",
-        "我的伤",
-        "训练记录",
-        "运动数据",
-        "体检",
-        "报告",
-        "天气",
-        "户外",
-    )
+    """通过意图路由图协调直接检索与个性化工具编排。"""
 
     def __init__(self):
         """初始化模型、工具编排图和配置的执行步数限制。"""
@@ -191,6 +156,9 @@ class ReactAgent:
             state_schema=PersonalizedAgentState,
             context_schema=ChatRuntimeContext,
         )
+        self.routing_graph = build_chat_routing_graph(
+            classifier=StructuredOutputIntentClassifier(self.model)
+        )
 
     def stream_personalized_events(
         self, state: ChatGraphState, context: ChatRuntimeContext
@@ -199,9 +167,7 @@ class ReactAgent:
         if context.trace is not None:
             context.trace.mode = "agent"
         latest_user_index = max(
-            index
-            for index, message in enumerate(state["messages"])
-            if message["role"] == "user"
+            index for index, message in enumerate(state["messages"]) if message["role"] == "user"
         )
         retrieval_history = [
             dict(message) for message in state["messages"][:latest_user_index][-6:]
@@ -263,13 +229,9 @@ class ReactAgent:
                 emitted_evidence_count = len(evidence)
                 evidence_pending = False
         return {
-            "retrieval_history": latest_state.get(
-                "retrieval_history", state["retrieval_history"]
-            ),
+            "retrieval_history": latest_state.get("retrieval_history", state["retrieval_history"]),
             "rag_evidence": latest_state.get("rag_evidence", state["rag_evidence"]),
-            "tool_call_count": latest_state.get(
-                "tool_call_count", state["tool_call_count"]
-            ),
+            "tool_call_count": latest_state.get("tool_call_count", state["tool_call_count"]),
             "events": events,
         }
 
@@ -285,111 +247,39 @@ class ReactAgent:
             normalized.append({"role": role, "content": content})
         return normalized
 
-    @classmethod
-    def _should_use_direct_rag(cls, messages: list[dict]) -> bool:
-        """仅让非个性化明确知识问题走直接检索，避免遗漏必需的个人信息。"""
-        if not messages or messages[-1].get("role") != "user":
-            return False
-        query = str(messages[-1].get("content", "")).strip()
-        return (
-            bool(query)
-            and not any(term in query for term in cls._PERSONALIZATION_TERMS)
-            and any(term in query for term in cls._KNOWLEDGE_TERMS)
-        )
-
-    def _execute_direct_rag(self, messages: list[dict], trace: AgentTrace | None = None):
-        """将直接检索执行器的事件逐条编码为既有 JSON 行。"""
-        query = str(messages[-1]["content"])
-        history = messages[:-1][-6:]
-        executor = getattr(self, "direct_rag_executor", None)
-        if executor is None:
-            executor = DirectRagExecutor(model=self.model)
-        for event in executor.stream(query=query, history=history, trace=trace):
-            yield json.dumps(event, ensure_ascii=False) + "\n"
-
     def execute_stream(
         self,
         messages: list[dict],
         user_id: int | None = None,
         city: str = "",
+        session_id: str = "",
         session_summary: str = "",
         trace: AgentTrace | None = None,
     ):
-        """流式执行直接检索或完整 Agent，并产出工具、证据和文本事件。"""
+        """构造请求级图上下文，并编码兼容既有 SSE 的执行事件。"""
         normalized_messages = self._normalize_messages(messages)
-        session_facts = extract_session_facts(normalized_messages)
-        input_dict = {"messages": normalized_messages}
-
-        run_context = {
-            "report": False,
-            "session_facts": session_facts,
-            "tool_call_limit": self.max_tool_calls,
-            "tool_call_count": 0,
-            "agent_trace": trace,
-            "session_summary": session_summary,
-        }
-        # 当前消息由工具参数携带；检索器只需要最近历史来消解“那个动作”等指代。
-        run_context["retrieval_history"] = normalized_messages[:-1][-6:]
-        if user_id:
-            run_context["user_id"] = user_id
-        if city:
-            run_context["city"] = city
-
-        if self._should_use_direct_rag(normalized_messages):
-            yield from self._execute_direct_rag(normalized_messages, trace)
-            return
-
-        seen_tool_ids = set()  # 记录已见过的工具调用ID，用于去重和判断"是否调过工具"
-        last_tool_step = None  # 记录最后一个 ToolMessage 所在的 step 编号
-        # None 表示：还没执行完所有工具调用（还在调工具阶段）
-
-        for msg_chunk, metadata in self.agent.stream(
-            input_dict,
-            stream_mode="messages",
-            context=run_context,
-            config={"recursion_limit": self.max_steps},
+        initial_state = build_initial_chat_state(normalized_messages, session_summary)
+        runtime_context = ChatRuntimeContext(
+            user_id=user_id or 0,
+            city=city or str(initial_state["session_facts"].get("city", "")),
+            session_id=session_id,
+            trace=trace,
+            dependencies=SimpleNamespace(
+                direct_rag_executor=self.direct_rag_executor,
+                personalized_agent_executor=self,
+                max_tool_calls=self.max_tool_calls,
+            ),
+        )
+        emitted_event_count = 0
+        for state in self.routing_graph.stream(
+            initial_state,
+            context=runtime_context,
+            stream_mode="values",
         ):
-            if isinstance(msg_chunk, AIMessageChunk):
-                tool_call_chunks = getattr(msg_chunk, "tool_call_chunks", None) or []
-                # 工具调用通知
-                for tc_chunk in tool_call_chunks:
-                    if tc_chunk.get("name") and tc_chunk.get("id"):
-                        if tc_chunk["id"] not in seen_tool_ids:
-                            seen_tool_ids.add(tc_chunk["id"])
-                            last_tool_step = None  # ← 关键：见到新工具调用，重置为 None
-                            yield (
-                                json.dumps(
-                                    {
-                                        "type": "tool",
-                                        "name": TOOL_DISPLAY.get(
-                                            tc_chunk["name"], tc_chunk["name"]
-                                        ),
-                                    },
-                                    ensure_ascii=False,
-                                )
-                                + "\n"
-                            )  # 前端显示"🔍 获取画像..."
-                # 文本内容
-                if msg_chunk.content:
-                    if not seen_tool_ids or (
-                        last_tool_step is not None
-                        and metadata.get("langgraph_step", 0) > last_tool_step
-                    ):
-                        yield (
-                            json.dumps(
-                                {"type": "text", "content": msg_chunk.content}, ensure_ascii=False
-                            )
-                            + "\n"
-                        )
-            elif isinstance(msg_chunk, ToolMessage):
-                last_tool_step = metadata.get("langgraph_step", 0)
-                evidence = run_context.get("rag_evidence", [])
-                if evidence and not run_context.get("rag_evidence_emitted", False):
-                    run_context["rag_evidence_emitted"] = True
-                    yield (
-                        json.dumps({"type": "evidence", "items": evidence}, ensure_ascii=False)
-                        + "\n"
-                    )
+            events = state["events"]
+            for event in events[emitted_event_count:]:
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+            emitted_event_count = len(events)
 
 
 if __name__ == "__main__":
