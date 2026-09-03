@@ -1,14 +1,16 @@
 from datetime import datetime, date
 import json
-import os
 import time
 import threading
+from collections.abc import Mapping
 from urllib.parse import urlencode
 from urllib.request import urlopen
 from urllib.error import URLError
-from contextvars import ContextVar
 from functools import lru_cache, wraps
+from langchain.tools import ToolRuntime
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
+from langgraph.types import Command
 from app.services.rag_service import RagSummarizeService
 from app.utils.logger_handler import logger
 from app.core.database import get_db_session
@@ -27,9 +29,6 @@ def _get_rag_service() -> RagSummarizeService:
     """复用已加载 BM25 工件的 RAG 服务；构造过程不执行 embedding 或 Qdrant 查询。"""
 
     return RagSummarizeService()
-
-
-_user_context: ContextVar[dict] = ContextVar("user_context", default={})
 
 
 def warm_rag_retriever() -> str | None:
@@ -60,6 +59,24 @@ def build_evidence_cards(result) -> list[dict[str, str | int | float | None]]:
     return cards
 
 
+def _runtime_context_value(runtime: ToolRuntime, name: str, default=None):
+    """从当前工具运行时读取可信请求字段，并兼容迁移期的映射上下文。"""
+    context = runtime.context
+    if isinstance(context, Mapping):
+        return context.get(name, default)
+    return getattr(context, name, default)
+
+
+def _tool_state_command(content: str, runtime: ToolRuntime, **state_update: object) -> Command:
+    """返回工具消息并把短期产物写回本次 Agent 状态。"""
+    return Command(
+        update={
+            "messages": [ToolMessage(content=content, tool_call_id=runtime.tool_call_id)],
+            **state_update,
+        }
+    )
+
+
 _NETWORK_ERRORS = (URLError, ConnectionError, TimeoutError, OSError)
 
 
@@ -83,6 +100,7 @@ def _with_retry(max_retries: int = 1, delay: float = 1.0):
 
     def decorator(func):
         """返回为目标函数配置网络重试的装饰器。"""
+
         @wraps(func)
         def wrapper(*args, **kwargs):
             """执行目标函数，并仅对网络错误按次数重试。"""
@@ -155,6 +173,7 @@ def _with_circuit_breaker(name: str, failure_threshold: int = 3, recovery_timeou
 
     def decorator(func):
         """返回为目标函数配置熔断和降级响应的装饰器。"""
+
         @wraps(func)
         def wrapper(*args, **kwargs):
             """受熔断器保护地调用目标函数，并在网络失败时降级。"""
@@ -203,17 +222,20 @@ SOURCE_MAP = {
 )
 @_with_circuit_breaker(name="rag_summarize")
 @_with_retry()
-def rag_summarize(query: str, source: str = "") -> str:
+def rag_summarize(query: str, runtime: ToolRuntime, source: str = "") -> Command:
     """检索问题并保存可展示证据，返回受预算约束的上下文。"""
     source_filter = SOURCE_MAP.get(source) if source else None
-    context = _user_context.get()
     rag_context = _get_rag_service().build_context(
         query,
         source_filter,
-        context.get("retrieval_history", []),
+        runtime.state.get("retrieval_history", []),
     )
-    context["rag_evidence"] = build_evidence_cards(rag_context.result)
-    return rag_context.content
+    evidence = build_evidence_cards(rag_context.result)
+    return _tool_state_command(
+        rag_context.content,
+        runtime,
+        rag_evidence=evidence,
+    )
 
 
 @tool(description="获取指定城市的实时天气信息，返回温度、体感温度、降水、风速等数据")
@@ -257,21 +279,18 @@ def get_weather(city: str):
 
 
 @tool(description="获取当前会话绑定的城市名称。未绑定时明确返回未知，不允许编造。")
-def get_user_location() -> str:
-    """优先返回会话城市，缺失时读取可选环境配置。"""
-    ctx = _user_context.get()
-    if ctx.get("city"):
-        return ctx["city"]
-    city = os.getenv("AGENT_USER_CITY", "").strip()
+def get_user_location(runtime: ToolRuntime) -> str:
+    """返回当前请求注入的城市，缺失时明确要求用户补充。"""
+    city = str(_runtime_context_value(runtime, "city", "")).strip()
     return city if city else "当前会话未绑定城市信息，请让用户明确提供所在城市。"
 
 
 @tool(description="获取当前会话绑定的用户ID。未绑定时明确返回未知，不允许随机生成。")
-def get_user_id():
+def get_user_id(runtime: ToolRuntime):
     """返回当前会话用户标识或说明其缺失。"""
-    ctx = _user_context.get()
-    if ctx.get("user_id"):
-        return str(ctx["user_id"])
+    user_id = _runtime_context_value(runtime, "user_id")
+    if user_id:
+        return str(user_id)
     return "当前会话未绑定用户ID，请让用户明确提供用户ID。"
 
 
@@ -284,10 +303,9 @@ def get_current_month():
 @tool(
     description="获取当前用户的完整健身画像。仅当用户明确要求结合其个人情况、画像、目标、体重、伤病史、训练记录来给建议时调用；通用动作、营养或防护知识问答禁止调用。"
 )
-def get_user_profile():
+def get_user_profile(runtime: ToolRuntime):
     """查询当前用户画像并格式化为 Agent 可使用的信息。"""
-    ctx = _user_context.get()
-    user_id = ctx.get("user_id")
+    user_id = _runtime_context_value(runtime, "user_id")
     if not user_id:
         return "未获取到用户信息，请让用户先登录。"
 
@@ -331,10 +349,10 @@ def get_user_profile():
         "习惯、伤病、饮食或历史偏好时调用；候选记忆和已撤销记忆不可读取。"
     )
 )
-def get_confirmed_memories(query: str) -> str:
+def get_confirmed_memories(query: str, runtime: ToolRuntime) -> str:
     """只读查询已确认记忆；写入操作始终仅由记忆 API 负责。"""
 
-    user_id = _user_context.get().get("user_id")
+    user_id = _runtime_context_value(runtime, "user_id")
     if not user_id:
         return "未获取到用户信息，请让用户先登录。"
     with get_db_session() as db:
@@ -364,11 +382,14 @@ def _parse_fitness_day(value: str) -> date | None:
     )
 )
 def get_fitness_summary(
-    start_day: str = "", end_day: str = "", activity_id: str = ""
+    runtime: ToolRuntime,
+    start_day: str = "",
+    end_day: str = "",
+    activity_id: str = "",
 ) -> str:
     """从后端注入的当前用户范围内读取默认、区间或单次活动摘要。"""
 
-    user_id = _user_context.get().get("user_id")
+    user_id = _runtime_context_value(runtime, "user_id")
     if not user_id:
         return "未获取到用户信息，请让用户先登录。"
 
@@ -429,9 +450,13 @@ def get_fitness_summary(
 @tool(
     description="无入参，当识别到用户想生成近期运动总结报告时调用，触发报告模式切换。仅在用户明确要求生成报告/总结时调用。"
 )
-def trigger_report():
-    """触发报告模式；中间件会在下一轮模型调用前切换相应提示词。"""
-    return "已切换到报告模式，请基于用户近期运动数据生成报告"
+def trigger_report(runtime: ToolRuntime) -> Command:
+    """在本次 Agent 状态中触发报告模式，供下一轮模型切换提示词。"""
+    return _tool_state_command(
+        "已切换到报告模式，请基于用户近期运动数据生成报告",
+        runtime,
+        report=True,
+    )
 
 
 if __name__ == "__main__":

@@ -1,30 +1,50 @@
 import json
 from datetime import date, timedelta
+from types import SimpleNamespace
+
+from langchain.tools import ToolRuntime
 
 from app.core.database import SessionLocal
-from app.services.agent_tools import _user_context, get_fitness_summary
+from app.services.agent_tools import get_fitness_summary
+from app.services.chat_routing_graph import ChatRuntimeContext
 from app.models import FitnessData
 
 
+def _fitness_summary(user_id: int | None, **tool_args: str) -> str:
+    """使用请求级 ToolRuntime 调用运动摘要工具。"""
+    runtime = ToolRuntime(
+        state={},
+        context=ChatRuntimeContext(
+            user_id=user_id or 0,
+            city="",
+            session_id="fitness-summary-test",
+            trace=None,
+            dependencies=SimpleNamespace(),
+        ),
+        config={},
+        stream_writer=lambda _event: None,
+        tool_call_id="fitness-summary-test",
+        store=None,
+    )
+    return get_fitness_summary.func(runtime=runtime, **tool_args)
+
+
 class TestFitnessSummary:
-    def test_no_user_context(self):
+    def test_missing_user_id(self):
         """无 user_id → 提示登录"""
-        _user_context.set({})
-        result = get_fitness_summary.invoke({})
+        result = _fitness_summary(None)
         assert "未获取到用户信息" in result
 
     def test_no_data(self, auth_client):
         """有 user_id 但无运动数据 → 引导同步"""
         me = auth_client.get("/api/auth/me").json()
-        _user_context.set({"user_id": me["data"]["id"]})
-        result = get_fitness_summary.invoke({})
+        result = _fitness_summary(me["data"]["id"])
         assert "暂无运动数据" in result or "引导" in result
 
     def test_daily_metrics_summary(self, auth_client):
         """有 daily_metrics → 摘要含静息心率、HRV、训练负荷、VO2max"""
         me = auth_client.get("/api/auth/me").json()
         user_id = me["data"]["id"]
-        _user_context.set({"user_id": user_id})
 
         db = SessionLocal()
         try:
@@ -67,7 +87,7 @@ class TestFitnessSummary:
             )
             db.commit()
 
-            result = get_fitness_summary.invoke({})
+            result = _fitness_summary(user_id)
 
             assert "有效日指标数据" in result
             assert "静息心率" in result
@@ -85,7 +105,6 @@ class TestFitnessSummary:
         """三种数据类型齐全 → 日指标+睡眠+运动三段都有"""
         me = auth_client.get("/api/auth/me").json()
         user_id = me["data"]["id"]
-        _user_context.set({"user_id": user_id})
 
         db = SessionLocal()
         try:
@@ -127,7 +146,7 @@ class TestFitnessSummary:
             )
             db.commit()
 
-            result = get_fitness_summary.invoke({})
+            result = _fitness_summary(user_id)
 
             assert "睡眠时长" in result
             assert "深度睡眠" in result
@@ -143,7 +162,6 @@ class TestFitnessSummary:
         """低静息心率(<60) → 标注'偏低，恢复良好'"""
         me = auth_client.get("/api/auth/me").json()
         user_id = me["data"]["id"]
-        _user_context.set({"user_id": user_id})
 
         db = SessionLocal()
         try:
@@ -158,7 +176,7 @@ class TestFitnessSummary:
             )
             db.commit()
 
-            result = get_fitness_summary.invoke({})
+            result = _fitness_summary(user_id)
             assert "偏低，恢复良好" in result
             # 清理
             db.query(FitnessData).filter(FitnessData.user_id == user_id).delete()
@@ -170,7 +188,6 @@ class TestFitnessSummary:
         """显式日期区间不能混入区间外的同一用户数据。"""
         me = auth_client.get("/api/auth/me").json()
         user_id = me["data"]["id"]
-        _user_context.set({"user_id": user_id})
         start_day = date.today() - timedelta(days=4)
         end_day = date.today() - timedelta(days=3)
         outside_day = date.today() - timedelta(days=10)
@@ -204,11 +221,10 @@ class TestFitnessSummary:
             )
             db.commit()
 
-            result = get_fitness_summary.invoke(
-                {
-                    "start_day": start_day.strftime("%Y%m%d"),
-                    "end_day": end_day.strftime("%Y%m%d"),
-                }
+            result = _fitness_summary(
+                user_id,
+                start_day=start_day.strftime("%Y%m%d"),
+                end_day=end_day.strftime("%Y%m%d"),
             )
 
             assert f"{start_day.isoformat()} 至 {end_day.isoformat()}" in result
@@ -224,7 +240,6 @@ class TestFitnessSummary:
         """同日多次活动先列候选，再用稳定 ID 精确读取其中一次。"""
         me = auth_client.get("/api/auth/me").json()
         user_id = me["data"]["id"]
-        _user_context.set({"user_id": user_id})
         activity_day = date.today() - timedelta(days=1)
         morning_id = "activity:test-morning"
         evening_id = "activity:test-evening"
@@ -267,9 +282,9 @@ class TestFitnessSummary:
             db.commit()
             day = activity_day.strftime("%Y%m%d")
 
-            candidates = get_fitness_summary.invoke({"start_day": day, "end_day": day})
-            detail = get_fitness_summary.invoke(
-                {"start_day": day, "end_day": day, "activity_id": evening_id}
+            candidates = _fitness_summary(user_id, start_day=day, end_day=day)
+            detail = _fitness_summary(
+                user_id, start_day=day, end_day=day, activity_id=evening_id
             )
 
             assert morning_id in candidates
@@ -288,16 +303,15 @@ class TestFitnessSummary:
     def test_interval_validation_rejects_partial_dates_and_wrong_activity_scope(self, auth_client):
         """模型不能用半个日期区间或跨天活动 ID 绕过查询边界。"""
         me = auth_client.get("/api/auth/me").json()
-        _user_context.set({"user_id": me["data"]["id"]})
+        user_id = me["data"]["id"]
         day = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
 
-        partial = get_fitness_summary.invoke({"start_day": day})
-        cross_day = get_fitness_summary.invoke(
-            {
-                "start_day": (date.today() - timedelta(days=2)).strftime("%Y%m%d"),
-                "end_day": day,
-                "activity_id": "activity:not-allowed",
-            }
+        partial = _fitness_summary(user_id, start_day=day)
+        cross_day = _fitness_summary(
+            user_id,
+            start_day=(date.today() - timedelta(days=2)).strftime("%Y%m%d"),
+            end_day=day,
+            activity_id="activity:not-allowed",
         )
 
         assert "必须同时提供" in partial

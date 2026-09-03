@@ -176,6 +176,12 @@ AGENT_MAX_STEPS=8
 AGENT_MAX_TOOL_CALLS=6
 ```
 
+## 聊天路由与状态边界
+
+`ReactAgent.execute_stream` 会在每次请求开始时构造 LangGraph 短期状态，并由 LLM 的结构化意图分类决定进入直接 RAG 或个性化 Agent。图状态只保存消息、会话事实、检索历史、证据和 SSE 事件等可序列化数据；用户身份、会话标识、追踪对象和执行依赖仅存在请求级运行时上下文中。
+
+MySQL 仍是跨会话记忆和会话摘要的唯一长期存储，LangGraph 不启用 Store 或 checkpointer。分类模型不可用、返回异常或意图不明确时，系统会保守回退到个性化 Agent；HTTP 层继续输出既有 `tool`、`evidence`、`text` 和 `[DONE]` SSE 契约。
+
 ## Agent 执行轨迹
 
 每轮聊天会以独立事务写入 `agent_runs` 和 `agent_tool_calls`：记录请求 ID、执行路径（`agent` / `direct_rag`）、状态、总耗时、工具顺序、参数类型和工具耗时。为保护隐私，不保存用户问题、工具参数值或模型回复原文。
@@ -213,7 +219,8 @@ FitAgent/
 │   │   └── response.py
 │   ├── services/               # 业务逻辑层
 │   │   ├── factory.py          # LLM/VL/Embedding 模型工厂
-│   │   ├── react_agent.py      # LangGraph ReAct Agent
+│   │   ├── react_agent.py      # 聊天图执行门面与内层 ReAct Agent
+│   │   ├── chat_routing_graph.py # LangGraph 短期状态与意图路由图
 │   │   ├── agent_tools.py      # 工具定义
 │   │   ├── memory_service.py   # 候选、确认、过期与会话摘要
 │   │   ├── training_plan_service.py # 计划编排与安全策略
