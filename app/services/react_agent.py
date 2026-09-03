@@ -71,7 +71,9 @@ class DirectRagExecutor:
         *,
         model: object,
         rag_service_factory: Callable[[], object] | None = None,
-        evidence_builder: Callable[[object], list[dict]] = build_evidence_cards,
+        evidence_builder: Callable[
+            [object], list[dict[str, str | int | float | None]]
+        ] = build_evidence_cards,
     ) -> None:
         """注入模型、检索服务工厂和证据卡片转换器。"""
         self._model = model
