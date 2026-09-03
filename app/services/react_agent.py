@@ -45,6 +45,7 @@ class PersonalizedAgentState(AgentState, total=False):
     session_summary: str
     retrieval_history: list[dict[str, object]]
     rag_evidence: list[dict[str, object]]
+    tool_call_limit: int
     tool_call_count: int
     report: bool
 
@@ -197,12 +198,21 @@ class ReactAgent:
         """将内层 Agent 的流事件转换为外层图可保存的短期状态。"""
         if context.trace is not None:
             context.trace.mode = "agent"
+        latest_user_index = max(
+            index
+            for index, message in enumerate(state["messages"])
+            if message["role"] == "user"
+        )
+        retrieval_history = [
+            dict(message) for message in state["messages"][:latest_user_index][-6:]
+        ]
         input_state = {
             "messages": state["messages"],
             "session_facts": state["session_facts"],
             "session_summary": state["session_summary"],
-            "retrieval_history": state["retrieval_history"],
+            "retrieval_history": retrieval_history,
             "rag_evidence": state["rag_evidence"],
+            "tool_call_limit": self.max_tool_calls,
             "tool_call_count": state["tool_call_count"],
             "report": False,
         }
@@ -211,7 +221,7 @@ class ReactAgent:
         seen_tool_ids = set()
         last_tool_step = None
         evidence_pending = False
-        evidence_emitted = False
+        emitted_evidence_count = len(input_state["rag_evidence"])
         for stream_mode, payload in self.agent.stream(
             input_state,
             stream_mode=["messages", "values"],
@@ -247,9 +257,10 @@ class ReactAgent:
             elif stream_mode == "values":
                 latest_state = payload
                 evidence = latest_state.get("rag_evidence", [])
-                if evidence_pending and evidence and not evidence_emitted:
-                    events.append({"type": "evidence", "items": evidence})
-                    evidence_emitted = True
+                new_evidence = evidence[emitted_evidence_count:]
+                if evidence_pending and new_evidence:
+                    events.append({"type": "evidence", "items": new_evidence})
+                emitted_evidence_count = len(evidence)
                 evidence_pending = False
         return {
             "retrieval_history": latest_state.get(

@@ -230,10 +230,11 @@ def rag_summarize(query: str, runtime: ToolRuntime, source: str = "") -> Command
         source_filter,
         runtime.state.get("retrieval_history", []),
     )
+    evidence = build_evidence_cards(rag_context.result)
     return _tool_state_command(
         rag_context.content,
         runtime,
-        rag_evidence=build_evidence_cards(rag_context.result),
+        rag_evidence=[*runtime.state.get("rag_evidence", []), *evidence],
     )
 
 

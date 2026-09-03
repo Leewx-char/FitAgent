@@ -30,6 +30,18 @@ def _consume_tool_budget(
     return count <= limit, count, limit
 
 
+def _tool_call_limit(request: ToolCallRequest) -> int:
+    """优先读取内层状态预算，缺失时使用请求执行器配置的上限。"""
+    limit = request.state.get("tool_call_limit")
+    if limit is not None:
+        return int(limit)
+    dependencies = request.runtime.context.dependencies
+    limit = getattr(dependencies, "max_tool_calls", None)
+    if limit is None:
+        limit = getattr(dependencies.personalized_agent_executor, "max_tool_calls", 6)
+    return int(limit)
+
+
 def _log_tool_event(
     *,
     tool_name: str,
@@ -82,7 +94,7 @@ def monitor_tool(
     tool_args = request.tool_call.get("args", {})
     argument_shape = _tool_argument_shape(tool_args)
     context = request.runtime.context
-    limit = int(getattr(context.dependencies, "max_tool_calls", 6))
+    limit = _tool_call_limit(request)
     allowed, tool_call_count, tool_call_limit = _consume_tool_budget(
         request.state, limit=limit
     )

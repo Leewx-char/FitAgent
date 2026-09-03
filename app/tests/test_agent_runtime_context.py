@@ -11,6 +11,8 @@ from langgraph.types import Command
 
 from app.services import agent_tools, react_agent
 from app.services.agent_trace import AgentTrace
+from app.services.middleware import monitor_tool
+from langchain.tools.tool_node import ToolCallRequest
 from app.services.chat_routing_graph import (
     ChatRuntimeContext,
     IntentDecision,
@@ -80,7 +82,11 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
 
     result = graph.invoke(
         build_initial_chat_state(
-            messages=[{"role": "user", "content": "结合我的情况给建议"}],
+            messages=[
+                {"role": "user", "content": "我之前练过深蹲。"},
+                {"role": "assistant", "content": "注意膝盖方向。"},
+                {"role": "user", "content": "结合我的情况给建议"},
+            ],
             session_summary="近期每周训练三次。",
         ),
         context=runtime_context,
@@ -89,6 +95,11 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
     assert captured["context"] is runtime_context
     assert captured["config"] == {"recursion_limit": 9}
     assert captured["input"]["session_summary"] == "近期每周训练三次。"
+    assert captured["input"]["retrieval_history"] == [
+        {"role": "user", "content": "我之前练过深蹲。"},
+        {"role": "assistant", "content": "注意膝盖方向。"},
+    ]
+    assert captured["input"]["tool_call_limit"] == 4
     assert "user_id" not in captured["input"]
     assert "city" not in captured["input"]
     assert result["events"] == [{"type": "text", "content": "个性化建议"}]
@@ -270,6 +281,7 @@ def test_personalized_agent_keeps_tool_and_evidence_events():
     executor = object.__new__(ReactAgent)
     executor.agent = ToolCallingAgent()
     executor.max_steps = 5
+    executor.max_tool_calls = 2
     result = executor.stream_personalized_events(
         build_initial_chat_state(
             messages=[{"role": "user", "content": "深蹲怎么做？"}],
@@ -290,3 +302,116 @@ def test_personalized_agent_keeps_tool_and_evidence_events():
         {"type": "text", "content": "膝盖跟随脚尖。"},
     ]
     assert result["tool_call_count"] == 1
+
+
+def test_personalized_agent_emits_evidence_for_each_rag_call():
+    """两次 RAG 工具调用必须各自生成新证据事件并保留完整最终证据。"""
+    class TwiceRagAgent:
+        @staticmethod
+        def stream(input_state, **_kwargs):
+            yield "messages", (
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[{"name": "rag_summarize", "id": "rag-1"}],
+                ),
+                {"langgraph_step": 1},
+            )
+            yield "messages", (
+                ToolMessage(content="第一条证据", tool_call_id="rag-1"),
+                {"langgraph_step": 1},
+            )
+            yield "values", {
+                **input_state,
+                "rag_evidence": [{"rank": 1, "evidence_id": "first.md#1"}],
+                "tool_call_count": 1,
+            }
+            yield "messages", (
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[{"name": "rag_summarize", "id": "rag-2"}],
+                ),
+                {"langgraph_step": 2},
+            )
+            yield "messages", (
+                ToolMessage(content="第二条证据", tool_call_id="rag-2"),
+                {"langgraph_step": 2},
+            )
+            yield "values", {
+                **input_state,
+                "rag_evidence": [
+                    {"rank": 1, "evidence_id": "first.md#1"},
+                    {"rank": 1, "evidence_id": "second.md#1"},
+                ],
+                "tool_call_count": 2,
+            }
+
+    executor = object.__new__(ReactAgent)
+    executor.agent = TwiceRagAgent()
+    executor.max_steps = 5
+    executor.max_tool_calls = 4
+    result = build_chat_routing_graph(classifier=PersonalizedClassifier()).invoke(
+        build_initial_chat_state(
+            messages=[{"role": "user", "content": "查两条深蹲资料"}],
+            session_summary="",
+        ),
+        context=ChatRuntimeContext(
+            user_id=5,
+            city="",
+            session_id="session-5",
+            trace=AgentTrace(),
+            dependencies=SimpleNamespace(personalized_agent_executor=executor),
+        ),
+    )
+
+    assert result["events"] == [
+        {"type": "tool", "name": "检索知识库"},
+        {"type": "evidence", "items": [{"rank": 1, "evidence_id": "first.md#1"}]},
+        {"type": "tool", "name": "检索知识库"},
+        {"type": "evidence", "items": [{"rank": 1, "evidence_id": "second.md#1"}]},
+    ]
+    assert result["rag_evidence"] == [
+        {"rank": 1, "evidence_id": "first.md#1"},
+        {"rank": 1, "evidence_id": "second.md#1"},
+    ]
+
+
+def test_monitor_tool_uses_personalized_executor_limit_when_dependencies_only_hold_executor():
+    """中间件应从请求执行器读取非默认工具上限，而非退回到六次。"""
+    executor = SimpleNamespace(max_tool_calls=2)
+    state = {"tool_call_count": 0}
+    runtime = ToolRuntime(
+        state=state,
+        context=ChatRuntimeContext(
+            user_id=5,
+            city="",
+            session_id="session-5",
+            trace=AgentTrace(),
+            dependencies=SimpleNamespace(personalized_agent_executor=executor),
+        ),
+        config={},
+        stream_writer=lambda _event: None,
+        tool_call_id="budget-call",
+        store=None,
+    )
+    calls = []
+
+    def request(call_id):
+        return ToolCallRequest(
+            tool_call={"name": "get_user_id", "args": {}, "id": call_id},
+            tool=None,
+            state=state,
+            runtime=runtime,
+        )
+
+    def handler(tool_request):
+        calls.append(tool_request.tool_call["id"])
+        return ToolMessage(content="ok", tool_call_id=tool_request.tool_call["id"])
+
+    first = monitor_tool.wrap_tool_call(request("call-1"), handler)
+    second = monitor_tool.wrap_tool_call(request("call-2"), handler)
+    rejected = monitor_tool.wrap_tool_call(request("call-3"), handler)
+
+    assert first.update["tool_call_count"] == 1
+    assert second.update["tool_call_count"] == 2
+    assert rejected.update["tool_call_count"] == 3
+    assert calls == ["call-1", "call-2"]
