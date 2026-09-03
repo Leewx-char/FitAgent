@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Literal, Protocol, TypeAlias, TypedDict
 
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
@@ -201,7 +202,11 @@ def _personalized_agent_node(
 ) -> dict[str, JsonValue]:
     """复用内层 Agent 的工具循环，并保留本次运行生成的短期产物。"""
     executor = runtime.context.dependencies.personalized_agent_executor
-    return executor.stream_personalized_events(state, runtime.context)
+    return executor.stream_personalized_events(
+        state,
+        runtime.context,
+        stream_writer=get_stream_writer(),
+    )
 
 
 def _direct_rag_node(
@@ -212,15 +217,17 @@ def _direct_rag_node(
     query_index, query = _latest_user_turn(messages)
     history = [dict(message) for message in messages[:query_index][-6:]]
     executor = getattr(runtime.context.dependencies, "direct_rag_executor")
-    events = list(
-        executor.stream(
-            query=query,
-            history=history,
-            trace=runtime.context.trace,
-        )
-    )
-    if not _is_json_value(events):
-        raise ValueError("直接检索事件包含不可序列化值")
+    events = []
+    writer = get_stream_writer()
+    for event in executor.stream(
+        query=query,
+        history=history,
+        trace=runtime.context.trace,
+    ):
+        if not _is_json_value(event):
+            raise ValueError("直接检索事件包含不可序列化值")
+        writer(event)
+        events.append(event)
     evidence = next(
         (event["items"] for event in events if event.get("type") == "evidence"),
         [],
@@ -245,9 +252,7 @@ def build_chat_routing_graph(
         partial(_classify_intent_node, classifier=classifier),
     )
     graph.add_node("direct_rag", direct_rag_node or _direct_rag_node)
-    graph.add_node(
-        "personalized_agent", personalized_agent_node or _personalized_agent_node
-    )
+    graph.add_node("personalized_agent", personalized_agent_node or _personalized_agent_node)
     graph.add_edge(START, "classify_intent")
     graph.add_conditional_edges(
         "classify_intent",

@@ -65,7 +65,7 @@ def test_execute_stream_passes_request_context_to_routing_graph():
         )
         == []
     )
-    assert captured["stream_mode"] == "values"
+    assert captured["stream_mode"] == ["custom", "values"]
     assert captured["context"].user_id == 7
     assert captured["context"].session_id == "session-7"
     assert captured["context"].dependencies.max_tool_calls == 4

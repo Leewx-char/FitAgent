@@ -1,8 +1,14 @@
+import asyncio
 import json
+from contextlib import contextmanager
+from types import SimpleNamespace
 
+from app.api.routers import chat as chat_router
 from app.core.database import SessionLocal
 from app.models import SessionSummary
+from app.services.chat_routing_graph import IntentDecision, build_chat_routing_graph
 from app.services.memory_service import RECENT_MESSAGE_LIMIT
+from app.services.react_agent import ReactAgent
 
 
 class TestChat:
@@ -36,6 +42,78 @@ class TestChat:
             == response.headers["X-Session-Id"]
         )
         assert "city" not in agent_mock.execute_stream.call_args.kwargs
+
+    def test_sse_preserves_tool_event_before_graph_execution_error(self, monkeypatch):
+        """图执行后续失败时，已流出的工具事件必须先于 error 和 DONE。"""
+
+        class DirectClassifier:
+            """固定选择直接 RAG 分支以覆盖真实图执行。"""
+
+            @staticmethod
+            def classify(_prompt):
+                """返回固定的直接检索路由。"""
+                return IntentDecision(route="direct_rag")
+
+        class FailingDirectExecutor:
+            """先产生工具事件，再模拟检索阶段失败。"""
+
+            @staticmethod
+            def stream(**_kwargs):
+                """生成可消费的首个事件后抛出异常。"""
+                yield {"type": "tool", "name": "检索知识库"}
+                raise RuntimeError("retrieval failed")
+
+        class FakeDb:
+            """提供 SSE 收尾所需的最小数据库接口。"""
+
+            @staticmethod
+            def add(_message):
+                """忽略测试中的待保存消息。"""
+
+            @staticmethod
+            def query(_model):
+                """返回不会命中会话的查询对象。"""
+                return SimpleNamespace(filter=lambda *_args: SimpleNamespace(first=lambda: None))
+
+            @staticmethod
+            def commit():
+                """避免测试访问真实数据库。"""
+
+        @contextmanager
+        def fake_trace_db():
+            """提供轨迹保存使用的临时上下文。"""
+            yield object()
+
+        agent = object.__new__(ReactAgent)
+        agent.direct_rag_executor = FailingDirectExecutor()
+        agent.agent = None
+        agent.max_steps = 8
+        agent.max_tool_calls = 4
+        agent.routing_graph = build_chat_routing_graph(classifier=DirectClassifier())
+        monkeypatch.setattr(chat_router, "get_db_session", fake_trace_db)
+        monkeypatch.setattr(
+            chat_router.AgentTraceRepository, "save", lambda *_args, **_kwargs: None
+        )
+
+        async def collect_sse():
+            """收集真实 sse_generator 的全部响应块。"""
+            return [
+                chunk
+                async for chunk in chat_router.sse_generator(
+                    agent,
+                    [{"role": "user", "content": "深蹲怎么做？"}],
+                    FakeDb(),
+                    "session-7",
+                    "深蹲怎么做？",
+                    SimpleNamespace(id=7),
+                )
+            ]
+
+        chunks = asyncio.run(collect_sse())
+
+        assert json.loads(chunks[0][6:]) == {"type": "tool", "name": "检索知识库"}
+        assert json.loads(chunks[1][6:])["type"] == "error"
+        assert chunks[2] == "data: [DONE]\n\n"
 
     def test_chat_forwards_rag_evidence_cards(self, auth_client, agent_mock):
         """RAG 证据事件必须穿过聊天路由，前端才能渲染来源卡片。"""

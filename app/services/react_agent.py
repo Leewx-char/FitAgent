@@ -161,9 +161,12 @@ class ReactAgent:
         )
 
     def stream_personalized_events(
-        self, state: ChatGraphState, context: ChatRuntimeContext
+        self,
+        state: ChatGraphState,
+        context: ChatRuntimeContext,
+        stream_writer: Callable[[dict], None] | None = None,
     ) -> dict:
-        """将内层 Agent 的流事件转换为外层图可保存的短期状态。"""
+        """通过可选写入器实时输出内层事件，并保留图状态所需产物。"""
         if context.trace is not None:
             context.trace.mode = "agent"
         latest_user_index = max(
@@ -203,12 +206,13 @@ class ReactAgent:
                         if tool_id and tool_name and tool_id not in seen_tool_ids:
                             seen_tool_ids.add(tool_id)
                             last_tool_step = None
-                            events.append(
-                                {
-                                    "type": "tool",
-                                    "name": TOOL_DISPLAY.get(tool_name, tool_name),
-                                }
-                            )
+                            event = {
+                                "type": "tool",
+                                "name": TOOL_DISPLAY.get(tool_name, tool_name),
+                            }
+                            if stream_writer:
+                                stream_writer(event)
+                            events.append(event)
                     if message.content and (
                         not seen_tool_ids
                         or (
@@ -216,7 +220,10 @@ class ReactAgent:
                             and metadata.get("langgraph_step", 0) > last_tool_step
                         )
                     ):
-                        events.append({"type": "text", "content": message.content})
+                        event = {"type": "text", "content": message.content}
+                        if stream_writer:
+                            stream_writer(event)
+                        events.append(event)
                 elif isinstance(message, ToolMessage):
                     last_tool_step = metadata.get("langgraph_step", 0)
                     evidence_pending = True
@@ -225,7 +232,10 @@ class ReactAgent:
                 evidence = latest_state.get("rag_evidence", [])
                 new_evidence = evidence[emitted_evidence_count:]
                 if evidence_pending and new_evidence:
-                    events.append({"type": "evidence", "items": new_evidence})
+                    event = {"type": "evidence", "items": new_evidence}
+                    if stream_writer:
+                        stream_writer(event)
+                    events.append(event)
                 emitted_evidence_count = len(evidence)
                 evidence_pending = False
         return {
@@ -270,16 +280,13 @@ class ReactAgent:
                 max_tool_calls=self.max_tool_calls,
             ),
         )
-        emitted_event_count = 0
-        for state in self.routing_graph.stream(
+        for stream_mode, event in self.routing_graph.stream(
             initial_state,
             context=runtime_context,
-            stream_mode="values",
+            stream_mode=["custom", "values"],
         ):
-            events = state["events"]
-            for event in events[emitted_event_count:]:
+            if stream_mode == "custom":
                 yield json.dumps(event, ensure_ascii=False) + "\n"
-            emitted_event_count = len(events)
 
 
 if __name__ == "__main__":

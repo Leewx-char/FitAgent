@@ -247,6 +247,71 @@ def test_execute_stream_no_longer_uses_keyword_router():
     assert not hasattr(ReactAgent, "_should_use_direct_rag")
 
 
+def test_direct_rag_custom_stream_emits_tool_before_executor_error():
+    """直接 RAG 抛错前已产生的工具事件必须立即到达公开流。"""
+
+    class FailingDirectExecutor:
+        """先产生工具事件，再模拟后续检索失败。"""
+
+        @staticmethod
+        def stream(**_kwargs):
+            """验证图不会因后续异常吞掉首个事件。"""
+            yield {"type": "tool", "name": "检索知识库"}
+            raise RuntimeError("direct executor failed")
+
+    agent = _public_agent(
+        FakeIntentClassifier(IntentDecision(route="direct_rag")),
+        direct_executor=FailingDirectExecutor(),
+    )
+    stream = agent.execute_stream(
+        [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
+        user_id=7,
+        session_id="stable-session",
+    )
+
+    assert json.loads(next(stream)) == {"type": "tool", "name": "检索知识库"}
+    with pytest.raises(RuntimeError, match="direct executor failed"):
+        next(stream)
+
+
+def test_personalized_custom_stream_emits_tool_before_executor_error():
+    """个性化 Agent 抛错前已产生的工具事件必须立即到达公开流。"""
+
+    class FailingInnerAgent:
+        """先产生工具调用，再模拟后续模型执行失败。"""
+
+        @staticmethod
+        def stream(_input_state, **_kwargs):
+            """验证内层 Agent 事件可穿过图的 custom 流。"""
+            from langchain_core.messages import AIMessageChunk
+
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[{"id": "call-1", "name": "get_user_profile"}],
+                    ),
+                    {"langgraph_step": 1},
+                ),
+            )
+            raise RuntimeError("personalized executor failed")
+
+    agent = _public_agent(
+        FakeIntentClassifier(IntentDecision(route="personalized_agent")),
+        inner_agent=FailingInnerAgent(),
+    )
+    stream = agent.execute_stream(
+        [{"role": "user", "content": "结合我的目标安排训练"}],
+        user_id=7,
+        session_id="stable-session",
+    )
+
+    assert json.loads(next(stream)) == {"type": "tool", "name": "获取用户画像"}
+    with pytest.raises(RuntimeError, match="personalized executor failed"):
+        next(stream)
+
+
 def test_direct_rag_graph_emits_tool_evidence_then_text():
     """验证图分支按工具、证据、文本顺序保存兼容事件。"""
     captured = {}
