@@ -6,7 +6,7 @@
 
 from collections.abc import Sequence
 
-from alembic import context, op
+from alembic import op
 import sqlalchemy as sa
 
 
@@ -18,17 +18,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     """扩展运动幂等键，并创建会话记忆、训练计划和反馈结构。"""
-    if context.is_offline_mode():
-        column_names = set()
-        index_names = set()
-    else:
-        bind = op.get_bind()
-        inspector = sa.inspect(bind)
-        column_names = {column["name"] for column in inspector.get_columns("fitness_data")}
-        index_names = {index["name"] for index in inspector.get_indexes("fitness_data")}
-
-    if "external_id" not in column_names:
-        op.add_column("fitness_data", sa.Column("external_id", sa.String(length=128), nullable=True))
+    op.add_column("fitness_data", sa.Column("external_id", sa.String(length=128), nullable=True))
     # 历史记录早于稳定的 Coros 活动标识；保留其原有按日幂等行为，
     # 同时让新活动记录使用真正的活动级标识。
     op.execute(
@@ -36,17 +26,13 @@ def upgrade() -> None:
         "WHERE external_id IS NULL"
     )
     op.alter_column("fitness_data", "external_id", existing_type=sa.String(length=128), nullable=False)
-    # 新索引先建立，既保障新活动幂等，也继续为 fitness_data.user_id 的外键提供
-    # 左前缀索引；否则 MySQL 会拒绝删除旧复合唯一索引。
-    if "ix_fitness_user_type_external" not in index_names:
-        op.create_index(
-            "ix_fitness_user_type_external",
-            "fitness_data",
-            ["user_id", "data_type", "external_id"],
-            unique=True,
-        )
-    if "ix_fitness_user_date_type" in index_names:
-        op.drop_index("ix_fitness_user_date_type", table_name="fitness_data")
+    op.drop_index("ix_fitness_user_date_type", table_name="fitness_data")
+    op.create_index(
+        "ix_fitness_user_type_external",
+        "fitness_data",
+        ["user_id", "data_type", "external_id"],
+        unique=True,
+    )
 
     op.create_table(
         "session_summaries",
