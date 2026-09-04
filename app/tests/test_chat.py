@@ -9,9 +9,76 @@ from app.models import SessionSummary
 from app.services.chat_routing_graph import IntentDecision, build_chat_routing_graph
 from app.services.memory_service import RECENT_MESSAGE_LIMIT
 from app.services.react_agent import ReactAgent
+from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 
 
 class TestChat:
+    def test_sse_saves_collected_question_answer_and_status(self, monkeypatch):
+        """成功流结束后应将问题、回答和 Collector 交给仓储。"""
+
+        class FakeAgent:
+            """提供带回调配置断言的最小流式 Agent。"""
+
+            captured_config = None
+
+            @classmethod
+            def execute_stream(cls, _messages, **kwargs):
+                """记录运行配置并输出固定文本事件。"""
+                cls.captured_config = kwargs["config"]
+                return iter(['{"type": "text", "content": "膝盖跟随脚尖。"}'])
+
+        class FakeDb:
+            """提供 SSE 收尾所需的最小数据库接口。"""
+
+            @staticmethod
+            def add(_message):
+                """忽略测试中的待保存消息。"""
+
+            @staticmethod
+            def query(_model):
+                """返回不会命中会话的查询对象。"""
+                return SimpleNamespace(filter=lambda *_args: SimpleNamespace(first=lambda: None))
+
+            @staticmethod
+            def commit():
+                """避免测试访问真实数据库。"""
+
+        @contextmanager
+        def fake_trace_db():
+            """提供仓储保存所需的独立会话。"""
+            yield object()
+
+        saved = {}
+        monkeypatch.setattr(chat_router, "get_db_session", fake_trace_db)
+        monkeypatch.setattr(
+            chat_router.AgentTraceRepository,
+            "save",
+            lambda _db, collector, **kwargs: saved.update(collector=collector, **kwargs),
+        )
+
+        async def collect_sse():
+            """收集真实 sse_generator 的全部响应块。"""
+            return [
+                chunk
+                async for chunk in chat_router.sse_generator(
+                    FakeAgent(),
+                    [{"role": "user", "content": "深蹲怎么做？"}],
+                    FakeDb(),
+                    "session-7",
+                    "深蹲怎么做？",
+                    SimpleNamespace(id=7),
+                )
+            ]
+
+        chunks = asyncio.run(collect_sse())
+
+        assert chunks[-1] == "data: [DONE]\n\n"
+        assert saved["user_question"] == "深蹲怎么做？"
+        assert saved["assistant_answer"] == "膝盖跟随脚尖。"
+        assert saved["status"] == "succeeded"
+        assert isinstance(saved["collector"], RunCollectorCallbackHandler)
+        assert FakeAgent.captured_config == {"callbacks": [saved["collector"]]}
+
     def test_chat_creates_session(self, auth_client, agent_mock):
         """无 session_id → 自动创建会话，响应头返回 X-Session-Id"""
         resp = auth_client.post("/api/chat", json={"message": "你好"})
@@ -50,8 +117,9 @@ class TestChat:
             """固定选择直接 RAG 分支以覆盖真实图执行。"""
 
             @staticmethod
-            def classify(_prompt):
+            def classify(_prompt, config=None):
                 """返回固定的直接检索路由。"""
+                del config
                 return IntentDecision(route="direct_rag")
 
         class FailingDirectExecutor:
@@ -91,8 +159,11 @@ class TestChat:
         agent.max_tool_calls = 4
         agent.routing_graph = build_chat_routing_graph(classifier=DirectClassifier())
         monkeypatch.setattr(chat_router, "get_db_session", fake_trace_db)
+        saved = {}
         monkeypatch.setattr(
-            chat_router.AgentTraceRepository, "save", lambda *_args, **_kwargs: None
+            chat_router.AgentTraceRepository,
+            "save",
+            lambda _db, collector, **kwargs: saved.update(collector=collector, **kwargs),
         )
 
         async def collect_sse():
@@ -114,6 +185,10 @@ class TestChat:
         assert json.loads(chunks[0][6:]) == {"type": "tool", "name": "检索知识库"}
         assert json.loads(chunks[1][6:])["type"] == "error"
         assert chunks[2] == "data: [DONE]\n\n"
+        assert saved["status"] == "failed"
+        assert saved["user_question"] == "深蹲怎么做？"
+        assert saved["assistant_answer"] == ""
+        assert isinstance(saved["collector"], RunCollectorCallbackHandler)
 
     def test_chat_forwards_rag_evidence_cards(self, auth_client, agent_mock):
         """RAG 证据事件必须穿过聊天路由，前端才能渲染来源卡片。"""

@@ -17,13 +17,14 @@ from sqlalchemy.orm import Session as DBSession
 from app.schemas import ChatRequest
 from app.core.deps import get_db, get_agent
 from app.core.auth import get_current_user, decode_access_token
+from app.core.request_context import request_id_var
 from app.models import Session as SessionModel, Message, User
 from app.services.react_agent import ReactAgent
-from app.services.agent_trace import AgentTrace
 from app.services.memory_service import MemoryService, RECENT_MESSAGE_LIMIT
 from app.repositories.agent_trace_repository import AgentTraceRepository
 from app.core.database import get_db_session
 from app.utils.logger_handler import logger
+from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 import uuid
 import re
 
@@ -86,14 +87,14 @@ async def sse_generator(
 
     # 服务层从图状态提取会话事实，HTTP 层仅传递身份与稳定会话标识。
     user_id = current_user.id
-    trace = AgentTrace()
+    collector = RunCollectorCallbackHandler()
     gen = iter(
         agent.execute_stream(
             messages,
             user_id=user_id,
             session_id=session_id,
             session_summary=session_summary,
-            trace=trace,
+            config={"callbacks": [collector]},
         )
     )
     stream_failed = False
@@ -150,15 +151,21 @@ async def sse_generator(
         else:
             error_msg = "服务暂时不可用，请稍后重试"
         yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
-    trace.finish("failed" if stream_failed else "succeeded")
     try:
         with get_db_session() as trace_db:
             AgentTraceRepository.save(
-                trace_db, trace, session_id=session_id, user_id=current_user.id
+                trace_db,
+                collector,
+                request_id=request_id_var.get(),
+                session_id=session_id,
+                user_id=current_user.id,
+                user_question=user_message,
+                assistant_answer=full_response.strip(),
+                status="failed" if stream_failed else "succeeded",
             )
     except Exception:
         # 轨迹表尚未迁移或单独写入失败时，不得影响用户已经得到的流式回答。
-        logger.exception("Agent 执行轨迹写入失败：request_id=%s", trace.request_id)
+        logger.exception("Agent 执行轨迹写入失败：request_id=%s", request_id_var.get())
     # 流式结束后：存 assistant 消息到数据库
     db.add(
         Message(
