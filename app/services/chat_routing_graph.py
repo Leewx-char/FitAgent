@@ -11,6 +11,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from app.services.session_facts import extract_session_facts
@@ -52,20 +53,19 @@ class ChatGraphState(TypedDict):
 
 @dataclass(frozen=True)
 class ChatRuntimeContext:
-    """保存单次请求注入的身份、追踪与执行依赖。"""
+    """保存单次请求注入的身份信息与执行依赖。"""
 
     user_id: int
     city: str
     session_id: str
-    trace: object
     dependencies: object
 
 
 class IntentClassifier(Protocol):
     """定义意图分类器在路由节点使用的最小接口。"""
 
-    def classify(self, prompt: str) -> IntentDecision:
-        """根据受限提示词返回经过结构化约束的路由。"""
+    def classify(self, prompt: str, config: RunnableConfig | None = None) -> IntentDecision:
+        """根据受限提示词和运行配置返回受约束路由。"""
         ...
 
 
@@ -76,21 +76,23 @@ class StructuredOutputIntentClassifier:
         """保存延迟包装为结构化输出模型的聊天模型实例。"""
         self._model = model
 
-    def classify(self, prompt: str) -> IntentDecision:
-        """调用模型结构化输出，并校验为固定路由枚举。"""
+    def classify(self, prompt: str, config: RunnableConfig | None = None) -> IntentDecision:
+        """调用结构化模型并让运行配置贯穿分类步骤。"""
         structured_model = self._model.with_structured_output(IntentDecision)
-        return IntentDecision.model_validate(structured_model.invoke(prompt))
+        return IntentDecision.model_validate(structured_model.invoke(prompt, config=config))
 
 
-def classify_intent(state: ChatGraphState, classifier: IntentClassifier) -> Route:
-    """从最后一条用户消息分类，异常时保守回退个性化分支。"""
+def classify_intent(
+    state: ChatGraphState, classifier: IntentClassifier, config: RunnableConfig | None = None
+) -> Route:
+    """从最后用户消息分类，并把异常保守回退到个性化分支。"""
     try:
         if not is_json_value(state):
             raise ValueError("图状态包含不可序列化值")
         message = _latest_user_message(state["messages"])
         facts = _minimal_session_facts(state["session_facts"])
         prompt = _build_classifier_prompt(message, facts)
-        return IntentDecision.model_validate(classifier.classify(prompt)).route
+        return IntentDecision.model_validate(classifier.classify(prompt, config=config)).route
     except Exception:
         return "personalized_agent"
 
@@ -181,12 +183,13 @@ def route_after_classification(state: ChatGraphState) -> Route:
 def _classify_intent_node(
     state: ChatGraphState,
     runtime: Runtime[ChatRuntimeContext],
+    config: RunnableConfig,
     *,
     classifier: IntentClassifier,
 ) -> dict[str, Route]:
     """调用分类契约并仅将路由结果写回图状态。"""
     del runtime
-    return {"route": classify_intent(state, classifier)}
+    return {"route": classify_intent(state, classifier, config=config)}
 
 
 def _empty_execution_node(
@@ -198,7 +201,7 @@ def _empty_execution_node(
 
 
 def _personalized_agent_node(
-    state: ChatGraphState, runtime: Runtime[ChatRuntimeContext]
+    state: ChatGraphState, runtime: Runtime[ChatRuntimeContext], config: RunnableConfig
 ) -> dict[str, JsonValue]:
     """复用内层 Agent 的工具循环，并保留本次运行生成的短期产物。"""
     executor = runtime.context.dependencies.personalized_agent_executor
@@ -206,11 +209,12 @@ def _personalized_agent_node(
         state,
         runtime.context,
         stream_writer=get_stream_writer(),
+        config=config,
     )
 
 
 def _direct_rag_node(
-    state: ChatGraphState, runtime: Runtime[ChatRuntimeContext]
+    state: ChatGraphState, runtime: Runtime[ChatRuntimeContext], config: RunnableConfig
 ) -> dict[str, JsonValue]:
     """运行请求上下文中的直接检索执行器并写回短期产物。"""
     messages = state["messages"]
@@ -222,7 +226,7 @@ def _direct_rag_node(
     for event in executor.stream(
         query=query,
         history=history,
-        trace=runtime.context.trace,
+        config=config,
     ):
         if not is_json_value(event):
             raise ValueError("直接检索事件包含不可序列化值")

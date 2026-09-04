@@ -1,10 +1,11 @@
 import json
-import time
 from operator import add, or_
 from types import SimpleNamespace
 from typing import Annotated, Callable, Iterable, Iterator
 from langchain.agents import AgentState, create_agent
 from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.runnables import RunnableConfig, RunnableLambda
+from langchain_core.runnables.config import merge_configs
 
 from app.services.factory import get_chat_model
 from app.utils.prompt_loader import load_system_prompts
@@ -22,7 +23,6 @@ from app.services.agent_tools import (
     get_fitness_summary,
 )
 from app.services.middleware import monitor_tool, log_before_model, report_prompt_switch
-from app.services.agent_trace import AgentTrace
 from app.services.chat_routing_graph import (
     ChatGraphState,
     ChatRuntimeContext,
@@ -79,6 +79,15 @@ class DirectRagExecutor:
         self._model = model
         self._rag_service_factory = rag_service_factory or _get_rag_service
         self._evidence_builder = evidence_builder
+        self._rag_context_runnable = RunnableLambda(self._build_rag_context).with_config(
+            run_name="rag_summarize", tags=["agent_tool"]
+        )
+
+    def _build_rag_context(self, payload: dict[str, object]) -> object:
+        """基于查询和历史构建直接检索所需的证据上下文。"""
+        return self._rag_service_factory().build_context(
+            str(payload["query"]), history=payload["history"]
+        )
 
     @staticmethod
     def _content_to_text(content: object) -> str:
@@ -94,32 +103,13 @@ class DirectRagExecutor:
         *,
         query: str,
         history: list[dict],
-        trace: AgentTrace | None = None,
+        config: RunnableConfig | None = None,
     ) -> Iterator[dict]:
-        """按工具、证据、文本顺序生成兼容既有 SSE 的事件对象。"""
-        if trace:
-            trace.mode = "direct_rag"
+        """执行直接检索并让调用配置贯穿检索与模型流。"""
         yield {"type": "tool", "name": TOOL_DISPLAY["rag_summarize"]}
-        started_at = time.perf_counter()
-        try:
-            rag_context = self._rag_service_factory().build_context(query, history=history)
-        except Exception:
-            if trace:
-                trace.record_tool(
-                    tool_name="rag_summarize",
-                    argument_shape={"query": "str", "source": "str"},
-                    status="error",
-                    elapsed_ms=round((time.perf_counter() - started_at) * 1000),
-                    detail="internal_error",
-                )
-            raise
-        if trace:
-            trace.record_tool(
-                tool_name="rag_summarize",
-                argument_shape={"query": "str", "source": "str"},
-                status="success",
-                elapsed_ms=round((time.perf_counter() - started_at) * 1000),
-            )
+        rag_context = self._rag_context_runnable.invoke(
+            {"query": query, "history": history}, config=config
+        )
         cards = self._evidence_builder(rag_context.result)
         if cards:
             yield {"type": "evidence", "items": cards}
@@ -130,7 +120,7 @@ class DirectRagExecutor:
             f"用户问题：{query}\n\n知识库证据：\n{rag_context.content}"
         )
         for chunk in self._model.stream(
-            [("system", load_system_prompts()), ("human", direct_prompt)]
+            [("system", load_system_prompts()), ("human", direct_prompt)], config=config
         ):
             content = self._content_to_text(getattr(chunk, "content", chunk))
             if content:
@@ -174,10 +164,9 @@ class ReactAgent:
         state: ChatGraphState,
         context: ChatRuntimeContext,
         stream_writer: Callable[[dict], None] | None = None,
+        config: RunnableConfig | None = None,
     ) -> dict:
-        """通过可选写入器实时输出内层事件，并保留图状态所需产物。"""
-        if context.trace is not None:
-            context.trace.mode = "agent"
+        """转发内层事件，并让外层运行配置贯穿 Agent 调用。"""
         latest_user_index = max(
             index for index, message in enumerate(state["messages"]) if message["role"] == "user"
         )
@@ -213,7 +202,7 @@ class ReactAgent:
             input_state,
             stream_mode=["messages", "values"],
             context=context,
-            config={"recursion_limit": self.max_steps},
+            config=merge_configs(config or {}, {"recursion_limit": self.max_steps}),
         ):
             if stream_mode == "messages":
                 message, metadata = payload
@@ -279,7 +268,7 @@ class ReactAgent:
         city: str = "",
         session_id: str = "",
         session_summary: str = "",
-        trace: AgentTrace | None = None,
+        config: RunnableConfig | None = None,
     ):
         """构造请求级图上下文，并编码兼容既有 SSE 的执行事件。"""
         normalized_messages = self._normalize_messages(messages)
@@ -288,7 +277,6 @@ class ReactAgent:
             user_id=user_id or 0,
             city=city or str(initial_state["session_facts"].get("city", "")),
             session_id=session_id,
-            trace=trace,
             dependencies=SimpleNamespace(
                 direct_rag_executor=self.direct_rag_executor,
                 personalized_agent_executor=self,
@@ -299,6 +287,7 @@ class ReactAgent:
             initial_state,
             context=runtime_context,
             stream_mode=["custom", "values"],
+            config=config,
         ):
             if stream_mode == "custom":
                 yield json.dumps(event, ensure_ascii=False) + "\n"

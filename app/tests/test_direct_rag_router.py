@@ -4,9 +4,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 
 from app.services import react_agent
-from app.services.agent_trace import AgentTrace
 from app.services.chat_routing_graph import (
     ChatRuntimeContext,
     IntentDecision,
@@ -22,7 +22,8 @@ class FakeIntentClassifier:
     def __init__(self, result):
         self.result = result
 
-    def classify(self, _prompt):
+    def classify(self, _prompt, config=None):
+        del config
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
@@ -33,8 +34,9 @@ def test_structured_output_classifier_adapts_model_result():
 
     class FakeStructuredModel:
         @staticmethod
-        def invoke(prompt):
+        def invoke(prompt, config=None):
             captured["prompt"] = prompt
+            captured["config"] = config
             return {"route": "direct_rag"}
 
     class FakeModel:
@@ -43,10 +45,11 @@ def test_structured_output_classifier_adapts_model_result():
             captured["schema"] = schema
             return FakeStructuredModel()
 
-    decision = StructuredOutputIntentClassifier(FakeModel()).classify("分类问题")
+    config = {"callbacks": [RunCollectorCallbackHandler()]}
+    decision = StructuredOutputIntentClassifier(FakeModel()).classify("分类问题", config=config)
 
     assert decision.route == "direct_rag"
-    assert captured == {"schema": IntentDecision, "prompt": "分类问题"}
+    assert captured == {"schema": IntentDecision, "prompt": "分类问题", "config": config}
 
 
 def test_classifier_routes_generic_knowledge_question_to_direct_rag():
@@ -247,6 +250,29 @@ def test_execute_stream_no_longer_uses_keyword_router():
     assert not hasattr(ReactAgent, "_should_use_direct_rag")
 
 
+def test_execute_stream_passes_callback_config_to_routing_graph():
+    """公开入口应将调用方配置原样传给 LangGraph 路由运行。"""
+    captured = {}
+
+    class FakeRoutingGraph:
+        """捕获公开入口交给路由图的运行参数。"""
+
+        @staticmethod
+        def stream(_state, **kwargs):
+            """记录配置后返回空事件流。"""
+            captured.update(kwargs)
+            return []
+
+    agent = object.__new__(ReactAgent)
+    agent.direct_rag_executor = object()
+    agent.max_tool_calls = 4
+    agent.routing_graph = FakeRoutingGraph()
+    config = {"callbacks": [RunCollectorCallbackHandler()]}
+
+    assert list(agent.execute_stream([{"role": "user", "content": "深蹲怎么做？"}], config=config)) == []
+    assert captured["config"] is config
+
+
 def test_direct_rag_custom_stream_emits_tool_before_executor_error():
     """直接 RAG 抛错前已产生的工具事件必须立即到达公开流。"""
 
@@ -330,8 +356,9 @@ def test_direct_rag_graph_emits_tool_evidence_then_text():
         """提供无需真实模型的固定文本流。"""
 
         @staticmethod
-        def stream(_messages):
+        def stream(_messages, config=None):
             """返回一条带证据标记的固定模型输出。"""
+            del config
             return [SimpleNamespace(content="膝盖跟随脚尖。[证据:1]")]
 
     executor = react_agent.DirectRagExecutor(
@@ -355,7 +382,6 @@ def test_direct_rag_graph_emits_tool_evidence_then_text():
             user_id=1,
             city="",
             session_id="session-1",
-            trace=None,
             dependencies=SimpleNamespace(direct_rag_executor=executor),
         ),
     )
@@ -370,8 +396,8 @@ def test_direct_rag_graph_emits_tool_evidence_then_text():
     ]
 
 
-def test_direct_rag_graph_marks_trace_mode_direct_rag():
-    """验证图分支将请求轨迹标记为直接检索模式。"""
+def test_direct_rag_uses_collector_for_named_retrieval_runnable():
+    """直接检索步骤应作为 agent_tool 运行被 Collector 捕获。"""
 
     class FakeRagService:
         """提供无需外部服务的固定检索上下文。"""
@@ -385,34 +411,22 @@ def test_direct_rag_graph_marks_trace_mode_direct_rag():
         """提供无需真实模型的固定文本流。"""
 
         @staticmethod
-        def stream(_messages):
+        def stream(_messages, config=None):
             """返回固定回答分块。"""
             return [SimpleNamespace(content="暂时没有可靠证据。")]
 
-    trace = AgentTrace(request_id="request-1")
+    collector = RunCollectorCallbackHandler()
     executor = react_agent.DirectRagExecutor(
         model=FakeModel(),
         rag_service_factory=FakeRagService,
     )
-    graph = build_chat_routing_graph(
-        classifier=FakeIntentClassifier(IntentDecision(route="direct_rag"))
-    )
+    list(executor.stream(query="解释一下深蹲。", history=[], config={"callbacks": [collector]}))
 
-    graph.invoke(
-        build_initial_chat_state(
-            messages=[{"role": "user", "content": "解释一下深蹲。"}],
-            session_summary="",
-        ),
-        context=ChatRuntimeContext(
-            user_id=1,
-            city="",
-            session_id="session-1",
-            trace=trace,
-            dependencies=SimpleNamespace(direct_rag_executor=executor),
-        ),
+    assert any(
+        run.name == "rag_summarize" and "agent_tool" in run.tags
+        for root in collector.traced_runs
+        for run in [root, *root.child_runs]
     )
-
-    assert trace.mode == "direct_rag"
 
 
 def test_direct_rag_graph_rejects_non_json_executor_events():
@@ -440,7 +454,6 @@ def test_direct_rag_graph_rejects_non_json_executor_events():
                 user_id=1,
                 city="",
                 session_id="session-1",
-                trace=None,
                 dependencies=SimpleNamespace(direct_rag_executor=FakeDirectRagExecutor()),
             ),
         )

@@ -8,10 +8,10 @@ from threading import Barrier
 import pytest
 from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 from langgraph.types import Command
 
 from app.services import agent_tools, react_agent
-from app.services.agent_trace import AgentTrace
 from app.services.middleware import monitor_tool
 from langchain.tools.tool_node import ToolCallRequest
 from app.services.chat_routing_graph import (
@@ -26,8 +26,9 @@ from app.services.react_agent import ReactAgent
 class PersonalizedClassifier:
     """固定选择个性化分支。"""
 
-    def classify(self, _prompt):
+    def classify(self, _prompt, config=None):
         """返回受约束的个性化路由。"""
+        del config
         return IntentDecision(route="personalized_agent")
 
 
@@ -36,7 +37,6 @@ def _tool_runtime(*, user_id, city, history, call_id):
         user_id=user_id,
         city=city,
         session_id=f"session-{user_id}",
-        trace=AgentTrace(),
         dependencies=SimpleNamespace(max_tool_calls=4),
     )
     return ToolRuntime(
@@ -77,15 +77,14 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
     personalized_executor.agent = FakeInnerAgent()
     personalized_executor.max_steps = 9
     personalized_executor.max_tool_calls = 4
-    trace = AgentTrace(mode="direct_rag")
     runtime_context = ChatRuntimeContext(
         user_id=17,
         city="深圳",
         session_id="session-17",
-        trace=trace,
         dependencies=SimpleNamespace(personalized_agent_executor=personalized_executor),
     )
     graph = build_chat_routing_graph(classifier=PersonalizedClassifier())
+    collector = RunCollectorCallbackHandler()
 
     result = graph.invoke(
         build_initial_chat_state(
@@ -97,10 +96,12 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
             session_summary="近期每周训练三次。",
         ),
         context=runtime_context,
+        config={"callbacks": [collector]},
     )
 
     assert captured["context"] is runtime_context
-    assert captured["config"] == {"recursion_limit": 9}
+    assert captured["config"]["recursion_limit"] == 9
+    assert collector in captured["config"]["callbacks"].handlers
     assert captured["input"]["session_summary"] == "近期每周训练三次。"
     assert captured["input"]["retrieval_history"] == [
         {"role": "user", "content": "我之前练过深蹲。"},
@@ -109,6 +110,7 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
     assert captured["input"]["tool_call_limit"] == 4
     assert "user_id" not in captured["input"]
     assert "city" not in captured["input"]
+    assert not hasattr(runtime_context, "trace")
     assert result["events"] == [{"type": "text", "content": "个性化建议"}]
 
 
@@ -244,8 +246,8 @@ def test_parallel_requests_do_not_share_retrieval_history_or_evidence(monkeypatc
     assert result_b[3][0]["evidence_id"] == "跑步.md#1"
 
 
-def test_personalized_branch_marks_trace_mode_agent():
-    """个性化分支执行前应把轨迹模式标记为 agent。"""
+def test_personalized_branch_uses_context_without_trace_field():
+    """个性化分支应仅依赖不含 trace 的请求上下文。"""
 
     class EmptyInnerAgent:
         @staticmethod
@@ -256,12 +258,10 @@ def test_personalized_branch_marks_trace_mode_agent():
     executor.agent = EmptyInnerAgent()
     executor.max_steps = 5
     executor.max_tool_calls = 2
-    trace = AgentTrace(mode="direct_rag")
     context = ChatRuntimeContext(
         user_id=9,
         city="",
         session_id="session-9",
-        trace=trace,
         dependencies=SimpleNamespace(personalized_agent_executor=executor),
     )
 
@@ -273,7 +273,7 @@ def test_personalized_branch_marks_trace_mode_agent():
         context=context,
     )
 
-    assert trace.mode == "agent"
+    assert not hasattr(context, "trace")
 
 
 def test_personalized_agent_keeps_tool_and_evidence_events():
@@ -328,7 +328,6 @@ def test_personalized_agent_keeps_tool_and_evidence_events():
             user_id=5,
             city="",
             session_id="session-5",
-            trace=AgentTrace(),
             dependencies=SimpleNamespace(max_tool_calls=2),
         ),
     )
@@ -414,7 +413,6 @@ def test_personalized_agent_emits_evidence_for_each_rag_call():
             user_id=5,
             city="",
             session_id="session-5",
-            trace=AgentTrace(),
             dependencies=SimpleNamespace(personalized_agent_executor=executor),
         ),
     )
@@ -454,7 +452,6 @@ def test_personalized_graph_rejects_non_json_inner_state():
                 user_id=5,
                 city="",
                 session_id="session-5",
-                trace=AgentTrace(),
                 dependencies=SimpleNamespace(personalized_agent_executor=executor),
             ),
         )
@@ -470,7 +467,6 @@ def test_monitor_tool_uses_personalized_executor_limit_when_dependencies_only_ho
             user_id=5,
             city="",
             session_id="session-5",
-            trace=AgentTrace(),
             dependencies=SimpleNamespace(personalized_agent_executor=executor),
         ),
         config={},

@@ -9,7 +9,6 @@ from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Command
-from app.services.agent_trace import AgentTrace
 from app.core.request_context import request_id_var
 from app.utils.logger_handler import logger
 
@@ -75,35 +74,14 @@ def _log_tool_event(
     logger.info("AGENT_TOOL_CALL %s", json.dumps(event, ensure_ascii=False))
 
 
-def _record_trace_event(
-    trace: object,
-    *,
-    tool_name: str,
-    argument_shape: dict[str, str],
-    status: str,
-    elapsed_ms: int,
-    detail: str = "",
-) -> None:
-    """若运行上下文含执行轨迹，则记录一条工具调用事件。"""
-    if isinstance(trace, AgentTrace):
-        trace.record_tool(
-            tool_name=tool_name,
-            argument_shape=argument_shape,
-            status=status,
-            elapsed_ms=elapsed_ms,
-            detail=detail,
-        )
-
-
 @wrap_tool_call
 def monitor_tool(
     request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command]
 ) -> ToolMessage | Command:
-    """执行工具并统一施加预算、审计、轨迹记录和安全失败响应。"""
+    """执行工具并统一施加预算、审计和安全失败响应。"""
     tool_name = request.tool_call.get("name", "unknown_tool")
     tool_args = request.tool_call.get("args", {})
     argument_shape = _tool_argument_shape(tool_args)
-    context = request.runtime.context
     limit = _tool_call_limit(request)
     allowed, tool_call_count, tool_call_limit = _consume_tool_budget(
         request.state,
@@ -117,14 +95,6 @@ def monitor_tool(
             status="budget_exceeded",
             elapsed_ms=0,
             tool_call_count=tool_call_count,
-            detail=f"limit={tool_call_limit}",
-        )
-        _record_trace_event(
-            context.trace,
-            tool_name=tool_name,
-            argument_shape=argument_shape,
-            status="budget_exceeded",
-            elapsed_ms=0,
             detail=f"limit={tool_call_limit}",
         )
         return Command(
@@ -154,13 +124,6 @@ def monitor_tool(
             elapsed_ms=elapsed_ms,
             tool_call_count=tool_call_count,
         )
-        _record_trace_event(
-            context.trace,
-            tool_name=tool_name,
-            argument_shape=argument_shape,
-            status="success",
-            elapsed_ms=elapsed_ms,
-        )
         return _with_tool_call_count(result, tool_call_count, request)
     except Exception:
         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
@@ -171,14 +134,6 @@ def monitor_tool(
             status="error",
             elapsed_ms=elapsed_ms,
             tool_call_count=tool_call_count,
-            detail="internal_error",
-        )
-        _record_trace_event(
-            context.trace,
-            tool_name=tool_name,
-            argument_shape=argument_shape,
-            status="error",
-            elapsed_ms=elapsed_ms,
             detail="internal_error",
         )
         return Command(
