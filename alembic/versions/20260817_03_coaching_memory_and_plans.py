@@ -6,7 +6,7 @@
 
 from collections.abc import Sequence
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
@@ -18,10 +18,14 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     """扩展运动幂等键，并创建会话记忆、训练计划和反馈结构。"""
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-    column_names = {column["name"] for column in inspector.get_columns("fitness_data")}
-    index_names = {index["name"] for index in inspector.get_indexes("fitness_data")}
+    if context.is_offline_mode():
+        column_names = set()
+        index_names = set()
+    else:
+        bind = op.get_bind()
+        inspector = sa.inspect(bind)
+        column_names = {column["name"] for column in inspector.get_columns("fitness_data")}
+        index_names = {index["name"] for index in inspector.get_indexes("fitness_data")}
 
     if "external_id" not in column_names:
         op.add_column("fitness_data", sa.Column("external_id", sa.String(length=128), nullable=True))

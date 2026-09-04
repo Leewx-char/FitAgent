@@ -97,6 +97,8 @@ class ChatRequest(BaseModel):
 
 
 class AgentToolCallResponse(BaseModel):
+    """返回单次工具调用的输入、输出及执行状态。"""
+
     sequence: int
     tool_name: str
     tool_input: Any
@@ -120,6 +122,8 @@ class AgentToolCallResponse(BaseModel):
 
 
 class AgentRunResponse(BaseModel):
+    """返回一轮聊天运行及其工具调用明细。"""
+
     id: str
     request_id: str
     mode: str
