@@ -32,7 +32,7 @@ flowchart LR
   LG --> LLM
   LLM --> SSE[SSE text / tool / evidence / error + DONE]
   SSE --> FE
-  API --> DB2[(MySQL: assistant message / trace)]
+  API --> DB2[(MySQL: assistant message / agent_runs / agent_tool_calls)]
 ```
 
 ## 1. 第一条主线：追踪一次通用健身问答（60–90 分钟）
@@ -43,7 +43,7 @@ flowchart LR
 
 1. [Chat.vue](../frontend/src/views/Chat.vue) 的 `sendMessage`：确认它使用 `fetch` 发送 JWT、`message` 和 `session_id`，再用 `ReadableStream` 逐段解析 SSE。
 2. [chat.py](../app/api/routers/chat.py) 的 `chat`：依次完成参数校验、创建/校验会话、持久化用户消息、创建记忆候选、读取历史、刷新会话摘要，然后返回 `StreamingResponse`。
-3. 同文件的 `sse_generator`：它把同步生成器放到 executor 中逐块取值，转换为 `text`、`tool`、`evidence`、`error` 四类 SSE 事件；正常结束额外发送 `[DONE]`，前端在 `[DONE]` 或 `error` 时收敛加载状态。流结束后才持久化 assistant 回复和 Agent 轨迹。
+3. 同文件的 `sse_generator`：它在请求开始时创建 LangChain 官方 `RunCollectorCallbackHandler`，把它经 `RunnableConfig.callbacks` 传给图；随后把同步生成器放到 executor 中逐块取值，转换为 `text`、`tool`、`evidence`、`error` 四类 SSE 事件。正常结束额外发送 `[DONE]`，前端在 `[DONE]` 或 `error` 时收敛加载状态；SSE 流结束后，才将 Collector 在内存中的运行树投影到既有 MySQL `agent_runs`、`agent_tool_calls`，并持久化 assistant 回复。这里不使用 LangSmith，也不新增日志表或路由。
 4. [react_agent.py](../app/services/react_agent.py) 的 `execute_stream`：它构造 `ChatRuntimeContext` 与初始 `ChatGraphState`，消费图的 custom stream，再编码为既有 SSE JSON 行。
 5. [chat_routing_graph.py](../app/services/chat_routing_graph.py)：`StateGraph` 先让模型以结构化 `IntentDecision` 分类；明确的通用知识进入 Direct RAG，个性化、模糊或分类失败都进入个性化 Agent。Direct RAG 先发“检索知识库”事件，发送真实证据卡片，再流式生成答案。
 6. [rag_service.py](../app/services/rag_service.py) 的 `RagSummarizeService.build_context`：查看查询规划、Dense/BM25 召回、RRF 融合、去重、轻量重排与上下文预算如何产出 `RagContext`。
@@ -60,7 +60,7 @@ flowchart LR
 
 你能不看代码讲出：
 
-> “用户问题先被存为消息，再产生待确认记忆候选；`ReactAgent` 将短期状态交给 StateGraph，由结构化分类决定 Direct RAG 或个性化 Agent。分类异常保守进入个性化分支；两条分支都把真实证据与回答增量通过 SSE 回给前端。流结束后再存 assistant 消息和不含原文的执行轨迹。”
+> “用户问题先被存为消息，再产生待确认记忆候选；`ReactAgent` 将短期状态交给 StateGraph，由结构化分类决定 Direct RAG 或个性化 Agent。分类异常保守进入个性化分支；两条分支都把真实证据与回答增量通过 SSE 回给前端。流结束后再存 assistant 消息，并把官方 Collector 的内存运行树投影为本地 `agent_runs`、`agent_tool_calls` 记录。”
 
 先跑这些测试巩固，不需要真实 LLM：
 
@@ -72,10 +72,10 @@ flowchart LR
 
 改问：`结合我的膝盖情况和最近训练数据，安排今天的训练。` 这会绕过 Direct RAG，进入 LangGraph Agent。此时不要试图读懂 LangGraph 内部实现，先关注**本项目给模型什么工具、什么上下文、什么预算**。
 
-1. 回看 `ReactAgent.execute_stream` 与 [chat_routing_graph.py](../app/services/chat_routing_graph.py)：入口只注入 `ChatRuntimeContext`（身份、城市、依赖、trace）和 JSON 安全的短期 `ChatGraphState`；个性化节点把同一个 context 传给内层 Agent。
+1. 回看 `ReactAgent.execute_stream` 与 [chat_routing_graph.py](../app/services/chat_routing_graph.py)：入口只注入 `ChatRuntimeContext`（身份、城市和依赖）与 JSON 安全的短期 `ChatGraphState`；个性化节点把同一个 context 传给内层 Agent。运行记录不在 context 中：HTTP 层把官方 Collector 放入 `RunnableConfig.callbacks`。
 2. 看 [agent_tools.py](../app/services/agent_tools.py)：重点查看 `rag_summarize`、`get_user_profile`、`get_confirmed_memories`、`get_fitness_summary`。它们通过 `ToolRuntime` 读取请求上下文、把证据等短期产物写回 state。
 3. 看 [middleware.py](../app/services/middleware.py)：理解递归步数、按同批工具位置计算的预算、脱敏审计分别在哪里被约束；并行工具调用的状态更新由 reducer 合并。
-4. 看 [agent_trace.py](../app/services/agent_trace.py) 与 [repositories/agent_trace_repository.py](../app/repositories/agent_trace_repository.py)：理解为何记录“工具名、参数形状、耗时”，却不记录用户原文与工具参数值。
+4. 看 [repositories/agent_trace_repository.py](../app/repositories/agent_trace_repository.py)：理解 `RunCollectorCallbackHandler` 如何只在本次请求内存中收集根运行和工具运行，并在 SSE 结束后投影到既有 `agent_runs`、`agent_tool_calls`。记录包含用户问题、最终回答、工具输入和工具输出；不接入 LangSmith，也不增加日志表或查询路由。
 
 `get_fitness_summary` 不接受模型传入的用户 ID。默认读取近 4 周；给出不同的 `start_day` / `end_day` 时读取最多 90 天的闭区间。若两个日期相同，第一次调用会列出当天活动的稳定 `activity_id` 候选，模型必须携带该 ID 再调用一次才能读取某次活动，不能仅按日期猜测晨跑或夜跑。
 

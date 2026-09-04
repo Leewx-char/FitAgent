@@ -14,7 +14,7 @@
 ## 项目能力
 
 - **可解释 RAG**：Qdrant Dense + 离线 BM25 双路召回、RRF 融合、revision/alias 安全发布；回答带 `[证据:N]` 和来源卡片。
-- **受控 Agent**：LangGraph ReAct 只在个性化问题中调用画像、已确认记忆、运动摘要、天气等工具；有递归步数、工具预算与脱敏执行轨迹。
+- **受控 Agent**：LangGraph ReAct 只在个性化问题中调用画像、已确认记忆、运动摘要、天气等工具；有递归步数、工具预算，以及基于官方 Collector 的本地执行记录。
 - **用户可控记忆**：聊天只产生 `proposed` 候选；用户在“我的记忆”页确认、撤销或等待过期，模型回答不能反向写入事实。
 - **自适应周计划**：Coros 近四周聚合快照 + 用户画像 + RPE/疼痛反馈 → 固定安全策略 → RAG 证据 → Pydantic JSON 契约和业务校验。
 - **多模态健康信息**：体检 PDF/图片提取十项指标，用户核对后才写入画像；不做医学诊断。
@@ -169,7 +169,7 @@ pytest app/tests
 
 ## Agent 运行防护栏
 
-完整 Agent 请求使用受配置约束的递归步数与工具调用预算，避免模型陷入工具循环；工具调用以请求 ID、耗时和参数形状写入结构化日志，不记录用户原文或工具参数值。可在 `.env` 中按部署环境调整：
+完整 Agent 请求使用受配置约束的递归步数与工具调用预算，避免模型陷入工具循环。中间件的脱敏业务日志与下文的运行记录是两套用途不同的机制：前者不记录用户原文或工具参数值，后者在 SSE 结束后由官方 Collector 投影到本地 MySQL。可在 `.env` 中按部署环境调整：
 
 ```dotenv
 AGENT_MAX_STEPS=8
@@ -178,13 +178,15 @@ AGENT_MAX_TOOL_CALLS=6
 
 ## 聊天路由与状态边界
 
-`ReactAgent.execute_stream` 会在每次请求开始时构造 LangGraph 短期状态，并由 LLM 的结构化意图分类决定进入直接 RAG 或个性化 Agent。图状态只保存消息、会话事实、检索历史、证据和 SSE 事件等可序列化数据；用户身份、会话标识、追踪对象和执行依赖仅存在请求级运行时上下文中。
+`ReactAgent.execute_stream` 会在每次请求开始时构造 LangGraph 短期状态，并由 LLM 的结构化意图分类决定进入直接 RAG 或个性化 Agent。图状态只保存消息、会话事实、检索历史、证据和 SSE 事件等可序列化数据；用户身份、会话标识和执行依赖仅存在请求级运行时上下文中。执行记录不写入运行时 context：HTTP 层为每次请求创建官方 `RunCollectorCallbackHandler`，并通过 `RunnableConfig.callbacks` 传给图。
 
 MySQL 仍是跨会话记忆和会话摘要的唯一长期存储，LangGraph 不启用 Store 或 checkpointer。分类模型不可用、返回异常或意图不明确时，系统会保守回退到个性化 Agent；HTTP 层继续输出既有 `tool`、`evidence`、`text` 和 `[DONE]` SSE 契约。
 
 ## Agent 执行轨迹
 
-每轮聊天会以独立事务写入 `agent_runs` 和 `agent_tool_calls`：记录请求 ID、执行路径（`agent` / `direct_rag`）、状态、总耗时、工具顺序、参数类型和工具耗时。为保护隐私，不保存用户问题、工具参数值或模型回复原文。
+每轮聊天的官方 `RunCollectorCallbackHandler` 只在内存中采集本次运行树。SSE 流结束后，系统以独立事务将其投影到既有 MySQL `agent_runs` 和 `agent_tool_calls`：前者保存请求 ID、状态、总耗时、用户问题和最终回答；后者按顺序保存工具名、真实工具输入、工具输出（或错误）及耗时。
+
+该记录功能只使用本地 MySQL，不接入 LangSmith；不新增日志表、HTTP 路由或长期运行时 `trace` 字段。
 
 升级代码后先执行数据库迁移并重启后端：
 
