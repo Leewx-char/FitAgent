@@ -269,7 +269,9 @@ def test_execute_stream_passes_callback_config_to_routing_graph():
     agent.routing_graph = FakeRoutingGraph()
     config = {"callbacks": [RunCollectorCallbackHandler()]}
 
-    assert list(agent.execute_stream([{"role": "user", "content": "深蹲怎么做？"}], config=config)) == []
+    messages = [{"role": "user", "content": "深蹲怎么做？"}]
+
+    assert list(agent.execute_stream(messages, config=config)) == []
     assert captured["config"] is config
 
 

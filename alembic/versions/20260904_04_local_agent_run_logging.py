@@ -36,6 +36,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """还原旧工具列名称和摘要表字段。"""
+    op.execute("UPDATE agent_tool_calls SET tool_input = '{}'")
+    op.execute("UPDATE agent_tool_calls SET tool_output = LEFT(tool_output, 120)")
     op.alter_column(
         "agent_tool_calls", "tool_output", new_column_name="detail",
         existing_type=sa.Text(), type_=sa.String(length=120), existing_nullable=False,

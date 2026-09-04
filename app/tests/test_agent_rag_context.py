@@ -19,8 +19,9 @@ from app.services.chat_routing_graph import (
 class FakeIntentClassifier:
     """固定选择直接检索分支。"""
 
-    def classify(self, _prompt):
+    def classify(self, _prompt, config=None):
         """返回受约束的直接检索决策。"""
+        del config
         return IntentDecision(route="direct_rag")
 
 
@@ -50,7 +51,6 @@ def test_rag_tool_forwards_recent_history_to_rag_service(monkeypatch):
             user_id=1,
             city="",
             session_id="session-1",
-            trace=None,
             dependencies=SimpleNamespace(),
         ),
         config={},
@@ -115,8 +115,9 @@ def test_direct_rag_graph_uses_latest_user_and_records_prior_history():
         """提供无需真实模型的固定文本流。"""
 
         @staticmethod
-        def stream(_messages):
+        def stream(_messages, config=None):
             """返回带证据标记的固定回答。"""
+            del config
             return [SimpleNamespace(content="膝盖跟随脚尖。[证据:1]")]
 
     executor = react_agent.DirectRagExecutor(
@@ -139,7 +140,6 @@ def test_direct_rag_graph_uses_latest_user_and_records_prior_history():
             user_id=1,
             city="",
             session_id="session-1",
-            trace=None,
             dependencies=SimpleNamespace(direct_rag_executor=executor),
         ),
     )

@@ -26,13 +26,13 @@ def upgrade() -> None:
         "WHERE external_id IS NULL"
     )
     op.alter_column("fitness_data", "external_id", existing_type=sa.String(length=128), nullable=False)
-    op.drop_index("ix_fitness_user_date_type", table_name="fitness_data")
     op.create_index(
         "ix_fitness_user_type_external",
         "fitness_data",
         ["user_id", "data_type", "external_id"],
         unique=True,
     )
+    op.drop_index("ix_fitness_user_date_type", table_name="fitness_data")
 
     op.create_table(
         "session_summaries",
@@ -114,11 +114,11 @@ def downgrade() -> None:
     op.drop_index("ix_memory_facts_user_status_key", table_name="memory_facts")
     op.drop_table("memory_facts")
     op.drop_table("session_summaries")
-    op.drop_index("ix_fitness_user_type_external", table_name="fitness_data")
     op.create_index(
         "ix_fitness_user_date_type",
         "fitness_data",
         ["user_id", "date", "data_type"],
         unique=True,
     )
+    op.drop_index("ix_fitness_user_type_external", table_name="fitness_data")
     op.drop_column("fitness_data", "external_id")

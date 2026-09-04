@@ -72,7 +72,6 @@ def _invoke_parallel_tool_calls(tool_names: list[str], tool_limit: int):
             user_id=1,
             city="",
             session_id="parallel-tools",
-            trace=None,
             dependencies=SimpleNamespace(max_tool_calls=tool_limit),
         ),
     )
@@ -80,19 +79,17 @@ def _invoke_parallel_tool_calls(tool_names: list[str], tool_limit: int):
 
 
 def test_chat_runtime_context_keeps_request_scoped_dependencies():
-    trace = object()
+    """请求上下文应只保存身份字段和可替换执行依赖。"""
     dependencies = object()
 
     context = ChatRuntimeContext(
         user_id=7,
         city="广州",
         session_id="session-1",
-        trace=trace,
         dependencies=dependencies,
     )
 
     assert (context.user_id, context.city, context.session_id) == (7, "广州", "session-1")
-    assert context.trace is trace
     assert context.dependencies is dependencies
 
 

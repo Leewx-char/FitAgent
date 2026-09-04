@@ -11,10 +11,15 @@ from app.services.chat_routing_graph import (
 
 
 class FakeIntentClassifier:
+    """返回测试指定路由的分类器替身。"""
+
     def __init__(self, route: str) -> None:
+        """保存调用方指定的路由结果。"""
         self._route = route
 
-    def classify(self, _prompt: str) -> IntentDecision:
+    def classify(self, _prompt: str, config=None) -> IntentDecision:
+        """接受运行配置并返回固定分类结果。"""
+        del config
         return IntentDecision(route=self._route)
 
 
@@ -23,7 +28,6 @@ def _runtime_context() -> ChatRuntimeContext:
         user_id="u-1",
         city="上海",
         session_id="session-1",
-        trace=object(),
         dependencies={"api_key": "secret-value"},
     )
 
@@ -55,8 +59,8 @@ def test_build_initial_state_writes_session_facts_and_empty_artifacts():
 def test_graph_selects_direct_rag_edge_for_generic_intent():
     graph = build_chat_routing_graph(
         classifier=FakeIntentClassifier("direct_rag"),
-        direct_rag_node=lambda _state, runtime: {"events": [{"branch": "direct_rag"}]},
-        personalized_agent_node=lambda _state, runtime: {"events": [{"branch": "agent"}]},
+        direct_rag_node=lambda _state, runtime, config: {"events": [{"branch": "direct_rag"}]},
+        personalized_agent_node=lambda _state, runtime, config: {"events": [{"branch": "agent"}]},
     )
 
     result = graph.invoke(
@@ -74,8 +78,8 @@ def test_graph_selects_direct_rag_edge_for_generic_intent():
 def test_graph_selects_personalized_agent_edge_for_personal_intent():
     graph = build_chat_routing_graph(
         classifier=FakeIntentClassifier("personalized_agent"),
-        direct_rag_node=lambda _state, runtime: {"events": [{"branch": "direct_rag"}]},
-        personalized_agent_node=lambda _state, runtime: {"events": [{"branch": "agent"}]},
+        direct_rag_node=lambda _state, runtime, config: {"events": [{"branch": "direct_rag"}]},
+        personalized_agent_node=lambda _state, runtime, config: {"events": [{"branch": "agent"}]},
     )
 
     result = graph.invoke(
@@ -107,7 +111,9 @@ def test_state_does_not_contain_runtime_identity_or_secret_values():
 def test_graph_node_receives_runtime_context_from_graph_invocation():
     received_contexts = []
 
-    def direct_rag_node(_state, runtime):
+    def direct_rag_node(_state, runtime, config):
+        """记录图运行时上下文，同时接受回调配置。"""
+        del config
         received_contexts.append(runtime.context)
         return {"events": [{"branch": "direct_rag"}]}
 

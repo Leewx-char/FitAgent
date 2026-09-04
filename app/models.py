@@ -113,7 +113,7 @@ class AgentRun(Base):
     request_id = Column(String(32), nullable=False, index=True)
     session_id = Column(CHAR(32), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    mode = Column(String(20), nullable=False)  # 执行模式：agent 或 direct_rag
+    mode = Column(String(20), nullable=False)  # 固定聊天运行模式：chat
     status = Column(String(20), nullable=False)  # 执行状态：succeeded 或 failed
     elapsed_ms = Column(Integer, nullable=False)
     tool_call_count = Column(Integer, nullable=False, default=0)

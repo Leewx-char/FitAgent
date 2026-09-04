@@ -18,7 +18,6 @@ def _fitness_summary(user_id: int | None, **tool_args: str) -> str:
             user_id=user_id or 0,
             city="",
             session_id="fitness-summary-test",
-            trace=None,
             dependencies=SimpleNamespace(),
         ),
         config={},

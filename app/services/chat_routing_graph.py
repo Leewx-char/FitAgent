@@ -21,7 +21,7 @@ Route = Literal["direct_rag", "personalized_agent"]
 JsonPrimitive: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"]
 ChatGraphNode: TypeAlias = Callable[
-    ["ChatGraphState", Runtime["ChatRuntimeContext"]], dict[str, JsonValue]
+    ["ChatGraphState", Runtime["ChatRuntimeContext"], RunnableConfig], dict[str, JsonValue]
 ]
 
 
