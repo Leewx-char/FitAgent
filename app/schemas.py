@@ -99,19 +99,24 @@ class ChatRequest(BaseModel):
 class AgentToolCallResponse(BaseModel):
     sequence: int
     tool_name: str
-    argument_shape: dict[str, str]
+    tool_input: Any
+    tool_output: Any
     status: str
     elapsed_ms: int
-    detail: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
-    @field_validator("argument_shape", mode="before")
+    @field_validator("tool_input", "tool_output", mode="before")
     @classmethod
-    def parse_argument_shape(cls, value):
-        """将持久化的工具参数形状 JSON 还原为字典。"""
-        return json.loads(value) if isinstance(value, str) else value
+    def parse_json_or_text(cls, value):
+        """还原 JSON 文本，并保留历史非 JSON 文本。"""
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
 
 
 class AgentRunResponse(BaseModel):
@@ -121,6 +126,8 @@ class AgentRunResponse(BaseModel):
     status: str
     elapsed_ms: int
     tool_call_count: int
+    user_question: str
+    assistant_answer: str
     created_at: datetime
     tool_calls: list[AgentToolCallResponse]
 

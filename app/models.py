@@ -105,7 +105,7 @@ class Message(Base):
 
 
 class AgentRun(Base):
-    """一轮 Agent 执行的无敏感轨迹摘要。"""
+    """保存一轮聊天的摘要、问题与最终回答。"""
 
     __tablename__ = "agent_runs"
 
@@ -117,6 +117,8 @@ class AgentRun(Base):
     status = Column(String(20), nullable=False)  # 执行状态：succeeded 或 failed
     elapsed_ms = Column(Integer, nullable=False)
     tool_call_count = Column(Integer, nullable=False, default=0)
+    user_question = Column(Text, nullable=False, default="")
+    assistant_answer = Column(Text, nullable=False, default="")
     created_at = Column(DateTime, server_default=func.now())
 
     user = relationship("User", back_populates="agent_runs")
@@ -131,7 +133,7 @@ class AgentRun(Base):
 
 
 class AgentToolCall(Base):
-    """Agent 运行中单次工具调用的安全审计信息。"""
+    """保存 Collector 采集的单次工具输入和输出。"""
 
     __tablename__ = "agent_tool_calls"
 
@@ -139,10 +141,10 @@ class AgentToolCall(Base):
     agent_run_id = Column(CHAR(32), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False)
     sequence = Column(Integer, nullable=False)
     tool_name = Column(String(80), nullable=False)
-    argument_shape = Column(Text, nullable=False, default="{}")
+    tool_input = Column(Text, nullable=False, default="{}")
     status = Column(String(20), nullable=False)
     elapsed_ms = Column(Integer, nullable=False)
-    detail = Column(String(120), nullable=False, default="")
+    tool_output = Column(Text, nullable=False, default="")
     created_at = Column(DateTime, server_default=func.now())
 
     agent_run = relationship("AgentRun", back_populates="tool_calls")
