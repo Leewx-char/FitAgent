@@ -9,6 +9,7 @@ from app.models import SessionSummary
 from app.services.chat_routing_graph import IntentDecision, build_chat_routing_graph
 from app.services.memory_service import RECENT_MESSAGE_LIMIT
 from app.services.react_agent import ReactAgent
+from langchain_core.runnables import RunnableLambda
 from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 
 
@@ -23,8 +24,11 @@ class TestChat:
 
             @classmethod
             def execute_stream(cls, _messages, **kwargs):
-                """记录运行配置并输出固定文本事件。"""
+                """通过本地 Runnable 消费回调配置并输出固定文本事件。"""
                 cls.captured_config = kwargs["config"]
+                RunnableLambda(lambda _input: "已执行").invoke(
+                    {}, config=cls.captured_config
+                )
                 return iter(['{"type": "text", "content": "膝盖跟随脚尖。"}'])
 
         class FakeDb:
@@ -70,14 +74,78 @@ class TestChat:
                 )
             ]
 
-        chunks = asyncio.run(collect_sse())
+        request_id_token = chat_router.request_id_var.set("request-sse-success")
+        try:
+            chunks = asyncio.run(collect_sse())
+        finally:
+            chat_router.request_id_var.reset(request_id_token)
 
         assert chunks[-1] == "data: [DONE]\n\n"
         assert saved["user_question"] == "深蹲怎么做？"
         assert saved["assistant_answer"] == "膝盖跟随脚尖。"
         assert saved["status"] == "succeeded"
+        assert saved["request_id"] == "request-sse-success"
         assert isinstance(saved["collector"], RunCollectorCallbackHandler)
+        assert saved["collector"].traced_runs
         assert FakeAgent.captured_config == {"callbacks": [saved["collector"]]}
+
+    def test_sse_keeps_text_and_done_when_run_record_save_fails(self, monkeypatch):
+        """运行记录保存失败时，已生成的文本和结束事件仍必须发送。"""
+
+        class FakeAgent:
+            """提供固定文本事件的最小流式 Agent。"""
+
+            @staticmethod
+            def execute_stream(_messages, **_kwargs):
+                """输出一段成功的文本事件。"""
+                return iter(['{"type": "text", "content": "保持呼吸。"}'])
+
+        class FakeDb:
+            """提供 SSE 收尾所需的最小数据库接口。"""
+
+            @staticmethod
+            def add(_message):
+                """忽略测试中的待保存消息。"""
+
+            @staticmethod
+            def query(_model):
+                """返回不会命中会话的查询对象。"""
+                return SimpleNamespace(filter=lambda *_args: SimpleNamespace(first=lambda: None))
+
+            @staticmethod
+            def commit():
+                """避免测试访问真实数据库。"""
+
+        @contextmanager
+        def fake_trace_db():
+            """提供仓储保存所需的独立会话。"""
+            yield object()
+
+        def raise_save_error(_db, _collector, **_kwargs):
+            """模拟独立运行记录写入失败。"""
+            raise RuntimeError("trace storage unavailable")
+
+        monkeypatch.setattr(chat_router, "get_db_session", fake_trace_db)
+        monkeypatch.setattr(chat_router.AgentTraceRepository, "save", raise_save_error)
+
+        async def collect_sse():
+            """收集真实 sse_generator 的全部响应块。"""
+            return [
+                chunk
+                async for chunk in chat_router.sse_generator(
+                    FakeAgent(),
+                    [{"role": "user", "content": "深蹲怎么做？"}],
+                    FakeDb(),
+                    "session-8",
+                    "深蹲怎么做？",
+                    SimpleNamespace(id=8),
+                )
+            ]
+
+        assert asyncio.run(collect_sse()) == [
+            'data: {"type": "text", "content": "保持呼吸。"}\n\n',
+            "data: [DONE]\n\n",
+        ]
 
     def test_chat_creates_session(self, auth_client, agent_mock):
         """无 session_id → 自动创建会话，响应头返回 X-Session-Id"""
