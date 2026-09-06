@@ -109,17 +109,18 @@ flowchart LR
 
 ## 4. 重点补课：记忆不是“全量聊天记录”（45–60 分钟）
 
-从 [memory_service.py](../app/services/memory_service.py) 和 [session_facts.py](../app/services/session_facts.py) 开始，再看 [memory.py](../app/api/routers/memory.py) 与 [test_memory.py](../app/tests/test_memory.py)。
+从 [记忆架构](memory-architecture.md)、[memory_service.py](../app/services/memory_service.py) 和 [session_facts.py](../app/services/session_facts.py) 开始，再看 [mem0_backend.py](../app/integrations/mem0_backend.py)、[memory.py](../app/api/routers/memory.py) 与 [test_memory.py](../app/tests/test_memory.py)。
 
 | 层级 | 表/载体 | 如何写入 | 是否直接给 Agent |
 | --- | --- | --- | --- |
 | 近期上下文 | `messages` 最近 10 轮（20 条） | 聊天原文 | 是，当前会话内 |
 | 会话暂存状态 | `session_summaries` | 仅从较早的 user 消息确定性提取，可重建 | 是，但标注来源与时效 |
-| 长期记忆 | `memory_facts` | `proposed → confirmed/revoked`，由用户在页面确认 | 仅 `confirmed`、未过期、最多 6 条 |
+| 长期记忆 | mem0 主向量库正文与元数据 | LLM 提取为 `proposed`，用户确认或撤销 | 模型自主调用查询工具后语义检索，仅 `confirmed`、未过期，默认最多 6 条 |
+| 提取上下文与变更日志 | mem0 SQLite | 每个会话最近 10 条提取输入与记忆变更历史 | 不作为完整聊天历史注入 Agent |
 
-一定要追踪这条防污染规则：`chat()` 在模型生成前只从**用户本条消息**产生候选；`extract_session_facts` 忽略 `assistant/tool` 消息。因此模型不能通过“我猜你膝盖受伤”把猜测反写成用户事实。
+一定要追踪这条防污染规则：`chat()` 在模型生成前只将**用户消息**交给 mem0，通过 LLM 提取待确认候选，按用户和会话隔离上下文；`extract_session_facts` 忽略 `assistant/tool` 消息。候选必须经过用户确认，才能进入语义检索结果。
 
-完成标准：你能解释“为什么摘要不是长期记忆”“为什么候选不能直接提供给 Agent”“确认新值如何撤销 `supersedes_id` 指向的旧值”。
+完成标准：你能解释“为什么摘要不是长期记忆”“为什么候选不能直接提供给 Agent”“模型何时选择查询长期记忆”“冲突候选为何需要用户自行确认新值并撤销旧值”。旧 `memory_facts` 只保留待显式迁移，在线链路不再读写该表。
 
 ## 5. 训练计划是一条独立、安全优先的业务链路（60 分钟）
 

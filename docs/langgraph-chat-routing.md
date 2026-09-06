@@ -2,7 +2,7 @@
 
 ## 改造目标
 
-本次改造将聊天请求从关键词启发式分流升级为 LangGraph 图编排。系统根据 LLM 的结构化意图判断选择直接 RAG 或个性化 Agent，同时保持 `/api/chat` 的 SSE 协议、MySQL 长期记忆和既有工具能力不变。
+本次改造将聊天请求从关键词启发式分流升级为 LangGraph 图编排。系统根据 LLM 的结构化意图判断选择直接 RAG 或个性化 Agent，同时保持 `/api/chat` 的 SSE 协议和既有工具能力。长期记忆现由 mem0 独立管理，详见 [记忆架构](memory-architecture.md)。
 
 ```mermaid
 flowchart LR
@@ -72,7 +72,7 @@ sequenceDiagram
 
 ## 状态边界
 
-一次请求内可序列化的数据放入 `ChatGraphState`；需要信任或不可序列化的对象仅通过 `ChatRuntimeContext` 注入。跨会话数据仍然只由 MySQL 管理。
+一次请求内可序列化的数据放入 `ChatGraphState`；需要信任或不可序列化的对象仅通过 `ChatRuntimeContext` 注入。完整聊天和会话摘要由 MySQL 管理，跨会话长期记忆由 mem0 管理。
 
 ```mermaid
 flowchart LR
@@ -90,20 +90,23 @@ flowchart LR
         S4[工具计数与 SSE 事件]
     end
 
-    subgraph Database[MySQL：长期数据]
+    subgraph Database[MySQL：聊天与业务数据]
         D1[SessionSummary]
-        D2[MemoryFact]
+        D2[Message]
     end
+
+    Memory[mem0：长期记忆正文与状态]
 
     Runtime -->|只读注入| State
     State -->|既有服务读写| Database
+    State -->|模型决定调用查询工具| Memory
 ```
 
 这条边界带来三个约束：
 
 - GraphState 不写入 API 密钥、数据库连接、权限或跨请求共享对象。
 - 直接 RAG 与个性化 Agent 在写回状态前都校验 JSON 安全性。
-- 不启用 LangGraph Store 或 checkpointer，避免与 MySQL 的会话摘要、确认记忆形成双写来源。
+- 不启用 LangGraph Store 或 checkpointer；MySQL 管理会话摘要，mem0 管理长期记忆，避免同一数据出现双写来源。
 
 ## 意图识别与保守回退
 

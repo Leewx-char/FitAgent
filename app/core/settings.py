@@ -28,6 +28,19 @@ class Settings(BaseSettings):
     dashscope_api_key: str = ""
     qdrant_url: str = ""
     qdrant_api_key: str = ""
+    memory_enabled: bool = True
+    memory_top_k: int = Field(default=6, ge=1, le=50)
+    memory_score_threshold: float = Field(default=0.2, ge=0.0, le=1.0)
+    memory_context_max_chars: int = Field(default=2400, ge=200, le=20000)
+    memory_collection_prefix: str = "fitagent_memory"
+    memory_storage_path: str = "storage/memory"
+    memory_llm_model: str = ""
+    memory_embedding_model: str = ""
+    memory_embedding_dimensions: int = Field(default=1536, ge=1, le=65536)
+    memory_timeout_seconds: float = Field(default=10.0, gt=0.0, le=300.0)
+    memory_max_retries: int = Field(default=2, ge=1, le=10)
+    memory_default_ttl_days: int = Field(default=90, ge=1, le=3650)
+    memory_max_list_items: int = Field(default=1000, ge=1, le=100000)
     agent_max_steps: int = Field(default=8, ge=2, le=32)
     agent_max_tool_calls: int = Field(default=6, ge=1, le=16)
     coros_mcp_command: str = "coros-mcp serve"

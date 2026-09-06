@@ -345,8 +345,9 @@ def get_user_profile(runtime: ToolRuntime):
 
 @tool(
     description=(
-        "读取当前用户已确认且未过期的长期记忆。仅当用户的问题明确要求结合个人目标、"
-        "习惯、伤病、饮食或历史偏好时调用；候选记忆和已撤销记忆不可读取。"
+        "按自然语言 query 语义检索当前用户已确认且未过期的长期记忆。由你判断个人目标、"
+        "习惯、伤病、饮食或跨会话信息是否有助于回答，再决定是否调用及查询内容；"
+        "通用知识问题无需调用，候选和已撤销记忆不可读取。"
     )
 )
 def get_confirmed_memories(query: str, runtime: ToolRuntime) -> str:
@@ -355,8 +356,7 @@ def get_confirmed_memories(query: str, runtime: ToolRuntime) -> str:
     user_id = _runtime_context_value(runtime, "user_id")
     if not user_id:
         return "未获取到用户信息，请让用户先登录。"
-    with get_db_session() as db:
-        return MemoryService.format_relevant_memories(db, user_id=user_id, query=query)
+    return MemoryService().format_relevant_memories(user_id=user_id, query=query)
 
 
 _MAX_FITNESS_RANGE_DAYS = 90

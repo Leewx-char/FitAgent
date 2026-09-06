@@ -59,7 +59,9 @@ const confirmed = computed(() => memories.value.filter((item) => item.status ===
 
 /** 将记忆到期时间格式化为页面显示文案。 */
 function expiresText(item) {
-  return item.expires_at ? `到期：${item.expires_at.slice(0, 10)}` : '不会自动到期'
+  return item.expires_at
+    ? `到期：${new Date(item.expires_at).toLocaleDateString('zh-CN')}`
+    : '不会自动到期'
 }
 
 /** 读取记忆列表，供待确认与已确认分组展示。 */

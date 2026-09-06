@@ -11,6 +11,7 @@ import json
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session as DBSession
@@ -233,13 +234,12 @@ async def chat(
     db.commit()
     db.refresh(user_message_record)
 
-    # 只从本条用户消息生成“待确认”候选；模型回答无法进入这一写入链路。
-    MemoryService().propose_from_user_message(
-        db,
+    # mem0 LLM 只提取用户消息；外部调用在线程池执行，候选直接保存在记忆库。
+    await run_in_threadpool(
+        MemoryService().extract_candidates,
+        user_message_record,
         user_id=current_user.id,
-        message=user_message_record,
     )
-    db.commit()
     # 3. 从数据库加载历史消息，拼接新消息
     history_messages = (
         db.query(Message)

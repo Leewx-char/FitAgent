@@ -15,7 +15,7 @@
 
 - **可解释 RAG**：Qdrant Dense + 离线 BM25 双路召回、RRF 融合、revision/alias 安全发布；回答带 `[证据:N]` 和来源卡片。
 - **受控 Agent**：LangGraph ReAct 只在个性化问题中调用画像、已确认记忆、运动摘要、天气等工具；有递归步数、工具预算，以及基于官方 Collector 的本地执行记录。
-- **用户可控记忆**：聊天只产生 `proposed` 候选；用户在“我的记忆”页确认、撤销或等待过期，模型回答不能反向写入事实。
+- **用户可控记忆**：mem0 调用 LLM 从用户消息提取 `proposed` 候选；用户在“我的记忆”页确认后，由模型自主选择调用工具进行语义检索。状态和有效期随记忆保存在向量库，助手回答不进入提取输入。
 - **自适应周计划**：Coros 近四周聚合快照 + 用户画像 + RPE/疼痛反馈 → 固定安全策略 → RAG 证据 → Pydantic JSON 契约和业务校验。
 - **多模态健康信息**：体检 PDF/图片提取十项指标，用户核对后才写入画像；不做医学诊断。
 
@@ -180,7 +180,24 @@ AGENT_MAX_TOOL_CALLS=6
 
 `ReactAgent.execute_stream` 会在每次请求开始时构造 LangGraph 短期状态，并由 LLM 的结构化意图分类决定进入直接 RAG 或个性化 Agent。图状态只保存消息、会话事实、检索历史、证据和 SSE 事件等可序列化数据；用户身份、会话标识和执行依赖仅存在请求级运行时上下文中。执行记录不写入运行时 context：HTTP 层为每次请求创建官方 `RunCollectorCallbackHandler`，并通过 `RunnableConfig.callbacks` 传给图。
 
-MySQL 仍是跨会话记忆和会话摘要的唯一长期存储，LangGraph 不启用 Store 或 checkpointer。分类模型不可用、返回异常或意图不明确时，系统会保守回退到个性化 Agent；HTTP 层继续输出既有 `tool`、`evidence`、`text` 和 `[DONE]` SSE 契约。
+跨会话记忆由 mem0 独立存储和管理；MySQL 保存账号、完整聊天、会话摘要及训练业务，旧 `memory_facts` 表保留待显式迁移。LangGraph 不启用 Store 或 checkpointer，不自动召回记忆；模型决定是否调用 `get_confirmed_memories(query)`，工具返回相关的已确认且未过期记忆。分类失败时仍保守回退个性化 Agent，既有 SSE 契约保持。
+
+## mem0 长期记忆
+
+安装项目依赖会安装固定的 `mem0ai==2.0.20`。在 `.env` 中设置现有 `DASHSCOPE_API_KEY` 和 `QDRANT_URL`，其余 `MEMORY_*` 配置见 `.env.example`。默认使用 `config/models.yml` 的模型及 1536 维嵌入，记忆使用独立 Qdrant collection，不写入知识库 RAG 集合。
+
+mem0 主向量库存记忆正文和元数据；Entity Store 按实体关联主库记忆；SQLite 存变更日志与每个 scope 最近 10 条消息。当前基础安装使用语义检索，不安装 NLP extras，也不启用图谱记忆。详细数据流、状态边界与故障行为见 [记忆架构说明](docs/memory-architecture.md)。
+
+旧 MySQL 记忆不会自动迁移。先预览，再显式写入 mem0；两个命令都保留源表数据，迁移可重跑：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.services.memory_migration --user-id 1
+.\.venv\Scripts\python.exe -m app.services.memory_migration --user-id 1 --apply
+```
+
+模型只通过只读工具查询长期记忆。提取调用在线程池执行，失败不阻断聊天；管理接口失败返回 503。成功撤销后，后续工具查询排除该条记忆。切换 `MEMORY_ENABLED=false` 会停用提取与记忆读写，不影响短期聊天历史。
+
+当前按上述单 worker 启动方式运行，同一记忆的状态修改使用进程内互斥。多 worker 或多实例部署前需补充跨进程状态协调，详见 [记忆架构](docs/memory-architecture.md)。
 
 ## Agent 执行轨迹
 
@@ -224,7 +241,9 @@ FitAgent/
 │   │   ├── react_agent.py      # 聊天图执行门面与内层 ReAct Agent
 │   │   ├── chat_routing_graph.py # LangGraph 短期状态与意图路由图
 │   │   ├── agent_tools.py      # 工具定义
-│   │   ├── memory_service.py   # 候选、确认、过期与会话摘要
+│   │   ├── memory_service.py   # 记忆权限、上下文组装与独立会话摘要
+│   │   ├── memory_backend.py   # 与 SDK 无关的记忆接口
+│   │   ├── memory_migration.py # 旧记忆显式迁移，默认只预览
 │   │   ├── training_plan_service.py # 计划编排与安全策略
 │   │   ├── fitness_insights.py # Coros 数据受限聚合快照
 │   │   ├── middleware.py       # Agent 中间件

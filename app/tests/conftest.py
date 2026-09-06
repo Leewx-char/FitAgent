@@ -13,6 +13,17 @@ from app.models import User, FitnessData
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def memory_backend(monkeypatch):
+    """测试不向真实 mem0/LLM 写入个人信息，适配器自身测试可显式注入 SDK。"""
+    from app.services import memory_service
+    from app.tests.memory_fakes import FakeMemoryBackend
+
+    backend = FakeMemoryBackend()
+    monkeypatch.setattr(memory_service, "get_memory_backend", lambda: backend)
+    yield backend
+
+
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_after_all():
     """在测试会话结束后删除运行期间生成的临时夹具文件。"""

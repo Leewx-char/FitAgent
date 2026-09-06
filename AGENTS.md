@@ -134,3 +134,13 @@ API -> Service -> Repository -> Database / External System
 ## DRY 原则（不要重复）
 用函数、类、模块复用逻辑，不要复制粘贴。
 
+## 长期记忆修改边界
+
+- 长期记忆由 mem0 专用向量集合保存正文与元数据；不要恢复 MySQL 双写或在线回读旧 `memory_facts`。
+- `app/integrations/mem0_backend.py` 隔离 SDK；`memory_backend.py` 定义领域接口，Service/API 不接触 SDK 类型。
+- 只有用户消息可进入 LLM 提取；提取结果必须为 proposed，确认/撤销由鉴权后的管理 API 控制。
+- 由模型决定是否调用 `get_confirmed_memories(query)`；不得增加每轮自动注入全部长期记忆的逻辑。
+- 查询强制用户隔离、confirmed 状态和有效期校验；外部故障不能被表示为用户没有记忆。
+- 旧数据迁移只通过 `python -m app.services.memory_migration`，默认预览；不得删除源数据。
+- 修改后运行 `.venv/Scripts/python.exe -m pytest app/tests/test_memory.py app/tests/test_memory_service.py app/tests/test_mem0_backend.py app/tests/test_memory_migration.py app/tests/test_chat.py -q -p no:cacheprovider`，并对改动文件运行 Ruff lint/format。
+
