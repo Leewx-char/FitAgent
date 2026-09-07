@@ -159,7 +159,7 @@ def test_early_window_without_user_text_does_not_create_invalid_cache(db):
 
 def test_human_payload_never_exceeds_fixed_character_budget(db):
     seed_messages(db, [("user", "很长的用户消息" * 500)] + [("user", "近期消息")] * 20)
-    model = FakeSummaryModel("第一段摘要", "第二段摘要")
+    model = FakeSummaryModel(*(["摘要"] * 10))
 
     SessionSummaryService(model).get_summary(db, user_id=7, session_id="s-7")
 
@@ -191,3 +191,14 @@ def test_matching_boundary_cache_is_reused_without_model_or_cache_mutation(db):
     assert model.calls == []
     assert row.content == original_content
     assert row.covered_through_message_id == boundary
+
+
+def test_long_prior_summary_keeps_a_fixed_source_budget_per_fold(db):
+    source = "x" * 3000
+    seed_messages(db, [("user", source)] + [("user", "近期消息")] * 20)
+    model = FakeSummaryModel(*(["摘要" * 1200] * 700))
+
+    SessionSummaryService(model).get_summary(db, user_id=7, session_id="s-7")
+
+    assert all(len(call[1].content) <= MAX_SUMMARY_CHARS for call in model.calls)
+    assert len(model.calls) == 3
