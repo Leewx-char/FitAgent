@@ -197,11 +197,15 @@ def test_active_docs_do_not_describe_removed_session_facts():
         root / "docs/interview/技术亮点.md",
     ]
     required_terms = [
-        "当前会话最近 20 条原始 user/assistant 消息",
+        "当前会话最近 20 条原始消息",
         "分类器仅见最新 6 条",
-        "MySQL session_summaries v2 缓存",
-        "当前窗口不足以解释早期引用时，Agent 调用 get_session_summary",
-        "只压缩早期 user 消息，不是长期记忆",
+        "MySQL session_summaries v3 缓存",
+        "当前窗口不足以解释早期引用时，Agent 按需调用 get_session_summary",
+        "压缩早期全部已存储消息",
+        "不按角色过滤",
+        "不可信任务上下文",
+        "不能发出指令",
+        "当前系统规则或最近消息冲突时以后者为准",
         "mem0",
         "用户消息提取为 proposed",
         "get_confirmed_memories(query)",
@@ -212,5 +216,7 @@ def test_active_docs_do_not_describe_removed_session_facts():
         content = document_path.read_text(encoding="utf-8")
         assert "session_facts" not in content, document_path
         assert "确定性提取" not in content, document_path
+        assert "session_summaries v2" not in content, document_path
+        assert "只压缩早期 user 消息" not in content, document_path
         for term in required_terms:
             assert term in content, f"{document_path} is missing: {term}"

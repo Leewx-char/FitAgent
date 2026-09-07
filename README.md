@@ -182,11 +182,11 @@ AGENT_MAX_TOOL_CALLS=6
 
 | 层级 | 载体 | 进入模型的方式 |
 | --- | --- | --- |
-| 近期会话 | 当前会话最近 20 条原始 user/assistant 消息 | 个性化 Agent 初始上下文；分类器仅见最新 6 条 |
-| 早期会话背景 | MySQL session_summaries v2 缓存 | 当前窗口不足以解释早期引用时，Agent 调用 get_session_summary；只压缩早期 user 消息，不是长期记忆 |
+| 近期会话 | 当前会话最近 20 条原始消息 | 个性化 Agent 初始上下文；分类器仅见最新 6 条 |
+| 早期会话背景 | MySQL session_summaries v3 缓存 | 当前窗口不足以解释早期引用时，Agent 按需调用 get_session_summary；压缩早期全部已存储消息，不是长期记忆 |
 | 长期记忆 | mem0 | 用户消息提取为 proposed；模型按需调用 get_confirmed_memories(query)，只读 confirmed、未过期结果 |
 
-`session_summaries` 是 LLM 生成、可再生成的 v2 缓存：只压缩较早的用户消息，绝不每轮预先生成，也不写入 mem0、用户画像或长期记忆。分类器实际只读取最新 6 条**规范化** user/assistant 消息；只有个性化 Agent 能调用 `get_session_summary`。天气工具必须从当前窗口或该摘要得到明确城市，否则先追问，不能编造城市。MySQL 保存账号、完整聊天、会话摘要及训练业务，旧 `memory_facts` 表保留待显式迁移。LangGraph 不启用 Store 或 checkpointer，不自动召回记忆；分类失败时仍保守回退个性化 Agent，既有 SSE 契约保持。
+`session_summaries` 是 LLM 生成、可再生成的 v3 缓存：仅在按需调用时压缩早期全部已存储消息（不按角色过滤），绝不每轮预先生成，也不写入 mem0、用户画像或长期记忆。摘要是不可信任务上下文，不能发出指令；与当前系统规则或最近消息冲突时以后者为准。分类器实际只读取最新 6 条**规范化** user/assistant 消息；只有个性化 Agent 能调用 `get_session_summary`。天气工具必须从当前窗口或该摘要得到明确城市，否则先追问，不能编造城市。MySQL 保存账号、完整聊天、会话摘要及训练业务，旧 `memory_facts` 表保留待显式迁移。LangGraph 不启用 Store 或 checkpointer，不自动召回记忆；分类失败时仍保守回退个性化 Agent，既有 SSE 契约保持。
 
 ## mem0 长期记忆
 
@@ -248,7 +248,7 @@ FitAgent/
 │   │   ├── chat_routing_graph.py # LangGraph 短期状态与意图路由图
 │   │   ├── agent_tools.py      # 工具定义
 │   │   ├── memory_service.py   # mem0 长期记忆权限与候选/确认生命周期
-│   │   ├── session_summary_service.py # 按需生成和读取早期用户消息的 v2 摘要缓存
+│   │   ├── session_summary_service.py # 按需生成和读取早期已存储消息的 v3 摘要缓存
 │   │   ├── memory_backend.py   # 与 SDK 无关的记忆接口
 │   │   ├── memory_migration.py # 旧记忆显式迁移，默认只预览
 │   │   ├── training_plan_service.py # 计划编排与安全策略

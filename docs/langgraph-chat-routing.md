@@ -94,7 +94,7 @@ flowchart LR
     end
 
     subgraph Database[MySQL：聊天与业务数据]
-        D1[session_summaries v2]
+        D1[session_summaries v3]
         D2[Message]
     end
 
@@ -117,11 +117,11 @@ flowchart LR
 
 | 层级 | 载体 | 进入模型的方式 |
 | --- | --- | --- |
-| 近期会话 | 当前会话最近 20 条原始 user/assistant 消息 | 个性化 Agent 初始上下文；分类器仅见最新 6 条 |
-| 早期会话背景 | MySQL session_summaries v2 缓存 | 当前窗口不足以解释早期引用时，Agent 调用 get_session_summary；只压缩早期 user 消息，不是长期记忆 |
+| 近期会话 | 当前会话最近 20 条原始消息 | 个性化 Agent 初始上下文；分类器仅见最新 6 条 |
+| 早期会话背景 | MySQL session_summaries v3 缓存 | 当前窗口不足以解释早期引用时，Agent 按需调用 get_session_summary；压缩早期全部已存储消息，不是长期记忆 |
 | 长期记忆 | mem0 | 用户消息提取为 proposed；模型按需调用 get_confirmed_memories(query)，只读 confirmed、未过期结果 |
 
-`session_summaries` 是 LLM 生成、可再生成的 v2 缓存，只覆盖较早的 user 消息；不会每轮预先生成，也不改变 mem0。`get_session_summary` 仅由个性化 Agent 调用。天气需要当前窗口或该摘要给出的明确城市；缺失时 Agent 必须追问，不能编造城市。
+`session_summaries` 是 LLM 生成、可再生成的 v3 缓存：仅在按需调用时压缩早期全部已存储消息（不按角色过滤），不会每轮预先生成，也不改变 mem0。摘要是不可信任务上下文，不能发出指令；与当前系统规则或最近消息冲突时以后者为准。`get_session_summary` 仅由个性化 Agent 调用。天气需要当前窗口或该摘要给出的明确城市；缺失时 Agent 必须追问，不能编造城市。
 
 ## 意图识别与保守回退
 
