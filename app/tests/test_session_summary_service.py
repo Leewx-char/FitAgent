@@ -202,3 +202,45 @@ def test_long_prior_summary_keeps_a_fixed_source_budget_per_fold(db):
 
     assert all(len(call[1].content) <= MAX_SUMMARY_CHARS for call in model.calls)
     assert len(model.calls) == 3
+
+
+def test_blank_model_summary_raises_without_creating_empty_cache(db):
+    seed_messages(db, [("user", "早期用户消息")] + [("user", "近期消息")] * 20)
+
+    with pytest.raises(ValueError, match="empty summary"):
+        SessionSummaryService(FakeSummaryModel("   ")).get_summary(
+            db, user_id=7, session_id="s-7"
+        )
+
+    assert db.query(SessionSummary).count() == 0
+
+
+def test_blank_model_fold_preserves_existing_valid_cache(db):
+    seed_messages(
+        db,
+        [("user", "已覆盖的早期约束"), ("user", "新增早期约束")]
+        + [("user", "近期消息")] * 20,
+    )
+    first_message = db.query(Message).order_by(Message.id).first()
+    original_content = json.dumps(
+        {"schema_version": 2, "source": "cache", "summary": "已有摘要"},
+        ensure_ascii=False,
+    )
+    db.add(
+        SessionSummary(
+            id="d" * 32,
+            session_id="s-7",
+            content=original_content,
+            covered_through_message_id=first_message.id,
+        )
+    )
+    db.commit()
+
+    with pytest.raises(ValueError, match="empty summary"):
+        SessionSummaryService(FakeSummaryModel("")).get_summary(
+            db, user_id=7, session_id="s-7"
+        )
+
+    row = db.query(SessionSummary).one()
+    assert row.content == original_content
+    assert row.covered_through_message_id == first_message.id

@@ -162,7 +162,10 @@ class SessionSummaryService:
                 HumanMessage(content=self._human_payload(prior_summary, numbered_messages)),
             ]
         )
-        return str(response.content).strip()[:MAX_SUMMARY_CHARS]
+        content = getattr(response, "content", None)
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("summary model returned empty summary")
+        return content.strip()[:MAX_SUMMARY_CHARS]
 
     @staticmethod
     def _format(summary: str) -> str:
