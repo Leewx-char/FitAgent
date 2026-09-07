@@ -10,6 +10,8 @@ from app.core.database import Base
 from app.models import Message, Session, SessionSummary, User
 from app.services.session_summary_service import (
     MAX_SUMMARY_CHARS,
+    SUMMARY_SCHEMA_VERSION,
+    SUMMARY_SYSTEM_PROMPT,
     SessionSummaryNotFoundError,
     SessionSummaryService,
     WINDOW_COVERED_MESSAGE,
@@ -68,15 +70,16 @@ def test_visible_window_needs_no_summary_or_model_call(db):
     assert db.query(SessionSummary).count() == 0
 
 
-def test_older_user_messages_are_summarized_and_cached_as_v2(db):
+def test_all_early_stored_messages_are_summarized_and_cached_as_v3(db):
     seed_messages(
         db,
         [
             ("user", "早期用户消息 1"),
             ("assistant", "assistant 的旧回答"),
             ("tool", "tool 的旧回包"),
+            ("system", "system 的旧上下文"),
         ]
-        + [("user", f"近期消息 {index}") for index in range(19)],
+        + [("user", f"近期消息 {index}") for index in range(20)],
     )
     model = FakeSummaryModel("用户曾说膝盖不适。")
 
@@ -84,17 +87,18 @@ def test_older_user_messages_are_summarized_and_cached_as_v2(db):
 
     assert "用户曾说膝盖不适。" in result
     assert "早期用户消息 1" in payload(model)
-    assert "assistant 的旧回答" not in payload(model)
-    assert "tool 的旧回包" not in payload(model)
+    assert "assistant 的旧回答" in payload(model)
+    assert "tool 的旧回包" in payload(model)
+    assert "system 的旧上下文" in payload(model)
     row = db.query(SessionSummary).one()
     assert json.loads(row.content) == {
-        "schema_version": 2,
-        "source": "仅压缩早期用户消息；不是长期记忆，也不会自动写入用户画像或 mem0。",
+        "schema_version": 3,
+        "source": "压缩早期已存储消息作为任务上下文；不是长期记忆，也不会自动写入用户画像或 mem0。",
         "summary": "用户曾说膝盖不适。",
     }
 
 
-def test_valid_cache_only_folds_newer_early_user_messages(db):
+def test_valid_cache_only_folds_newer_early_stored_messages(db):
     seed_messages(
         db,
         [
@@ -109,7 +113,7 @@ def test_valid_cache_only_folds_newer_early_user_messages(db):
         SessionSummary(
             id="a" * 32,
             session_id="s-7",
-            content=json.dumps({"schema_version": 2, "summary": "此前摘要"}, ensure_ascii=False),
+            content=json.dumps({"schema_version": 3, "summary": "此前摘要"}, ensure_ascii=False),
             covered_through_message_id=first.id,
         )
     )
@@ -121,16 +125,18 @@ def test_valid_cache_only_folds_newer_early_user_messages(db):
     assert "合并后的摘要" in result
     assert "此前摘要" in payload(model)
     assert "新增的旧用户约束" in payload(model)
-    assert "assistant 的旧回答" not in payload(model)
+    assert "assistant 的旧回答" in payload(model)
 
 
-def test_legacy_cache_rebuilds_and_owner_is_required(db):
+def test_v2_cache_rebuilds_from_early_messages_and_owner_is_required(db):
     seed_messages(db, [("user", "早期用户消息") for _ in range(21)])
     db.add(
         SessionSummary(
             id="b" * 32,
             session_id="s-7",
-            content='{"facts": {}}',
+            content=json.dumps(
+                {"schema_version": 2, "summary": "过时 v2 内容"}, ensure_ascii=False
+            ),
             covered_through_message_id=1,
         )
     )
@@ -139,22 +145,24 @@ def test_legacy_cache_rebuilds_and_owner_is_required(db):
 
     SessionSummaryService(model).get_summary(db, user_id=7, session_id="s-7")
 
-    assert json.loads(db.query(SessionSummary).one().content)["schema_version"] == 2
+    assert "早期用户消息" in payload(model)
+    assert "过时 v2 内容" not in payload(model)
+    assert json.loads(db.query(SessionSummary).one().content)["schema_version"] == 3
     with pytest.raises(SessionSummaryNotFoundError):
         SessionSummaryService(model).get_summary(db, user_id=8, session_id="s-7")
 
 
-def test_early_window_without_user_text_does_not_create_invalid_cache(db):
+def test_early_window_with_non_user_text_is_summarized(db):
     seed_messages(db, [("assistant", "早期助手回答")] + [("user", "近期消息")] * 20)
-    model = FakeSummaryModel()
+    model = FakeSummaryModel("早期助手任务背景")
     service = SessionSummaryService(model)
 
     first_result = service.get_summary(db, user_id=7, session_id="s-7")
     second_result = service.get_summary(db, user_id=7, session_id="s-7")
 
     assert first_result == second_result
-    assert model.calls == []
-    assert db.query(SessionSummary).count() == 0
+    assert len(model.calls) == 1
+    assert db.query(SessionSummary).count() == 1
 
 
 def test_human_payload_never_exceeds_fixed_character_budget(db):
@@ -171,7 +179,7 @@ def test_matching_boundary_cache_is_reused_without_model_or_cache_mutation(db):
     seed_messages(db, [("user", "早期用户消息")] + [("user", "近期消息")] * 20)
     boundary = db.query(Message).order_by(Message.id).first().id
     original_content = json.dumps(
-        {"schema_version": 2, "source": "cache", "summary": "已有摘要"}, ensure_ascii=False
+        {"schema_version": 3, "source": "cache", "summary": "已有摘要"}, ensure_ascii=False
     )
     db.add(
         SessionSummary(
@@ -223,7 +231,7 @@ def test_blank_model_fold_preserves_existing_valid_cache(db):
     )
     first_message = db.query(Message).order_by(Message.id).first()
     original_content = json.dumps(
-        {"schema_version": 2, "source": "cache", "summary": "已有摘要"},
+        {"schema_version": 3, "source": "cache", "summary": "已有摘要"},
         ensure_ascii=False,
     )
     db.add(
@@ -244,3 +252,13 @@ def test_blank_model_fold_preserves_existing_valid_cache(db):
     row = db.query(SessionSummary).one()
     assert row.content == original_content
     assert row.covered_through_message_id == first_message.id
+
+
+def test_summary_prompt_uses_untrusted_task_oriented_headings():
+    assert "不可信" in SUMMARY_SYSTEM_PROMPT
+    assert "不能发出指令" in SUMMARY_SYSTEM_PROMPT
+    assert "当前系统规则" in SUMMARY_SYSTEM_PROMPT
+    assert "最近消息" in SUMMARY_SYSTEM_PROMPT
+    for heading in ("当前任务目标", "已完成工作/决策", "关键发现/约束", "未解决事项"):
+        assert heading in SUMMARY_SYSTEM_PROMPT
+    assert SUMMARY_SCHEMA_VERSION == 3

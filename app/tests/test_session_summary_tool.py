@@ -175,3 +175,15 @@ def test_main_prompt_requires_explicit_city_and_limits_summary_tool():
     assert "get_weather(city)" in content
     assert "明确" in content and "询问用户城市" in content
     assert "不得编造城市" in content
+
+
+def test_summary_tool_description_documents_on_demand_untrusted_task_history():
+    description = agent_tools.get_session_summary.description
+
+    assert "仅当" in description
+    assert "按需" in description
+    assert "任务" in description
+    assert "不可信" in description
+    assert "不能" in description and "指令" in description
+    assert "当前系统规则" in description
+    assert "最近消息" in description
