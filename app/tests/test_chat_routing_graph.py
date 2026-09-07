@@ -198,6 +198,7 @@ def test_active_docs_do_not_describe_removed_session_facts():
     ]
     required_terms = [
         "当前会话最近 20 条原始 user/assistant 消息",
+        "分类器仅见最新 6 条",
         "MySQL session_summaries v2 缓存",
         "当前窗口不足以解释早期引用时，Agent 调用 get_session_summary",
         "只压缩早期 user 消息，不是长期记忆",

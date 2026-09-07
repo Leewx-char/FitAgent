@@ -19,7 +19,7 @@
 | 早期会话背景 | MySQL session_summaries v2 缓存 | 当前窗口不足以解释早期引用时，Agent 调用 get_session_summary；只压缩早期 user 消息，不是长期记忆 |
 | 长期记忆 | mem0 | 用户消息提取为 proposed；模型按需调用 get_confirmed_memories(query)，只读 confirmed、未过期结果 |
 
-`session_summaries` 是 LLM 生成、可再生成的 v2 缓存，只压缩早期 user 消息。它不属于 mem0，不会每轮预先生成，也不会改变 mem0 候选、确认、检索或 Qdrant 存储。只有个性化 Agent 能调用 `get_session_summary`；摘要服务不自动读取长期记忆。
+`session_summaries` 是 LLM 生成、可再生成的 v2 缓存，只压缩早期 user 消息。它不属于 mem0，不会每轮预先生成，也不会改变 mem0 候选、确认、检索或 Qdrant 存储。分类器只读取最新 6 条规范化 user/assistant 消息；只有个性化 Agent 能调用 `get_session_summary`；摘要服务不自动读取长期记忆。
 
 ## 写入
 
