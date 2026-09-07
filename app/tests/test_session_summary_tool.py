@@ -72,6 +72,29 @@ def test_summary_tool_without_runtime_identity_does_not_build_dependencies(
     assert result == "当前请求没有可用的会话身份，无法读取早期会话上下文。"
 
 
+def test_summary_tool_with_explicit_null_session_id_does_not_build_dependencies(
+    monkeypatch,
+):
+    def unexpected_call(*_args, **_kwargs):
+        raise AssertionError("summary dependencies must not be built")
+
+    monkeypatch.setattr(agent_tools, "get_db_session", unexpected_call)
+    monkeypatch.setattr(agent_tools, "get_chat_model", unexpected_call)
+    monkeypatch.setattr(agent_tools, "SessionSummaryService", unexpected_call)
+    runtime = ToolRuntime(
+        state={"retrieval_history": [], "rag_evidence": [], "tool_call_count": 0},
+        context=SimpleNamespace(user_id=23, session_id=None),
+        config={},
+        stream_writer=lambda _event: None,
+        tool_call_id="summary-null-session",
+        store=None,
+    )
+
+    assert agent_tools.get_session_summary.func(runtime=runtime) == (
+        "当前请求没有可用的会话身份，无法读取早期会话上下文。"
+    )
+
+
 @pytest.mark.parametrize("failure_stage", ["model", "constructor", "database", "ownership"])
 def test_summary_tool_hides_dependency_failures(monkeypatch, failure_stage):
     secret = "synthetic-secret"
