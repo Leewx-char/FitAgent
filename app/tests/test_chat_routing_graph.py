@@ -1,6 +1,7 @@
 """LangGraph 聊天路由图的行为测试。"""
 
 import json
+from pathlib import Path
 
 from app.services.chat_routing_graph import (
     ChatRuntimeContext,
@@ -182,3 +183,33 @@ def test_graph_node_receives_runtime_context_from_graph_invocation():
     assert received_contexts == [runtime_context]
     assert "u-1" not in json.dumps(result, ensure_ascii=False)
     assert "secret-value" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_active_docs_do_not_describe_removed_session_facts():
+    """Active architecture docs describe the current three-layer context boundary."""
+    root = Path(__file__).resolve().parents[2]
+    document_paths = [
+        root / "README.md",
+        root / "docs/langgraph-chat-routing.md",
+        root / "docs/learning-guide.md",
+        root / "docs/memory-architecture.md",
+        root / "docs/interview/常见面试题.md",
+        root / "docs/interview/技术亮点.md",
+    ]
+    required_terms = [
+        "当前会话最近 20 条原始 user/assistant 消息",
+        "MySQL session_summaries v2 缓存",
+        "当前窗口不足以解释早期引用时，Agent 调用 get_session_summary",
+        "只压缩早期 user 消息，不是长期记忆",
+        "mem0",
+        "用户消息提取为 proposed",
+        "get_confirmed_memories(query)",
+        "只读 confirmed、未过期结果",
+    ]
+
+    for document_path in document_paths:
+        content = document_path.read_text(encoding="utf-8")
+        assert "session_facts" not in content, document_path
+        assert "确定性提取" not in content, document_path
+        for term in required_terms:
+            assert term in content, f"{document_path} is missing: {term}"

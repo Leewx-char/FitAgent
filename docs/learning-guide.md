@@ -24,10 +24,12 @@ flowchart LR
   U[用户在 Chat.vue 输入问题] --> FE[fetch POST /api/chat]
   FE --> API[chat Router]
   API --> DB1[(MySQL: session / message)]
-  API --> MEM[记忆候选与会话摘要]
+  API --> MEM[mem0 记忆候选]
   API --> A{ReactAgent 路由}
   A -->|通用知识| RAG[Dense + BM25 + RRF]
   A -->|个性化问题| LG[LangGraph Agent + 工具]
+  LG -->|仅早期引用无法解释时| SS[get_session_summary]
+  SS --> DB1
   RAG --> LLM[流式模型回答]
   LG --> LLM
   LLM --> SSE[SSE text / tool / evidence / error + DONE]
@@ -42,7 +44,7 @@ flowchart LR
 ### 按顺序阅读
 
 1. [Chat.vue](../frontend/src/views/Chat.vue) 的 `sendMessage`：确认它使用 `fetch` 发送 JWT、`message` 和 `session_id`，再用 `ReadableStream` 逐段解析 SSE。
-2. [chat.py](../app/api/routers/chat.py) 的 `chat`：依次完成参数校验、创建/校验会话、持久化用户消息、创建记忆候选、读取历史、刷新会话摘要，然后返回 `StreamingResponse`。
+2. [chat.py](../app/api/routers/chat.py) 的 `chat`：依次完成参数校验、创建/校验会话、持久化用户消息、创建 mem0 记忆候选、读取最近历史，然后返回 `StreamingResponse`；它不会每轮刷新会话摘要。
 3. 同文件的 `sse_generator`：它在请求开始时创建 LangChain 官方 `RunCollectorCallbackHandler`，把它经 `RunnableConfig.callbacks` 传给图；随后把同步生成器放到 executor 中逐块取值，转换为 `text`、`tool`、`evidence`、`error` 四类 SSE 事件。正常结束额外发送 `[DONE]`，前端在 `[DONE]` 或 `error` 时收敛加载状态；SSE 流结束后，才将 Collector 在内存中的运行树投影到既有 MySQL `agent_runs`、`agent_tool_calls`，并持久化 assistant 回复。这里不使用 LangSmith，也不新增日志表或路由。
 4. [react_agent.py](../app/services/react_agent.py) 的 `execute_stream`：它构造 `ChatRuntimeContext` 与初始 `ChatGraphState`，消费图的 custom stream，再编码为既有 SSE JSON 行。
 5. [chat_routing_graph.py](../app/services/chat_routing_graph.py)：`StateGraph` 先让模型以结构化 `IntentDecision` 分类；明确的通用知识进入 Direct RAG，个性化、模糊或分类失败都进入个性化 Agent。Direct RAG 先发“检索知识库”事件，发送真实证据卡片，再流式生成答案。
@@ -72,8 +74,8 @@ flowchart LR
 
 改问：`结合我的膝盖情况和最近训练数据，安排今天的训练。` 这会绕过 Direct RAG，进入 LangGraph Agent。此时不要试图读懂 LangGraph 内部实现，先关注**本项目给模型什么工具、什么上下文、什么预算**。
 
-1. 回看 `ReactAgent.execute_stream` 与 [chat_routing_graph.py](../app/services/chat_routing_graph.py)：入口只注入 `ChatRuntimeContext`（身份、城市和依赖）与 JSON 安全的短期 `ChatGraphState`；个性化节点把同一个 context 传给内层 Agent。运行记录不在 context 中：HTTP 层把官方 Collector 放入 `RunnableConfig.callbacks`。
-2. 看 [agent_tools.py](../app/services/agent_tools.py)：重点查看 `rag_summarize`、`get_user_profile`、`get_confirmed_memories`、`get_fitness_summary`。它们通过 `ToolRuntime` 读取请求上下文、把证据等短期产物写回 state。
+1. 回看 `ReactAgent.execute_stream` 与 [chat_routing_graph.py](../app/services/chat_routing_graph.py)：GraphState 只保存原始消息、路由、检索产物、工具计数和 SSE 事件；`ChatRuntimeContext` 是可信请求身份与依赖，**没有 city 字段**。分类器至多看到最新 6 条规范化消息，个性化节点把最新 20 条原始消息和同一个 context 传给内层 Agent。运行记录不在 context 中：HTTP 层把官方 Collector 放入 `RunnableConfig.callbacks`。
+2. 看 [agent_tools.py](../app/services/agent_tools.py)：重点查看 `rag_summarize`、`get_user_profile`、`get_session_summary`、`get_confirmed_memories`、`get_fitness_summary`。它们通过 `ToolRuntime` 读取请求上下文、把证据等短期产物写回 state。只有个性化 Agent 能调用 `get_session_summary`；天气没有当前窗口或该摘要中的明确城市时，必须追问，不能编造城市。
 3. 看 [middleware.py](../app/services/middleware.py)：理解递归步数、按同批工具位置计算的预算、脱敏审计分别在哪里被约束；并行工具调用的状态更新由 reducer 合并。
 4. 看 [repositories/agent_trace_repository.py](../app/repositories/agent_trace_repository.py)：理解 `RunCollectorCallbackHandler` 如何只在本次请求内存中收集根运行和工具运行，并在 SSE 结束后投影到既有 `agent_runs`、`agent_tool_calls`。记录包含用户问题、最终回答、工具输入和工具输出；不接入 LangSmith，也不增加日志表或查询路由。
 
@@ -109,16 +111,15 @@ flowchart LR
 
 ## 4. 重点补课：记忆不是“全量聊天记录”（45–60 分钟）
 
-从 [记忆架构](memory-architecture.md)、[memory_service.py](../app/services/memory_service.py) 和 [session_facts.py](../app/services/session_facts.py) 开始，再看 [mem0_backend.py](../app/integrations/mem0_backend.py)、[memory.py](../app/api/routers/memory.py) 与 [test_memory.py](../app/tests/test_memory.py)。
+从 [记忆架构](memory-architecture.md)、[session_summary_service.py](../app/services/session_summary_service.py) 和 [memory_service.py](../app/services/memory_service.py) 开始，再看 [mem0_backend.py](../app/integrations/mem0_backend.py)、[memory.py](../app/api/routers/memory.py) 与 [test_memory.py](../app/tests/test_memory.py)。
 
-| 层级 | 表/载体 | 如何写入 | 是否直接给 Agent |
-| --- | --- | --- | --- |
-| 近期上下文 | `messages` 最近 10 轮（20 条） | 聊天原文 | 是，当前会话内 |
-| 会话暂存状态 | `session_summaries` | 仅从较早的 user 消息确定性提取，可重建 | 是，但标注来源与时效 |
-| 长期记忆 | mem0 主向量库正文与元数据 | LLM 提取为 `proposed`，用户确认或撤销 | 模型自主调用查询工具后语义检索，仅 `confirmed`、未过期，默认最多 6 条 |
-| 提取上下文与变更日志 | mem0 SQLite | 每个会话最近 10 条提取输入与记忆变更历史 | 不作为完整聊天历史注入 Agent |
+| 层级 | 载体 | 进入模型的方式 |
+| --- | --- | --- |
+| 近期会话 | 当前会话最近 20 条原始 user/assistant 消息 | 个性化 Agent 初始上下文；分类器仅见最新 6 条 |
+| 早期会话背景 | MySQL session_summaries v2 缓存 | 当前窗口不足以解释早期引用时，Agent 调用 get_session_summary；只压缩早期 user 消息，不是长期记忆 |
+| 长期记忆 | mem0 | 用户消息提取为 proposed；模型按需调用 get_confirmed_memories(query)，只读 confirmed、未过期结果 |
 
-一定要追踪这条防污染规则：`chat()` 在模型生成前只将**用户消息**交给 mem0，通过 LLM 提取待确认候选，按用户和会话隔离上下文；`extract_session_facts` 忽略 `assistant/tool` 消息。候选必须经过用户确认，才能进入语义检索结果。
+`session_summaries` 是 LLM 生成、可再生成的 v2 缓存，只从早期 user 消息生成。它不是长期记忆，不会每轮预先生成，也不会改动 mem0。一定要追踪这条防污染规则：`chat()` 在模型生成前只将**用户消息**交给 mem0，通过 LLM 提取待确认候选，按用户和会话隔离上下文；assistant/tool 文本不进入该输入。候选必须经过用户确认，才能进入语义检索结果。
 
 完成标准：你能解释“为什么摘要不是长期记忆”“为什么候选不能直接提供给 Agent”“模型何时选择查询长期记忆”“冲突候选为何需要用户自行确认新值并撤销旧值”。旧 `memory_facts` 只保留待显式迁移，在线链路不再读写该表。
 
