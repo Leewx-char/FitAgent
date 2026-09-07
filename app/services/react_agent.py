@@ -15,6 +15,7 @@ from app.services.agent_tools import (
     build_evidence_cards,
     get_weather,
     get_user_id,
+    get_session_summary,
     trigger_report,
     get_current_month,
     get_user_profile,
@@ -39,6 +40,7 @@ TOOL_DISPLAY = {
     "get_weather": "查询天气",
     "get_current_month": "获取月份",
     "get_user_id": "获取用户ID",
+    "get_session_summary": "读取早期会话摘要",
     "trigger_report": "生成报告",
     "get_fitness_summary": "获取运动数据",
 }
@@ -140,6 +142,7 @@ class ReactAgent:
                 rag_summarize,
                 get_weather,
                 get_user_id,
+                get_session_summary,
                 get_current_month,
                 get_user_profile,
                 get_confirmed_memories,

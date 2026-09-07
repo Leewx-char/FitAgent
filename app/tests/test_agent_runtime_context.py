@@ -139,6 +139,8 @@ def test_inner_agent_declares_runtime_context_and_short_term_state(monkeypatch):
 
     assert captured["context_schema"] is ChatRuntimeContext
     assert captured["state_schema"] is react_agent.PersonalizedAgentState
+    assert react_agent.TOOL_DISPLAY["get_session_summary"] == "读取早期会话摘要"
+    assert "get_session_summary" in {tool.name for tool in captured["tools"]}
     assert "get_user_location" not in react_agent.TOOL_DISPLAY
     assert "get_user_location" not in {tool.name for tool in captured["tools"]}
 

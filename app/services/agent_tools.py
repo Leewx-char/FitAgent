@@ -21,6 +21,8 @@ from app.services.fitness_insights import (
     load_fitness_snapshot,
 )
 from app.services.memory_service import MemoryService
+from app.services.factory import get_chat_model
+from app.services.session_summary_service import SessionSummaryService
 from app.core.settings import get_settings
 
 
@@ -285,6 +287,28 @@ def get_user_id(runtime: ToolRuntime):
     if user_id:
         return str(user_id)
     return "当前会话未绑定用户ID，请让用户明确提供用户ID。"
+
+
+@tool(
+    description=(
+        "仅当最近对话不足以解析用户对早期会话、既往偏好或先前约束的引用时，"
+        "读取当前会话的早期用户消息摘要。普通知识问答或当前窗口信息充分时不得调用。"
+    )
+)
+def get_session_summary(runtime: ToolRuntime) -> str:
+    """使用工具运行时中的可信身份读取当前会话的早期摘要。"""
+    user_id = _runtime_context_value(runtime, "user_id")
+    session_id = str(_runtime_context_value(runtime, "session_id", "")).strip()
+    if not user_id or not session_id:
+        return "当前请求没有可用的会话身份，无法读取早期会话上下文。"
+    try:
+        with get_db_session() as db:
+            return SessionSummaryService(get_chat_model()).get_summary(
+                db, user_id=int(user_id), session_id=session_id
+            )
+    except Exception as error:
+        logger.warning("session summary tool unavailable: %s", type(error).__name__)
+        return "早期会话上下文暂不可用，请基于当前消息继续回答。"
 
 
 @tool(description="获取当前月份，格式为 YYYY-MM。")
