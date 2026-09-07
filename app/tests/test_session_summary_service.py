@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.database import Base
 from app.models import Message, Session, SessionSummary, User
 from app.services.session_summary_service import (
+    MAX_SUMMARY_CHARS,
     SessionSummaryNotFoundError,
     SessionSummaryService,
     WINDOW_COVERED_MESSAGE,
@@ -141,3 +142,52 @@ def test_legacy_cache_rebuilds_and_owner_is_required(db):
     assert json.loads(db.query(SessionSummary).one().content)["schema_version"] == 2
     with pytest.raises(SessionSummaryNotFoundError):
         SessionSummaryService(model).get_summary(db, user_id=8, session_id="s-7")
+
+
+def test_early_window_without_user_text_does_not_create_invalid_cache(db):
+    seed_messages(db, [("assistant", "早期助手回答")] + [("user", "近期消息")] * 20)
+    model = FakeSummaryModel()
+    service = SessionSummaryService(model)
+
+    first_result = service.get_summary(db, user_id=7, session_id="s-7")
+    second_result = service.get_summary(db, user_id=7, session_id="s-7")
+
+    assert first_result == second_result
+    assert model.calls == []
+    assert db.query(SessionSummary).count() == 0
+
+
+def test_human_payload_never_exceeds_fixed_character_budget(db):
+    seed_messages(db, [("user", "很长的用户消息" * 500)] + [("user", "近期消息")] * 20)
+    model = FakeSummaryModel("第一段摘要", "第二段摘要")
+
+    SessionSummaryService(model).get_summary(db, user_id=7, session_id="s-7")
+
+    assert model.calls
+    assert all(len(call[1].content) <= MAX_SUMMARY_CHARS for call in model.calls)
+
+
+def test_matching_boundary_cache_is_reused_without_model_or_cache_mutation(db):
+    seed_messages(db, [("user", "早期用户消息")] + [("user", "近期消息")] * 20)
+    boundary = db.query(Message).order_by(Message.id).first().id
+    original_content = json.dumps(
+        {"schema_version": 2, "source": "cache", "summary": "已有摘要"}, ensure_ascii=False
+    )
+    db.add(
+        SessionSummary(
+            id="c" * 32,
+            session_id="s-7",
+            content=original_content,
+            covered_through_message_id=boundary,
+        )
+    )
+    db.commit()
+    model = FakeSummaryModel()
+
+    result = SessionSummaryService(model).get_summary(db, user_id=7, session_id="s-7")
+
+    row = db.query(SessionSummary).one()
+    assert "已有摘要" in result
+    assert model.calls == []
+    assert row.content == original_content
+    assert row.covered_through_message_id == boundary
