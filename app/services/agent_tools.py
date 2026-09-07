@@ -278,13 +278,6 @@ def get_weather(city: str):
     )
 
 
-@tool(description="获取当前会话绑定的城市名称。未绑定时明确返回未知，不允许编造。")
-def get_user_location(runtime: ToolRuntime) -> str:
-    """返回当前请求注入的城市，缺失时明确要求用户补充。"""
-    city = str(_runtime_context_value(runtime, "city", "")).strip()
-    return city if city else "当前会话未绑定城市信息，请让用户明确提供所在城市。"
-
-
 @tool(description="获取当前会话绑定的用户ID。未绑定时明确返回未知，不允许随机生成。")
 def get_user_id(runtime: ToolRuntime):
     """返回当前会话用户标识或说明其缺失。"""

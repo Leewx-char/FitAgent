@@ -49,7 +49,6 @@ def test_rag_tool_forwards_recent_history_to_rag_service(monkeypatch):
         },
         context=ChatRuntimeContext(
             user_id=1,
-            city="",
             session_id="session-1",
             dependencies=SimpleNamespace(),
         ),
@@ -133,12 +132,10 @@ def test_direct_rag_graph_uses_latest_user_and_records_prior_history():
                 {"role": "assistant", "content": "好的。"},
                 {"role": "user", "content": "那膝盖呢？"},
                 {"role": "assistant", "content": "我先想一下。"},
-            ],
-            session_summary="",
+            ]
         ),
         context=ChatRuntimeContext(
             user_id=1,
-            city="",
             session_id="session-1",
             dependencies=SimpleNamespace(direct_rag_executor=executor),
         ),

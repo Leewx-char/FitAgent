@@ -14,7 +14,6 @@ from app.services.agent_tools import (
     _get_rag_service,
     build_evidence_cards,
     get_weather,
-    get_user_location,
     get_user_id,
     trigger_report,
     get_current_month,
@@ -38,7 +37,6 @@ TOOL_DISPLAY = {
     "get_confirmed_memories": "读取已确认记忆",
     "rag_summarize": "检索知识库",
     "get_weather": "查询天气",
-    "get_user_location": "获取位置",
     "get_current_month": "获取月份",
     "get_user_id": "获取用户ID",
     "trigger_report": "生成报告",
@@ -54,8 +52,6 @@ def _merge_tool_call_count(current: int, update: int) -> int:
 class PersonalizedAgentState(AgentState, total=False):
     """声明内层 Agent 在单次个性化执行中可读写的短期字段。"""
 
-    session_facts: dict[str, object]
-    session_summary: str
     retrieval_history: list[dict[str, object]]
     rag_evidence: Annotated[list[dict[str, object]], add]
     tool_call_limit: int
@@ -143,7 +139,6 @@ class ReactAgent:
             tools=[
                 rag_summarize,
                 get_weather,
-                get_user_location,
                 get_user_id,
                 get_current_month,
                 get_user_profile,
@@ -175,8 +170,6 @@ class ReactAgent:
         ]
         input_state = {
             "messages": state["messages"],
-            "session_facts": state["session_facts"],
-            "session_summary": state["session_summary"],
             "retrieval_history": retrieval_history,
             "rag_evidence": state["rag_evidence"],
             "tool_call_limit": self.max_tool_calls,
@@ -265,17 +258,14 @@ class ReactAgent:
         self,
         messages: list[dict],
         user_id: int | None = None,
-        city: str = "",
         session_id: str = "",
-        session_summary: str = "",
         config: RunnableConfig | None = None,
     ):
         """构造请求级图上下文，并编码兼容既有 SSE 的执行事件。"""
         normalized_messages = self._normalize_messages(messages)
-        initial_state = build_initial_chat_state(normalized_messages, session_summary)
+        initial_state = build_initial_chat_state(normalized_messages)
         runtime_context = ChatRuntimeContext(
             user_id=user_id or 0,
-            city=city or str(initial_state["session_facts"].get("city", "")),
             session_id=session_id,
             dependencies=SimpleNamespace(
                 direct_rag_executor=self.direct_rag_executor,
