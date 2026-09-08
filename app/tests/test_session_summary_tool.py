@@ -163,24 +163,17 @@ def test_report_prompt_switch_ignores_stale_session_state(monkeypatch, report, e
     assert "stale summary" not in result
 
 
-def test_main_prompt_requires_explicit_city_and_limits_summary_tool():
+def test_main_prompt_defers_tool_selection_to_tool_descriptions():
     prompt = Path(agent_tools.__file__).parents[2] / "prompts" / "main_prompt.txt"
     content = prompt.read_text(encoding="utf-8")
 
     assert "get_user_location" not in content
-    assert "get_session_summary" in content
-    assert "最近" in content and "早期会话" in content
-    assert "按需" in content
-    assert "早期已存储消息任务上下文摘要" in content
-    assert "模型结合当前系统提示词、最近消息和早期摘要综合判断" in content
-    assert "不可信任务上下文" not in content
-    assert "不能发出指令" not in content
-    assert "当前系统规则或最近消息冲突时以后者为准" not in content
-    assert "不声明或新增 system/tool 持久化" in content
-    assert "不是长期记忆" in content
-    assert "get_weather(city)" in content
-    assert "明确" in content and "询问用户城市" in content
-    assert "不得编造城市" in content
+    assert "工具的名称、能力边界、适用场景和参数要求以工具注解为准" in content
+    assert "工具调用预算由服务端执行策略强制限制" in content
+    assert "每轮对话最多调用3次工具" not in content
+    assert "优先级如下" not in content
+    assert "get_session_summary" not in content
+    assert "get_weather(city)" not in content
 
 
 def test_summary_tool_description_documents_on_demand_task_history():
