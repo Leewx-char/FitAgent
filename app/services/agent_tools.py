@@ -21,6 +21,8 @@ from app.services.fitness_insights import (
     load_fitness_snapshot,
 )
 from app.services.memory_service import MemoryService
+from app.services.factory import get_chat_model
+from app.services.session_summary_service import SessionSummaryService
 from app.core.settings import get_settings
 
 
@@ -278,13 +280,6 @@ def get_weather(city: str):
     )
 
 
-@tool(description="获取当前会话绑定的城市名称。未绑定时明确返回未知，不允许编造。")
-def get_user_location(runtime: ToolRuntime) -> str:
-    """返回当前请求注入的城市，缺失时明确要求用户补充。"""
-    city = str(_runtime_context_value(runtime, "city", "")).strip()
-    return city if city else "当前会话未绑定城市信息，请让用户明确提供所在城市。"
-
-
 @tool(description="获取当前会话绑定的用户ID。未绑定时明确返回未知，不允许随机生成。")
 def get_user_id(runtime: ToolRuntime):
     """返回当前会话用户标识或说明其缺失。"""
@@ -292,6 +287,30 @@ def get_user_id(runtime: ToolRuntime):
     if user_id:
         return str(user_id)
     return "当前会话未绑定用户ID，请让用户明确提供用户ID。"
+
+
+@tool(
+    description=(
+        "仅当最近对话不足以解析用户对早期会话、既往偏好或先前约束的引用时，"
+        "按需读取当前会话的早期任务导向摘要。模型会结合当前系统提示词、最近消息和早期摘要综合判断；"
+        "普通知识问答或当前窗口信息充分时不得调用。"
+    )
+)
+def get_session_summary(runtime: ToolRuntime) -> str:
+    """使用工具运行时中的可信身份读取当前会话的早期摘要。"""
+    user_id = _runtime_context_value(runtime, "user_id")
+    raw_session_id = _runtime_context_value(runtime, "session_id")
+    session_id = str(raw_session_id).strip() if raw_session_id is not None else ""
+    if not user_id or not session_id:
+        return "当前请求没有可用的会话身份，无法读取早期会话上下文。"
+    try:
+        with get_db_session() as db:
+            return SessionSummaryService(get_chat_model()).get_summary(
+                db, user_id=int(user_id), session_id=session_id
+            )
+    except Exception as error:
+        logger.warning("session summary tool unavailable: %s", type(error).__name__)
+        return "早期会话上下文暂不可用，请基于当前消息继续回答。"
 
 
 @tool(description="获取当前月份，格式为 YYYY-MM。")

@@ -56,7 +56,6 @@ def test_classifier_routes_generic_knowledge_question_to_direct_rag():
     route = classify_intent(
         {
             "messages": [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
-            "session_facts": {},
         },
         FakeIntentClassifier(IntentDecision(route="direct_rag")),
     )
@@ -68,7 +67,6 @@ def test_classifier_routes_personalized_question_to_agent():
     route = classify_intent(
         {
             "messages": [{"role": "user", "content": "结合我的体重安排减脂训练。"}],
-            "session_facts": {"weight": "75kg", "goal": "减脂"},
         },
         FakeIntentClassifier(IntentDecision(route="personalized_agent")),
     )
@@ -80,7 +78,6 @@ def test_classifier_failure_falls_back_to_personalized_agent():
     route = classify_intent(
         {
             "messages": [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
-            "session_facts": {},
         },
         FakeIntentClassifier(RuntimeError("classifier unavailable")),
     )
@@ -92,7 +89,6 @@ def test_invalid_structured_result_falls_back_to_personalized_agent():
     route = classify_intent(
         {
             "messages": [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
-            "session_facts": {},
         },
         FakeIntentClassifier({"route": "unsupported"}),
     )
@@ -104,7 +100,6 @@ def test_classifier_rejects_runtime_object_from_graph_state():
     route = classify_intent(
         {
             "messages": [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
-            "session_facts": {},
             "events": [{"trace": object()}],
         },
         FakeIntentClassifier(IntentDecision(route="direct_rag")),
@@ -377,12 +372,10 @@ def test_direct_rag_graph_emits_tool_evidence_then_text():
                 {"role": "user", "content": "先说深蹲。"},
                 {"role": "assistant", "content": "好的。"},
                 {"role": "user", "content": "那膝盖呢？"},
-            ],
-            session_summary="",
+            ]
         ),
         context=ChatRuntimeContext(
             user_id=1,
-            city="",
             session_id="session-1",
             dependencies=SimpleNamespace(direct_rag_executor=executor),
         ),
@@ -449,12 +442,10 @@ def test_direct_rag_graph_rejects_non_json_executor_events():
     with pytest.raises(ValueError, match="不可序列化"):
         graph.invoke(
             build_initial_chat_state(
-                messages=[{"role": "user", "content": "解释一下深蹲。"}],
-                session_summary="",
+                messages=[{"role": "user", "content": "解释一下深蹲。"}]
             ),
             context=ChatRuntimeContext(
                 user_id=1,
-                city="",
                 session_id="session-1",
                 dependencies=SimpleNamespace(direct_rag_executor=FakeDirectRagExecutor()),
             ),

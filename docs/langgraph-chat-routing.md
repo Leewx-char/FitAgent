@@ -41,7 +41,7 @@ flowchart TB
 
 ## 当前请求链路
 
-`chat.py` 只负责会话保存和 SSE 响应；它将稳定的 `session_id` 传入 `ReactAgent.execute_stream`，不再承担城市提取或业务分流。
+`chat.py` 只负责会话保存和 SSE 响应；它将稳定的 `session_id` 与当前会话最近 20 条原始消息传入 `ReactAgent.execute_stream`，不再承担城市提取、会话摘要预生成或业务分流。
 
 ```mermaid
 sequenceDiagram
@@ -51,17 +51,20 @@ sequenceDiagram
     participant G as LangGraph
     participant LLM as 分类/回答模型
     participant T as RAG 与 Agent 工具
+    participant SS as 会话摘要工具
 
     C->>API: POST /api/chat
-    API->>RA: messages, user_id, session_id, summary
+    API->>RA: 最近 20 条原始 messages, user_id, session_id
     RA->>RA: 构造初始 ChatGraphState
     RA->>RA: 构造 ChatRuntimeContext
     RA->>G: stream(state, context)
-    G->>LLM: 结构化意图分类
+    G->>LLM: 仅最新 6 条规范化消息的结构化意图分类
     alt 直接 RAG
         G->>T: 检索知识库并生成回答
     else 个性化 Agent 或分类失败
         G->>LLM: 执行现有 ReAct Agent
+        LLM->>SS: 早期引用无法由当前窗口解释时调用 get_session_summary
+        SS-->>LLM: 可再生成的 v2 早期 user 消息摘要
         LLM->>T: 调用画像、记忆、运动摘要等工具
     end
     T-->>G: tool / evidence / text 事件
@@ -72,34 +75,38 @@ sequenceDiagram
 
 ## 状态边界
 
-一次请求内可序列化的数据放入 `ChatGraphState`；需要信任或不可序列化的对象仅通过 `ChatRuntimeContext` 注入。完整聊天和会话摘要由 MySQL 管理，跨会话长期记忆由 mem0 管理。
+一次请求内可序列化的数据放入 `ChatGraphState`；需要信任或不可序列化的对象仅通过 `ChatRuntimeContext` 注入。GraphState 包含原始消息、路由、检索产物、工具计数和 SSE 事件；RuntimeContext 是可信的请求身份和依赖，**没有 city 字段**。完整聊天和会话摘要由 MySQL 管理，跨会话长期记忆由 mem0 管理。
 
 ```mermaid
 flowchart LR
     subgraph Runtime[ChatRuntimeContext：一次请求的可信依赖]
-        R1[user_id / session_id / city]
-        R2[追踪对象]
+        R1[user_id / session_id]
+        R2[可信请求依赖]
         R3[直接 RAG 与个性化执行器]
         R4[工具预算配置]
     end
 
     subgraph State[ChatGraphState：一次图执行的 JSON 数据]
-        S1[消息与会话事实]
+        S1[原始消息]
         S2[路由结果]
-        S3[检索历史与证据]
+        S3[检索产物]
         S4[工具计数与 SSE 事件]
     end
 
     subgraph Database[MySQL：聊天与业务数据]
-        D1[SessionSummary]
+        D1[session_summaries v3]
         D2[Message]
     end
 
     Memory[mem0：长期记忆正文与状态]
+    Agent[个性化 Agent]
+    Summary[get_session_summary]
 
     Runtime -->|只读注入| State
     State -->|既有服务读写| Database
-    State -->|模型决定调用查询工具| Memory
+    Agent -->|模型按需调用 get_confirmed_memories| Memory
+    Agent -->|唯一调用者；仅早期引用无法解释时| Summary
+    Summary --> Database
 ```
 
 这条边界带来三个约束：
@@ -108,13 +115,21 @@ flowchart LR
 - 直接 RAG 与个性化 Agent 在写回状态前都校验 JSON 安全性。
 - 不启用 LangGraph Store 或 checkpointer；MySQL 管理会话摘要，mem0 管理长期记忆，避免同一数据出现双写来源。
 
+| 层级 | 载体 | 进入模型的方式 |
+| --- | --- | --- |
+| 近期会话 | 当前会话最近 20 条原始消息 | 个性化 Agent 初始上下文；分类器仅见最新 6 条 |
+| 早期会话背景 | MySQL session_summaries v3 缓存 | 当前窗口不足以解释早期引用时，Agent 按需调用 get_session_summary；压缩早期全部已存储消息，不是长期记忆 |
+| 长期记忆 | mem0 | 用户消息提取为 proposed；模型按需调用 get_confirmed_memories(query)，只读 confirmed、未过期结果 |
+
+`session_summaries` 是 LLM 生成、可再生成的 v3 缓存：仅在按需调用时压缩早期全部已存储消息（不按角色过滤），不会每轮预先生成，也不改变 mem0。模型结合当前系统提示词、最近消息和早期摘要综合判断。`get_session_summary` 仅由个性化 Agent 调用。天气需要当前窗口或该摘要给出的明确城市；缺失时 Agent 必须追问，不能编造城市。
+
 ## 意图识别与保守回退
 
-分类器使用模型的 `with_structured_output(IntentDecision)`，只接受两种结果：`direct_rag` 或 `personalized_agent`。分类提示词只包含最后一条用户消息和最小会话事实。
+分类器使用模型的 `with_structured_output(IntentDecision)`，只接受两种结果：`direct_rag` 或 `personalized_agent`。分类提示词至多包含最新 6 条规范化 user/assistant 消息；个性化 Agent 的初始上下文才保留最新 20 条原始消息。
 
 ```mermaid
 flowchart TD
-    Start([START]) --> Inspect[读取最后一条用户消息与最小事实]
+    Start([START]) --> Inspect[读取最新 6 条规范化消息]
     Inspect --> Invoke[调用结构化分类模型]
     Invoke --> Valid{输出有效且明确?}
     Valid -->|是：通用知识| Direct[direct_rag]
@@ -157,5 +172,4 @@ flowchart LR
 
 - `/api/chat` 的请求结构和 SSE 事件类型保持兼容。
 - 客户端仍按 `tool`、`evidence`、`text`、`error` 和 `[DONE]` 消费流。
-- 完整后端测试在合并前通过：147 项通过；警告仅来自既有依赖弃用提示和本地 Qdrant 的 payload-index 限制。
-- `ruff check`、指定修改文件的 `ruff format --check`、编译检查和 `git diff --check` 均已通过。
+- 使用仓库指定的聚焦测试、`ruff check` 与 `git diff --check` 验证；完整套件结果取决于本地数据库环境，不在此文档中声明固定通过数。

@@ -149,7 +149,7 @@ ruff check app
 pytest app/tests
 ```
 
-当前测试还覆盖：assistant 输出不能污染会话事实、记忆确认/撤销、训练计划的强度与证据校验、Coros stdio 超时重置，以及同日多次活动不被覆盖。
+当前测试还覆盖：assistant/tool 输出不能进入 mem0 候选、记忆确认/撤销、训练计划的强度与证据校验、Coros stdio 超时重置，以及同日多次活动不被覆盖。
 
 当前 Qdrant revision 的检索基线（需要 Qdrant 与 DashScope embedding 服务可访问）：
 
@@ -178,9 +178,15 @@ AGENT_MAX_TOOL_CALLS=6
 
 ## 聊天路由与状态边界
 
-`ReactAgent.execute_stream` 会在每次请求开始时构造 LangGraph 短期状态，并由 LLM 的结构化意图分类决定进入直接 RAG 或个性化 Agent。图状态只保存消息、会话事实、检索历史、证据和 SSE 事件等可序列化数据；用户身份、会话标识和执行依赖仅存在请求级运行时上下文中。执行记录不写入运行时 context：HTTP 层为每次请求创建官方 `RunCollectorCallbackHandler`，并通过 `RunnableConfig.callbacks` 传给图。
+`ReactAgent.execute_stream` 会在每次请求开始时构造 LangGraph 短期状态，并由 LLM 的结构化意图分类决定进入直接 RAG 或个性化 Agent。GraphState 只保存原始消息、路由、检索产物、工具计数和 SSE 事件等可序列化数据；RuntimeContext 只保存可信的请求身份和依赖，**没有 city 字段**。执行记录不写入 RuntimeContext：HTTP 层为每次请求创建官方 `RunCollectorCallbackHandler`，并通过 `RunnableConfig.callbacks` 传给图。
 
-跨会话记忆由 mem0 独立存储和管理；MySQL 保存账号、完整聊天、会话摘要及训练业务，旧 `memory_facts` 表保留待显式迁移。LangGraph 不启用 Store 或 checkpointer，不自动召回记忆；模型决定是否调用 `get_confirmed_memories(query)`，工具返回相关的已确认且未过期记忆。分类失败时仍保守回退个性化 Agent，既有 SSE 契约保持。
+| 层级 | 载体 | 进入模型的方式 |
+| --- | --- | --- |
+| 近期会话 | 当前会话最近 20 条原始消息 | 个性化 Agent 初始上下文；分类器仅见最新 6 条 |
+| 早期会话背景 | MySQL session_summaries v3 缓存 | 当前窗口不足以解释早期引用时，Agent 按需调用 get_session_summary；压缩早期全部已存储消息，不是长期记忆 |
+| 长期记忆 | mem0 | 用户消息提取为 proposed；模型按需调用 get_confirmed_memories(query)，只读 confirmed、未过期结果 |
+
+`session_summaries` 是 LLM 生成、可再生成的 v3 缓存：仅在按需调用时压缩早期全部已存储消息（不按角色过滤），绝不每轮预先生成，也不写入 mem0、用户画像或长期记忆。模型结合当前系统提示词、最近消息和早期摘要综合判断。分类器实际只读取最新 6 条**规范化** user/assistant 消息；只有个性化 Agent 能调用 `get_session_summary`。天气工具必须从当前窗口或该摘要得到明确城市，否则先追问，不能编造城市。MySQL 保存账号、完整聊天、会话摘要及训练业务，旧 `memory_facts` 表保留待显式迁移。LangGraph 不启用 Store 或 checkpointer，不自动召回记忆；分类失败时仍保守回退个性化 Agent，既有 SSE 契约保持。
 
 ## mem0 长期记忆
 
@@ -241,7 +247,8 @@ FitAgent/
 │   │   ├── react_agent.py      # 聊天图执行门面与内层 ReAct Agent
 │   │   ├── chat_routing_graph.py # LangGraph 短期状态与意图路由图
 │   │   ├── agent_tools.py      # 工具定义
-│   │   ├── memory_service.py   # 记忆权限、上下文组装与独立会话摘要
+│   │   ├── memory_service.py   # mem0 长期记忆权限与候选/确认生命周期
+│   │   ├── session_summary_service.py # 按需生成和读取早期已存储消息的 v3 摘要缓存
 │   │   ├── memory_backend.py   # 与 SDK 无关的记忆接口
 │   │   ├── memory_migration.py # 旧记忆显式迁移，默认只预览
 │   │   ├── training_plan_service.py # 计划编排与安全策略

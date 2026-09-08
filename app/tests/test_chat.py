@@ -4,11 +4,9 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 from app.api.routers import chat as chat_router
-from app.core.database import SessionLocal
-from app.models import SessionSummary
 from app.services.chat_routing_graph import IntentDecision, build_chat_routing_graph
-from app.services.memory_service import RECENT_MESSAGE_LIMIT
 from app.services.react_agent import ReactAgent
+from app.services.session_summary_service import RECENT_AGENT_MESSAGE_LIMIT
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 
@@ -320,10 +318,10 @@ class TestChat:
             "data": None,
         }
 
-    def test_chat_keeps_twenty_recent_messages_and_summarizes_older_history(
+    def test_chat_only_forwards_twenty_recent_messages_without_eager_summary(
         self, auth_client, agent_mock
     ):
-        """第 11 次请求前已有 21 条消息：最近 20 条进 Agent，首条转入会话暂存状态。"""
+        """第 11 次请求前已有 21 条消息时只把最近 20 条原文交给 Agent。"""
 
         agent_mock.execute_stream.side_effect = lambda *args, **kwargs: iter(
             ['{"type": "text", "content": "ok"}']
@@ -338,15 +336,6 @@ class TestChat:
             session_id = response.headers["X-Session-Id"]
 
         recent_messages = agent_mock.execute_stream.call_args.args[0]
-        assert len(recent_messages) == RECENT_MESSAGE_LIMIT == 20
+        assert len(recent_messages) == RECENT_AGENT_MESSAGE_LIMIT == 20
         assert recent_messages[0]["role"] == "assistant"
-
-        db = SessionLocal()
-        try:
-            summary = db.query(SessionSummary).filter(SessionSummary.session_id == session_id).one()
-            assert json.loads(summary.content)["facts"] == {
-                "city": "成都",
-                "training_goal": "减脂",
-            }
-        finally:
-            db.close()
+        assert "session_summary" not in agent_mock.execute_stream.call_args.kwargs
