@@ -81,7 +81,7 @@ class TrainingSafetyPolicy:
         injuries = _parse_json_field(profile.injuries, [])
         constraints: list[str] = []
         signals: list[str] = []
-        maximum_intensity = "高" if profile.experience == "advanced" else "中"
+        maximum_intensity = "高" if profile.experience == "高级" else "中"
 
         if isinstance(injuries, list) and injuries:
             maximum_intensity = "低"

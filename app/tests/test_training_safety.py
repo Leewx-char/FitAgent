@@ -49,6 +49,17 @@ def _week_plan(
     )
 
 
+@pytest.mark.parametrize(
+    ("experience", "expected_intensity"),
+    [("新手", "中"), ("中级", "中"), ("高级", "高")],
+)
+def test_safety_policy_uses_frontend_chinese_experience_values(experience, expected_intensity):
+    """训练强度上限应使用前端保存的中文经验等级。"""
+    safety = TrainingSafetyPolicy.assess(UserProfile(experience=experience), FitnessSnapshot(), [])
+
+    assert safety.maximum_intensity == expected_intensity
+
+
 def test_safety_policy_downgrades_for_injury_load_sleep_and_pain():
     """验证伤病、高负荷、睡眠不足和疼痛会降低安全强度上限。"""
     profile = UserProfile(experience="advanced", injuries='["膝盖"]')

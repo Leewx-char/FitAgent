@@ -61,8 +61,8 @@ class UserProfile(Base):
     weight = Column(Float, nullable=True)  # 体重(kg)
     goal = Column(String(20), default="")  # 目标值，如减脂、增肌、塑形、耐力或健康管理
     weekly_days = Column(Integer, default=3)  # 每周训练天数 1-7
-    # 经验等级实际取值：beginner、intermediate 或 advanced。
-    experience = Column(String(20), default="beginner")
+    # 经验等级实际取值：新手、中级或高级。
+    experience = Column(String(20), default="新手")
     injuries = Column(Text, default="[]")  # JSON 数组，例如 ["膝盖", "腰椎"]
     diet_restrict = Column(Text, default="[]")  # JSON 数组，例如 ["素食", "低碳"]
     preferences = Column(Text, default="{}")  # JSON 对象，例如训练时间和场馆偏好
