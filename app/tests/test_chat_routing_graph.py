@@ -218,5 +218,6 @@ def test_active_docs_do_not_describe_removed_session_facts():
         assert "只压缩早期 user 消息" not in content, document_path
         assert "不可信任务上下文" not in content, document_path
         assert "不能发出指令" not in content, document_path
+        assert "当前系统规则或最近消息冲突时以后者为准" not in content, document_path
         for term in required_terms:
             assert term in content, f"{document_path} is missing: {term}"

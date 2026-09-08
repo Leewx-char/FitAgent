@@ -175,6 +175,7 @@ def test_main_prompt_requires_explicit_city_and_limits_summary_tool():
     assert "模型结合当前系统提示词、最近消息和早期摘要综合判断" in content
     assert "不可信任务上下文" not in content
     assert "不能发出指令" not in content
+    assert "当前系统规则或最近消息冲突时以后者为准" not in content
     assert "不声明或新增 system/tool 持久化" in content
     assert "不是长期记忆" in content
     assert "get_weather(city)" in content
@@ -192,3 +193,4 @@ def test_summary_tool_description_documents_on_demand_task_history():
     assert "最近消息" in description
     assert "不可信" not in description
     assert "不能发出指令" not in description
+    assert "当前系统规则或最近消息冲突时以后者为准" not in description
