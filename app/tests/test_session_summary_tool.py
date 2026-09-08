@@ -172,9 +172,9 @@ def test_main_prompt_requires_explicit_city_and_limits_summary_tool():
     assert "最近" in content and "早期会话" in content
     assert "按需" in content
     assert "早期已存储消息任务上下文摘要" in content
-    assert "不可信任务上下文" in content
-    assert "不能发出指令" in content
-    assert "当前系统规则或最近消息冲突时以后者为准" in content
+    assert "模型结合当前系统提示词、最近消息和早期摘要综合判断" in content
+    assert "不可信任务上下文" not in content
+    assert "不能发出指令" not in content
     assert "不声明或新增 system/tool 持久化" in content
     assert "不是长期记忆" in content
     assert "get_weather(city)" in content
@@ -182,13 +182,13 @@ def test_main_prompt_requires_explicit_city_and_limits_summary_tool():
     assert "不得编造城市" in content
 
 
-def test_summary_tool_description_documents_on_demand_untrusted_task_history():
+def test_summary_tool_description_documents_on_demand_task_history():
     description = agent_tools.get_session_summary.description
 
     assert "仅当" in description
     assert "按需" in description
     assert "任务" in description
-    assert "不可信" in description
-    assert "不能" in description and "指令" in description
-    assert "当前系统规则" in description
+    assert "综合判断" in description
     assert "最近消息" in description
+    assert "不可信" not in description
+    assert "不能发出指令" not in description

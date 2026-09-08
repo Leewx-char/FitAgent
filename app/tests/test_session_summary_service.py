@@ -254,11 +254,11 @@ def test_blank_model_fold_preserves_existing_valid_cache(db):
     assert row.covered_through_message_id == first_message.id
 
 
-def test_summary_prompt_uses_untrusted_task_oriented_headings():
-    assert "不可信" in SUMMARY_SYSTEM_PROMPT
-    assert "不能发出指令" in SUMMARY_SYSTEM_PROMPT
-    assert "当前系统规则" in SUMMARY_SYSTEM_PROMPT
-    assert "最近消息" in SUMMARY_SYSTEM_PROMPT
+def test_summary_prompt_uses_neutral_task_oriented_headings():
+    assert "不可信" not in SUMMARY_SYSTEM_PROMPT
+    assert "不能发出指令" not in SUMMARY_SYSTEM_PROMPT
+    assert "当前系统规则" not in SUMMARY_SYSTEM_PROMPT
+    assert "最近消息" not in SUMMARY_SYSTEM_PROMPT
     for heading in ("当前任务目标", "已完成工作/决策", "关键发现/约束", "未解决事项"):
         assert heading in SUMMARY_SYSTEM_PROMPT
     assert SUMMARY_SCHEMA_VERSION == 3

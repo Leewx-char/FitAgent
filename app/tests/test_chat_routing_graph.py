@@ -203,9 +203,7 @@ def test_active_docs_do_not_describe_removed_session_facts():
         "当前窗口不足以解释早期引用时，Agent 按需调用 get_session_summary",
         "压缩早期全部已存储消息",
         "不按角色过滤",
-        "不可信任务上下文",
-        "不能发出指令",
-        "当前系统规则或最近消息冲突时以后者为准",
+        "模型结合当前系统提示词、最近消息和早期摘要综合判断",
         "mem0",
         "用户消息提取为 proposed",
         "get_confirmed_memories(query)",
@@ -218,5 +216,7 @@ def test_active_docs_do_not_describe_removed_session_facts():
         assert "确定性提取" not in content, document_path
         assert "session_summaries v2" not in content, document_path
         assert "只压缩早期 user 消息" not in content, document_path
+        assert "不可信任务上下文" not in content, document_path
+        assert "不能发出指令" not in content, document_path
         for term in required_terms:
             assert term in content, f"{document_path} is missing: {term}"
