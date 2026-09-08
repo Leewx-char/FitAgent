@@ -171,7 +171,11 @@ def test_main_prompt_defers_tool_selection_to_tool_descriptions():
     assert "工具的名称、能力边界、适用场景和参数要求以工具注解为准" in content
     assert "工具调用预算由服务端执行策略强制限制" in content
     assert "每轮对话最多调用3次工具" not in content
+    assert "每次回复只调用1个工具" not in content
+    assert "每对话最多1次" not in content
     assert "优先级如下" not in content
+    assert "工具调用策略（极重要）" not in content
+    assert "可使用工具及能力边界" not in content
     assert "get_session_summary" not in content
     assert "get_weather(city)" not in content
 
