@@ -21,7 +21,8 @@ from app.core.auth import get_current_user, decode_access_token
 from app.core.request_context import request_id_var
 from app.models import Session as SessionModel, Message, User
 from app.services.react_agent import ReactAgent
-from app.services.memory_service import MemoryService, RECENT_MESSAGE_LIMIT
+from app.services.memory_service import MemoryService
+from app.services.session_summary_service import RECENT_AGENT_MESSAGE_LIMIT
 from app.repositories.agent_trace_repository import AgentTraceRepository
 from app.core.database import get_db_session
 from app.utils.logger_handler import logger
@@ -69,7 +70,6 @@ async def sse_generator(
     session_id: str,
     user_message: str,
     current_user: User,
-    session_summary: str = "",
 ):
     """执行 Agent 流式响应，转发 SSE 事件并保存回答与执行轨迹。"""
     # 获取当前事件循环
@@ -86,7 +86,7 @@ async def sse_generator(
         except StopIteration:
             return _SENTINEL
 
-    # 服务层从图状态提取会话事实，HTTP 层仅传递身份与稳定会话标识。
+    # HTTP 层仅传递原始消息、身份与稳定会话标识。
     user_id = current_user.id
     collector = RunCollectorCallbackHandler()
     gen = iter(
@@ -94,7 +94,6 @@ async def sse_generator(
             messages,
             user_id=user_id,
             session_id=session_id,
-            session_summary=session_summary,
             config={"callbacks": [collector]},
         )
     )
@@ -248,16 +247,8 @@ async def chat(
         .all()
     )
     all_messages = [{"role": m.role, "content": m.content} for m in history_messages]
-    # 最近 10 轮（20 条）原文 + 可审计短期状态，避免全量历史进入模型上下文。
-    recent_message_limit = RECENT_MESSAGE_LIMIT
-    session_summary = MemoryService().refresh_session_summary(
-        db,
-        session_id=session_id,
-        messages=history_messages,
-        recent_message_limit=recent_message_limit,
-    )
-    db.commit()
-    messages = all_messages[-recent_message_limit:]
+    # 最近 10 轮（20 条）原文进入 Agent，避免全量历史进入模型上下文。
+    messages = all_messages[-RECENT_AGENT_MESSAGE_LIMIT:]
     # 4. 流式响应
     return StreamingResponse(
         sse_generator(
@@ -267,7 +258,6 @@ async def chat(
             session_id,
             payload.message,
             current_user,
-            session_summary,
         ),
         media_type="text/event-stream",
         headers={

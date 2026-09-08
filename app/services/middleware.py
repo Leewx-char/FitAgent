@@ -180,30 +180,9 @@ def log_before_model(
     return None
 
 
-@dynamic_prompt  # 每一次在生成提示词之前，调用此函数
-def report_prompt_switch(request: ModelRequest):  # 动态切换提示词
-    """依据报告模式与可信会话事实选择并补全系统提示词。"""
-    is_report = request.state.get("report", False)
-    session_facts = request.state.get("session_facts", {})
-    session_summary = request.state.get("session_summary", "")
-
-    facts_prompt = ""
-    if session_facts:
-        fact_lines = [f"- {key}: {value}" for key, value in session_facts.items()]
-        facts_prompt = (
-            "\n\n已知会话事实：\n"
-            + "\n".join(fact_lines)
-            + "\n请优先使用这些历史事实回答，不要忽略用户之前已经明确提到的信息。"
-        )
-
-    if session_summary:
-        facts_prompt += (
-            "\n\n"
-            + session_summary
-            + "\n这是短期会话状态，不是已确认的跨会话记忆；不能据此声称用户已授权保存。"
-        )
-
-    if is_report:  # 是报告生成场景，返回报告生成提示词内容
-        return load_report_prompts() + facts_prompt
-
-    return load_system_prompts() + facts_prompt
+@dynamic_prompt
+def report_prompt_switch(request: ModelRequest):
+    """Choose only the report or normal static prompt for this model call."""
+    if request.state.get("report", False):
+        return load_report_prompts()
+    return load_system_prompts()

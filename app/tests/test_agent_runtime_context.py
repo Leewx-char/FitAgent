@@ -32,10 +32,9 @@ class PersonalizedClassifier:
         return IntentDecision(route="personalized_agent")
 
 
-def _tool_runtime(*, user_id, city, history, call_id):
+def _tool_runtime(*, user_id, history, call_id):
     context = ChatRuntimeContext(
         user_id=user_id,
-        city=city,
         session_id=f"session-{user_id}",
         dependencies=SimpleNamespace(max_tool_calls=4),
     )
@@ -79,7 +78,6 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
     personalized_executor.max_tool_calls = 4
     runtime_context = ChatRuntimeContext(
         user_id=17,
-        city="深圳",
         session_id="session-17",
         dependencies=SimpleNamespace(personalized_agent_executor=personalized_executor),
     )
@@ -92,8 +90,7 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
                 {"role": "user", "content": "我之前练过深蹲。"},
                 {"role": "assistant", "content": "注意膝盖方向。"},
                 {"role": "user", "content": "结合我的情况给建议"},
-            ],
-            session_summary="近期每周训练三次。",
+            ]
         ),
         context=runtime_context,
         config={"callbacks": [collector]},
@@ -102,7 +99,8 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
     assert captured["context"] is runtime_context
     assert captured["config"]["recursion_limit"] == 9
     assert collector in captured["config"]["callbacks"].handlers
-    assert captured["input"]["session_summary"] == "近期每周训练三次。"
+    assert "session_facts" not in captured["input"]
+    assert "session_summary" not in captured["input"]
     assert captured["input"]["retrieval_history"] == [
         {"role": "user", "content": "我之前练过深蹲。"},
         {"role": "assistant", "content": "注意膝盖方向。"},
@@ -114,12 +112,11 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
     assert result["events"] == [{"type": "text", "content": "个性化建议"}]
 
 
-def test_tool_runtime_reads_user_and_city_without_contextvar():
-    """身份工具只从本次 ToolRuntime 读取用户与城市。"""
-    runtime = _tool_runtime(user_id=23, city="成都", history=[], call_id="identity-23")
+def test_tool_runtime_reads_user_without_contextvar():
+    """身份工具只从本次 ToolRuntime 读取用户。"""
+    runtime = _tool_runtime(user_id=23, history=[], call_id="identity-23")
 
     assert agent_tools.get_user_id.func(runtime=runtime) == "23"
-    assert agent_tools.get_user_location.func(runtime=runtime) == "成都"
 
 
 def test_inner_agent_declares_runtime_context_and_short_term_state(monkeypatch):
@@ -142,10 +139,14 @@ def test_inner_agent_declares_runtime_context_and_short_term_state(monkeypatch):
 
     assert captured["context_schema"] is ChatRuntimeContext
     assert captured["state_schema"] is react_agent.PersonalizedAgentState
+    assert react_agent.TOOL_DISPLAY["get_session_summary"] == "读取早期会话摘要"
+    assert "get_session_summary" in {tool.name for tool in captured["tools"]}
+    assert "get_user_location" not in react_agent.TOOL_DISPLAY
+    assert "get_user_location" not in {tool.name for tool in captured["tools"]}
 
 
 def test_parallel_requests_do_not_share_retrieval_history_or_evidence(monkeypatch):
-    """两个交错请求不得串用画像、城市、检索历史或证据。"""
+    """两个交错请求不得串用画像、检索历史或证据。"""
     barrier = Barrier(2)
     profiles = {
         31: SimpleNamespace(
@@ -216,34 +217,30 @@ def test_parallel_requests_do_not_share_retrieval_history_or_evidence(monkeypatc
     monkeypatch.setattr(agent_tools, "get_db_session", fake_db_session)
     monkeypatch.setattr(agent_tools, "_get_rag_service", lambda: FakeRagService())
 
-    def run_request(user_id, city, query, history_text):
+    def run_request(user_id, query, history_text):
         runtime = _tool_runtime(
             user_id=user_id,
-            city=city,
             history=[{"role": "user", "content": history_text}],
             call_id=f"rag-{user_id}",
         )
         profile = agent_tools.get_user_profile.func(runtime=runtime)
-        location = agent_tools.get_user_location.func(runtime=runtime)
         command = agent_tools.rag_summarize.func(query=query, runtime=runtime)
         assert isinstance(command, Command)
         message = command.update["messages"][0]
         assert isinstance(message, ToolMessage)
-        return profile, location, message.content, command.update["rag_evidence"]
+        return profile, message.content, command.update["rag_evidence"]
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(run_request, 31, "杭州", "深蹲", "A 的历史")
-        second = pool.submit(run_request, 47, "北京", "跑步", "B 的历史")
+        first = pool.submit(run_request, 31, "深蹲", "A 的历史")
+        second = pool.submit(run_request, 47, "跑步", "B 的历史")
         result_a, result_b = first.result(timeout=5), second.result(timeout=5)
 
     assert "增肌" in result_a[0] and "减脂" not in result_a[0]
     assert "减脂" in result_b[0] and "增肌" not in result_b[0]
-    assert result_a[1] == "杭州"
-    assert result_b[1] == "北京"
-    assert result_a[2] == "深蹲|history=A 的历史"
-    assert result_b[2] == "跑步|history=B 的历史"
-    assert result_a[3][0]["evidence_id"] == "深蹲.md#1"
-    assert result_b[3][0]["evidence_id"] == "跑步.md#1"
+    assert result_a[1] == "深蹲|history=A 的历史"
+    assert result_b[1] == "跑步|history=B 的历史"
+    assert result_a[2][0]["evidence_id"] == "深蹲.md#1"
+    assert result_b[2][0]["evidence_id"] == "跑步.md#1"
 
 
 def test_personalized_branch_uses_context_without_trace_field():
@@ -260,15 +257,13 @@ def test_personalized_branch_uses_context_without_trace_field():
     executor.max_tool_calls = 2
     context = ChatRuntimeContext(
         user_id=9,
-        city="",
         session_id="session-9",
         dependencies=SimpleNamespace(personalized_agent_executor=executor),
     )
 
     build_chat_routing_graph(classifier=PersonalizedClassifier()).invoke(
         build_initial_chat_state(
-            messages=[{"role": "user", "content": "给我一个计划"}],
-            session_summary="",
+            messages=[{"role": "user", "content": "给我一个计划"}]
         ),
         context=context,
     )
@@ -321,12 +316,10 @@ def test_personalized_agent_keeps_tool_and_evidence_events():
     executor.max_tool_calls = 2
     result = executor.stream_personalized_events(
         build_initial_chat_state(
-            messages=[{"role": "user", "content": "深蹲怎么做？"}],
-            session_summary="",
+            messages=[{"role": "user", "content": "深蹲怎么做？"}]
         ),
         ChatRuntimeContext(
             user_id=5,
-            city="",
             session_id="session-5",
             dependencies=SimpleNamespace(max_tool_calls=2),
         ),
@@ -406,12 +399,10 @@ def test_personalized_agent_emits_evidence_for_each_rag_call():
     executor.max_tool_calls = 4
     result = build_chat_routing_graph(classifier=PersonalizedClassifier()).invoke(
         build_initial_chat_state(
-            messages=[{"role": "user", "content": "查两条深蹲资料"}],
-            session_summary="",
+            messages=[{"role": "user", "content": "查两条深蹲资料"}]
         ),
         context=ChatRuntimeContext(
             user_id=5,
-            city="",
             session_id="session-5",
             dependencies=SimpleNamespace(personalized_agent_executor=executor),
         ),
@@ -445,12 +436,10 @@ def test_personalized_graph_rejects_non_json_inner_state():
     with pytest.raises(ValueError, match="个性化 Agent 产物包含不可序列化值"):
         build_chat_routing_graph(classifier=PersonalizedClassifier()).invoke(
             build_initial_chat_state(
-                messages=[{"role": "user", "content": "结合我的情况给建议"}],
-                session_summary="",
+                messages=[{"role": "user", "content": "结合我的情况给建议"}]
             ),
             context=ChatRuntimeContext(
                 user_id=5,
-                city="",
                 session_id="session-5",
                 dependencies=SimpleNamespace(personalized_agent_executor=executor),
             ),
@@ -465,7 +454,6 @@ def test_monitor_tool_uses_personalized_executor_limit_when_dependencies_only_ho
         state=state,
         context=ChatRuntimeContext(
             user_id=5,
-            city="",
             session_id="session-5",
             dependencies=SimpleNamespace(personalized_agent_executor=executor),
         ),

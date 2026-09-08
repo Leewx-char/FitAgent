@@ -171,7 +171,7 @@ class FitnessData(Base):
 
 
 class SessionSummary(Base):
-    """可重建的会话状态摘要，不替换或删除原始聊天记录。"""
+    """LLM 生成、可重建的早期用户消息缓存，不替换或删除原始聊天记录。"""
 
     __tablename__ = "session_summaries"
 

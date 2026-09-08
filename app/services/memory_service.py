@@ -1,23 +1,17 @@
-"""管理 mem0 长期记忆权限；MySQL 仅用于独立的短期会话摘要。"""
+"""管理 mem0 长期记忆权限。"""
 
 from __future__ import annotations
 
-import json
 import logging
 import math
-import uuid
 from datetime import datetime, timezone
 from threading import Lock
 
-from sqlalchemy.orm import Session as DBSession
-
 from app.core.settings import get_settings
-from app.models import Message, SessionSummary
+from app.models import Message
 from app.services.memory_backend import get_memory_backend
-from app.services.session_facts import extract_session_facts
 
 logger = logging.getLogger(__name__)
-RECENT_MESSAGE_LIMIT = 20
 _UNSET = object()
 # Bounded stripes coordinate all service instances in the supported single-worker process.
 _MUTATION_LOCKS = tuple(Lock() for _ in range(64))
@@ -203,52 +197,3 @@ class MemoryService:
             return result.rstrip() if seen else "没有与本次问题匹配的已确认长期记忆。"
         except MemoryUnavailableError:
             return "长期记忆查询暂时不可用，请勿据此推断用户没有相关记忆。"
-
-    def refresh_session_summary(
-        self,
-        db: DBSession,
-        *,
-        session_id: str,
-        messages: list[Message],
-        recent_message_limit: int = RECENT_MESSAGE_LIMIT,
-    ) -> str:
-        """为最近消息窗口外的历史持久化可审计状态摘要。"""
-
-        older_messages = (
-            messages[:-recent_message_limit] if len(messages) > recent_message_limit else []
-        )
-        if not older_messages:
-            return ""
-        facts = extract_session_facts(
-            [{"role": item.role, "content": item.content} for item in older_messages]
-        )
-        if not facts:
-            return ""
-        covered_through = older_messages[-1].id
-        content = {
-            "schema_version": 1,
-            "source": "仅由历史用户消息中的确定性规则提取；不是长期记忆，也未自动写入画像。",
-            "facts": facts,
-        }
-        summary = (
-            db.query(SessionSummary).filter(SessionSummary.session_id == session_id).one_or_none()
-        )
-        if summary is None:
-            summary = SessionSummary(
-                id=uuid.uuid4().hex,
-                session_id=session_id,
-                content=json.dumps(content, ensure_ascii=False),
-                covered_through_message_id=covered_through,
-            )
-            db.add(summary)
-        elif summary.covered_through_message_id != covered_through or summary.content != json.dumps(
-            content, ensure_ascii=False
-        ):
-            summary.content = json.dumps(content, ensure_ascii=False)
-            summary.covered_through_message_id = covered_through
-
-        fact_lines = [f"- {key}: {value}" for key, value in facts.items()]
-        return (
-            "会话暂存状态（来自较早的用户表达；若与最新消息冲突，以最新消息为准）：\n"
-            + "\n".join(fact_lines)
-        )

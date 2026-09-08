@@ -60,8 +60,6 @@ def _invoke_parallel_tool_calls(tool_names: list[str], tool_limit: int):
     result = agent.invoke(
         {
             "messages": [{"role": "user", "content": "执行工具"}],
-            "session_facts": {},
-            "session_summary": "",
             "retrieval_history": [],
             "rag_evidence": [],
             "tool_call_limit": tool_limit,
@@ -70,7 +68,6 @@ def _invoke_parallel_tool_calls(tool_names: list[str], tool_limit: int):
         },
         context=ChatRuntimeContext(
             user_id=1,
-            city="",
             session_id="parallel-tools",
             dependencies=SimpleNamespace(max_tool_calls=tool_limit),
         ),
@@ -84,12 +81,12 @@ def test_chat_runtime_context_keeps_request_scoped_dependencies():
 
     context = ChatRuntimeContext(
         user_id=7,
-        city="广州",
         session_id="session-1",
         dependencies=dependencies,
     )
 
-    assert (context.user_id, context.city, context.session_id) == (7, "广州", "session-1")
+    assert (context.user_id, context.session_id) == (7, "session-1")
+    assert not hasattr(context, "city")
     assert context.dependencies is dependencies
 
 
