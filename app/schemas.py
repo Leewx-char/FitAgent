@@ -146,7 +146,7 @@ class ProfileCreate(BaseModel):
     weight: float = Field(..., gt=0, le=500)  # 必填，0-500 kg
     goal: str = Field("", max_length=20)  # 减脂/增肌/塑形/耐力提升/健康维护
     weekly_days: int = Field(3, ge=1, le=7)
-    experience: str = Field("新手", max_length=20)  # 新手/有基础/资深
+    experience: str = Field("新手", max_length=20)  # 新手/中级/高级
     injuries: list[str] = Field(default_factory=list)
     diet_restrict: list[str] = Field(default_factory=list)
     preferences: dict = Field(default_factory=dict)
