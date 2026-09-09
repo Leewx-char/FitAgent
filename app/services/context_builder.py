@@ -17,7 +17,7 @@ class ContextSnippet:
 
 
 class ContextBuilder:
-    """优先保留命中子片段附近的父段内容，避免长上下文挤掉其他证据。"""
+    """按最终排名裁剪切片正文，避免长上下文挤掉其他证据。"""
 
     def __init__(self, max_context_chars: int = 6000, max_chars_per_evidence: int = 1200) -> None:
         """设置整体上下文与单条证据的字符预算。"""
@@ -33,31 +33,18 @@ class ContextBuilder:
             if remaining <= 0:
                 break
             budget = min(self.max_chars_per_evidence, remaining)
-            text, truncated = self._clip_around_child_text(hit.text, hit.child_text, budget)
+            text, truncated = self._clip_text(hit.text, budget)
             snippets.append(ContextSnippet(hit.evidence_id, text, truncated))
             remaining -= len(text)
         return snippets
 
     @staticmethod
-    def _clip_around_child_text(parent_text: str, child_text: str, budget: int) -> tuple[str, bool]:
-        """在字符预算内优先截取包含命中子片段的父文本窗口。"""
+    def _clip_text(text: str, budget: int) -> tuple[str, bool]:
+        """在字符预算内保留正文前缀，并为截断标记预留空间。"""
         if budget <= 0:
-            return "", bool(parent_text)
-        if len(parent_text) <= budget:
-            return parent_text, False
-        index = parent_text.find(child_text)
-        if index < 0:
-            if budget <= 2:
-                return parent_text[:budget], True
-            budget -= 2
-            return parent_text[:budget].rstrip() + "……", True
-        if budget <= 4:
-            return parent_text[:budget], True
-        # 先为首尾边界标记预留空间，使配置的上下文预算始终为硬上限。
-        budget -= 4
-        start = max(0, index - budget // 3)
-        end = min(len(parent_text), start + budget)
-        start = max(0, end - budget)
-        prefix = "……" if start else ""
-        suffix = "……" if end < len(parent_text) else ""
-        return prefix + parent_text[start:end].strip() + suffix, True
+            return "", bool(text)
+        if len(text) <= budget:
+            return text, False
+        if budget <= 2:
+            return text[:budget], True
+        return text[: budget - 2].rstrip() + "……", True

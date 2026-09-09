@@ -145,8 +145,8 @@ def test_inner_agent_declares_runtime_context_and_short_term_state(monkeypatch):
     assert "get_user_location" not in {tool.name for tool in captured["tools"]}
 
 
-def test_parallel_requests_do_not_share_retrieval_history_or_evidence(monkeypatch):
-    """两个交错请求不得串用画像、检索历史或证据。"""
+def test_parallel_requests_do_not_share_profile_query_or_evidence(monkeypatch):
+    """两个交错请求不得串用画像、查询或证据。"""
     barrier = Barrier(2)
     profiles = {
         31: SimpleNamespace(
@@ -197,20 +197,19 @@ def test_parallel_requests_do_not_share_retrieval_history_or_evidence(monkeypatc
 
     class FakeRagService:
         @staticmethod
-        def build_context(query, source_filter, history):
+        def build_context(query, source_filter):
             barrier.wait(timeout=3)
             evidence_id = f"{query}.md#1"
             hit = SimpleNamespace(
                 rank=1,
                 evidence_id=evidence_id,
                 source_id=f"{query}.md",
-                child_text=f"{query} 专属证据",
+                text=f"{query} 专属证据",
                 metadata={"tags": query},
-                rerank_score=0.9,
                 score=0.1,
             )
             return SimpleNamespace(
-                content=f"{query}|history={history[0]['content']}",
+                content=f"{query} 专属证据",
                 result=SimpleNamespace(hits=(hit,)),
             )
 
@@ -237,8 +236,8 @@ def test_parallel_requests_do_not_share_retrieval_history_or_evidence(monkeypatc
 
     assert "增肌" in result_a[0] and "减脂" not in result_a[0]
     assert "减脂" in result_b[0] and "增肌" not in result_b[0]
-    assert result_a[1] == "深蹲|history=A 的历史"
-    assert result_b[1] == "跑步|history=B 的历史"
+    assert result_a[1] == "深蹲 专属证据"
+    assert result_b[1] == "跑步 专属证据"
     assert result_a[2][0]["evidence_id"] == "深蹲.md#1"
     assert result_b[2][0]["evidence_id"] == "跑步.md#1"
 
@@ -262,9 +261,7 @@ def test_personalized_branch_uses_context_without_trace_field():
     )
 
     build_chat_routing_graph(classifier=PersonalizedClassifier()).invoke(
-        build_initial_chat_state(
-            messages=[{"role": "user", "content": "给我一个计划"}]
-        ),
+        build_initial_chat_state(messages=[{"role": "user", "content": "给我一个计划"}]),
         context=context,
     )
 
@@ -315,9 +312,7 @@ def test_personalized_agent_keeps_tool_and_evidence_events():
     executor.max_steps = 5
     executor.max_tool_calls = 2
     result = executor.stream_personalized_events(
-        build_initial_chat_state(
-            messages=[{"role": "user", "content": "深蹲怎么做？"}]
-        ),
+        build_initial_chat_state(messages=[{"role": "user", "content": "深蹲怎么做？"}]),
         ChatRuntimeContext(
             user_id=5,
             session_id="session-5",
@@ -398,9 +393,7 @@ def test_personalized_agent_emits_evidence_for_each_rag_call():
     executor.max_steps = 5
     executor.max_tool_calls = 4
     result = build_chat_routing_graph(classifier=PersonalizedClassifier()).invoke(
-        build_initial_chat_state(
-            messages=[{"role": "user", "content": "查两条深蹲资料"}]
-        ),
+        build_initial_chat_state(messages=[{"role": "user", "content": "查两条深蹲资料"}]),
         context=ChatRuntimeContext(
             user_id=5,
             session_id="session-5",
@@ -435,9 +428,7 @@ def test_personalized_graph_rejects_non_json_inner_state():
 
     with pytest.raises(ValueError, match="个性化 Agent 产物包含不可序列化值"):
         build_chat_routing_graph(classifier=PersonalizedClassifier()).invoke(
-            build_initial_chat_state(
-                messages=[{"role": "user", "content": "结合我的情况给建议"}]
-            ),
+            build_initial_chat_state(messages=[{"role": "user", "content": "结合我的情况给建议"}]),
             context=ChatRuntimeContext(
                 user_id=5,
                 session_id="session-5",

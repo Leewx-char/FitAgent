@@ -28,16 +28,9 @@ from app.core.settings import get_settings
 
 @lru_cache(maxsize=1)
 def _get_rag_service() -> RagSummarizeService:
-    """复用已加载 BM25 工件的 RAG 服务；构造过程不执行 embedding 或 Qdrant 查询。"""
+    """复用只读 RAG 服务；构造过程不执行 embedding 或 Qdrant 查询。"""
 
     return RagSummarizeService()
-
-
-def warm_rag_retriever() -> str | None:
-    """在应用启动阶段加载 BM25 工件，消除首个 RAG 请求的本地建索引延迟。"""
-    service = _get_rag_service()
-    logger.info("RAG 预热完成：BM25 revision=%s", service.bm25_revision or "unavailable")
-    return service.bm25_revision
 
 
 def build_evidence_cards(result) -> list[dict[str, str | int | float | None]]:
@@ -47,7 +40,7 @@ def build_evidence_cards(result) -> list[dict[str, str | int | float | None]]:
 
     cards = []
     for hit in result.hits:
-        snippet = " ".join(hit.child_text.split())
+        snippet = " ".join(hit.text.split())
         cards.append(
             {
                 "rank": hit.rank,
@@ -55,7 +48,7 @@ def build_evidence_cards(result) -> list[dict[str, str | int | float | None]]:
                 "source_id": hit.source_id,
                 "snippet": snippet[:240] + ("…" if len(snippet) > 240 else ""),
                 "tags": str(hit.metadata.get("tags", "")),
-                "score": hit.rerank_score if hit.rerank_score is not None else hit.score,
+                "score": hit.score,
             }
         )
     return cards
@@ -230,7 +223,6 @@ def rag_summarize(query: str, runtime: ToolRuntime, source: str = "") -> Command
     rag_context = _get_rag_service().build_context(
         query,
         source_filter,
-        runtime.state.get("retrieval_history", []),
     )
     evidence = build_evidence_cards(rag_context.result)
     return _tool_state_command(

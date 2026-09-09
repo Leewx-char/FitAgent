@@ -1,7 +1,7 @@
-"""Qdrant 相似度检索的应用服务。
+"""Qdrant native hybrid 检索的应用服务。
 
 所有写入操作都在 ``knowledge_indexer`` 中完成。请求链路仅嵌入查询，并读取当前
-活动的 Qdrant 集合。
+Qdrant 知识集合。
 """
 
 from __future__ import annotations
@@ -19,8 +19,9 @@ class VectorStoreService:
         """按配置创建仓储，或使用注入的 Qdrant 仓储。"""
         config = get_vector_store_config()
         settings = get_settings()
+        self.candidate_limit = config["candidate_k"]
         self.repository = repository or QdrantVectorRepository(
-            collection_name=config["collection_alias"],
+            collection_name=config["collection_name"],
             url=settings.qdrant_url or config["url"],
             api_key=settings.qdrant_api_key or None,
             grpc_port=config["grpc_port"],
@@ -28,17 +29,19 @@ class VectorStoreService:
             timeout_seconds=config["qdrant_timeout_seconds"],
         )
 
-    def similarity_search(
-        self, query: str, limit: int, source_filter: list[str] | None = None
+    def hybrid_search(
+        self, query: str, *, limit: int, source_filter: tuple[str, ...] = ()
     ) -> list[ScoredChunk]:
-        """嵌入查询文本，并从活动版本中取回带分数的切片。"""
-        query_vector = get_embedding_model().embed_query(query)
-        return self.repository.search(query_vector, limit, source_filter)
+        """嵌入原始查询一次，并转调 Qdrant 的单次混合检索。"""
+        dense_vector = get_embedding_model().embed_query(query)
+        return self.repository.hybrid_search(
+            query,
+            dense_vector,
+            limit=limit,
+            candidate_limit=self.candidate_limit,
+            source_filter=source_filter,
+        )
 
     def health(self) -> dict[str, int | str]:
         """暴露 Qdrant 就绪状态，不修改索引状态。"""
         return self.repository.health()
-
-    def active_revision(self) -> str | None:
-        """暴露活动版本，供 BM25 兼容性校验使用。"""
-        return self.repository.active_revision()

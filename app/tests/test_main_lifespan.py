@@ -7,18 +7,17 @@ from app import main
 
 @pytest.mark.anyio
 async def test_lifespan_initializes_database_and_schema_before_runtime_work(monkeypatch):
-    """建库、建表必须先于运行检查和检索预热。"""
+    """建库、建表先于运行检查，启动时不构建本地检索器。"""
     events: list[str] = []
     monkeypatch.setattr(main, "ensure_database_exists", lambda: events.append("database"))
     monkeypatch.setattr(main, "ensure_schema_exists", lambda: events.append("schema"))
     monkeypatch.setattr(main, "validate_runtime", lambda: events.append("runtime") or [])
-    monkeypatch.setattr(main, "warm_rag_retriever", lambda: events.append("warm"))
     monkeypatch.setattr(main, "close_coros", lambda: events.append("close"))
 
     async with main.lifespan(main.app):
-        assert events == ["database", "schema", "runtime", "warm"]
+        assert events == ["database", "schema", "runtime"]
 
-    assert events == ["database", "schema", "runtime", "warm", "close"]
+    assert events == ["database", "schema", "runtime", "close"]
 
 
 @pytest.mark.anyio
@@ -43,7 +42,7 @@ async def test_lifespan_does_not_run_runtime_work_when_schema_creation_fails(mon
 
 @pytest.mark.anyio
 async def test_lifespan_does_not_create_schema_when_database_creation_fails(monkeypatch):
-    """建库失败后不得继续建表、运行检查或预热。"""
+    """建库失败后不得继续建表或运行检查。"""
     events: list[str] = []
 
     def fail_database_creation():
@@ -53,7 +52,6 @@ async def test_lifespan_does_not_create_schema_when_database_creation_fails(monk
     monkeypatch.setattr(main, "ensure_database_exists", fail_database_creation)
     monkeypatch.setattr(main, "ensure_schema_exists", lambda: events.append("schema"))
     monkeypatch.setattr(main, "validate_runtime", lambda: events.append("runtime") or [])
-    monkeypatch.setattr(main, "warm_rag_retriever", lambda: events.append("warm"))
 
     with pytest.raises(RuntimeError, match="database unavailable"):
         async with main.lifespan(main.app):

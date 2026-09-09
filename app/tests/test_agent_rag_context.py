@@ -1,4 +1,4 @@
-"""Agent 知识库工具的会话历史传递测试。"""
+"""Agent 知识库工具的原始查询与证据传递测试。"""
 
 import json
 from types import SimpleNamespace
@@ -25,17 +25,16 @@ class FakeIntentClassifier:
         return IntentDecision(route="direct_rag")
 
 
-def test_rag_tool_forwards_recent_history_to_rag_service(monkeypatch):
-    """验证 RAG 工具将当前查询和最近会话历史传给检索服务。"""
+def test_rag_tool_forwards_only_query_and_source_filter(monkeypatch):
+    """检索工具不将对话历史传入单次检索服务。"""
     captured = {}
 
     class FakeRagService:
         @staticmethod
-        def build_context(query, source_filter, history):
+        def build_context(query, source_filter):
             """捕获 RAG 上下文构建参数并返回固定证据内容。"""
             captured["query"] = query
             captured["source_filter"] = source_filter
-            captured["history"] = history
             return SimpleNamespace(content="[证据:1] 测试资料", result=None)
 
     monkeypatch.setattr(agent_tools, "_get_rag_service", lambda: FakeRagService())
@@ -66,7 +65,7 @@ def test_rag_tool_forwards_recent_history_to_rag_service(monkeypatch):
     assert result.update["rag_evidence"] == []
     assert captured["query"] == "那深蹲呢？"
     assert captured["source_filter"] is None
-    assert captured["history"][0]["content"] == "我刚才在问深蹲。"
+    assert set(captured) == {"query", "source_filter"}
 
 
 def test_build_evidence_cards_keeps_only_display_safe_hit_fields():
@@ -75,9 +74,8 @@ def test_build_evidence_cards_keeps_only_display_safe_hit_fields():
         rank=1,
         evidence_id="guide.md#chunk-1",
         source_id="guide.md",
-        child_text="深蹲时膝盖跟随脚尖方向。",
+        text="深蹲时膝盖跟随脚尖方向。",
         metadata={"tags": "动作,下肢"},
-        rerank_score=0.9,
         score=0.03,
     )
 
@@ -90,13 +88,13 @@ def test_build_evidence_cards_keeps_only_display_safe_hit_fields():
             "source_id": "guide.md",
             "snippet": "深蹲时膝盖跟随脚尖方向。",
             "tags": "动作,下肢",
-            "score": 0.9,
+            "score": 0.03,
         }
     ]
 
 
-def test_direct_rag_graph_uses_latest_user_and_records_prior_history():
-    """验证末尾有助手消息时仍检索最后用户问题及其之前的历史。"""
+def test_direct_rag_graph_retrieves_latest_user_without_forwarding_history():
+    """图仍记录会话历史，但单次检索只接收最后一个用户问题。"""
 
     captured = {}
 
@@ -104,10 +102,9 @@ def test_direct_rag_graph_uses_latest_user_and_records_prior_history():
         """提供无需外部服务的固定检索上下文。"""
 
         @staticmethod
-        def build_context(query, history):
+        def build_context(query):
             """返回带单条证据的固定上下文。"""
             captured["query"] = query
-            captured["history"] = history
             return SimpleNamespace(content="[证据:1] 深蹲资料", result="retrieval-result")
 
     class FakeModel:
@@ -145,13 +142,7 @@ def test_direct_rag_graph_uses_latest_user_and_records_prior_history():
         {"role": "user", "content": "先说深蹲。"},
         {"role": "assistant", "content": "好的。"},
     ]
-    assert captured == {
-        "query": "那膝盖呢？",
-        "history": [
-            {"role": "user", "content": "先说深蹲。"},
-            {"role": "assistant", "content": "好的。"},
-        ],
-    }
+    assert captured == {"query": "那膝盖呢？"}
     assert json.loads(json.dumps(result, ensure_ascii=False))["rag_evidence"] == [
         {"rank": 1, "evidence_id": "guide.md#1"}
     ]

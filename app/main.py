@@ -12,7 +12,6 @@
 """
 
 from contextlib import asynccontextmanager
-import asyncio
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.response import error_response, success_response
@@ -21,7 +20,6 @@ from app.api.exception_handlers import register_exception_handlers
 from app.core.database import ensure_database_exists, ensure_schema_exists
 from app.utils.bootstrap import validate_runtime
 from app.services.vector_store import VectorStoreService
-from app.services.agent_tools import warm_rag_retriever
 from app.core.deps import close_coros
 from app.api.routers.chat import router as chat_router
 from app.api.routers.auth import router as auth_router
@@ -46,7 +44,7 @@ limiter = Limiter(key_func=get_remote_address)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """执行启动校验、预热离线检索器，并在关闭时释放 Coros 客户端。"""
+    """执行启动校验，并在关闭时释放 Coros 客户端。"""
     ensure_database_exists()
     ensure_schema_exists()
     issues = validate_runtime()
@@ -54,8 +52,6 @@ async def lifespan(app: FastAPI):
         for issue in issues:
             print(f"[启动检查失败] {issue}")
         raise RuntimeError(f"启动检查未通过，共 {len(issues)} 个问题，请修复后重试")
-    # 只加载离线 BM25 工件，不发起 embedding 或 Qdrant 查询；避免首个 RAG 请求承担建索引耗时。
-    await asyncio.to_thread(warm_rag_retriever)
     try:
         yield
     finally:
