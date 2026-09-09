@@ -32,7 +32,7 @@
 | `app/tests/test_database_schema.py` | 新建 | 覆盖模型入口、调度、建库 SQL 和名称保护。 |
 | `app/tests/test_main_lifespan.py` | 新建 | 覆盖启动顺序与初始化失败短路。 |
 | `alembic/`、`alembic.ini`、`app/tests/test_local_agent_run_logging_migrations.py` | 删除 | 清除迁移运行时、历史和专属测试。 |
-| `pyproject.toml`、`.env.example`、`README.md`、`docs/agent-run-logging-architecture.md`、`docs/learning-guide.md` | 修改 | 移除过期依赖、设置、命令和链接。 |
+| `pyproject.toml`、`.env.example`、`README.md`、`docs/agent-run-logging-architecture.md`、`docs/learning-guide.md`、`docs/interview/项目简介.md` | 修改 | 移除过期依赖、设置、命令和链接。 |
 
 ### Task 1: 模型建表入口与数据库编排
 
@@ -269,6 +269,7 @@ git commit -m "feat: initialize missing schema at startup"
 - Modify: `README.md:58-98,214-218,273-279`
 - Modify: `docs/agent-run-logging-architecture.md:122-141`
 - Modify: `docs/learning-guide.md:191`
+- Modify: `docs/interview/项目简介.md:31`
 
 **Interfaces:**
 - Consumes: Task 1–2 的启动初始化。
@@ -299,7 +300,7 @@ Expected: 显示包依赖、示例设置、README 命令、文档链接、迁移
    ```
 
 3. README 的两处安装流程改为“启动服务会自动创建缺失数据库和表”，删除 `ensure_database_exists` 与 `alembic upgrade head` 命令；升级说明改为“模型字段变更须采用显式维护方案，重启不会升级已有表”；从目录树删除 Alembic 两行。
-4. 将 `docs/agent-run-logging-architecture.md` 的迁移节点与链接替换为 `app/models.py` 中 `AgentRun`、`AgentToolCall` 的模型说明；将 `docs/learning-guide.md` 的 Alembic 链接替换为 `app/core/database.py` 启动建库建表流程。
+4. 将 `docs/agent-run-logging-architecture.md` 的迁移节点与链接替换为 `app/models.py` 中 `AgentRun`、`AgentToolCall` 的模型说明；将 `docs/learning-guide.md` 的 Alembic 链接替换为 `app/core/database.py` 启动建库建表流程；将 `docs/interview/项目简介.md` 的技术栈改为 MySQL、SQLAlchemy 和模型管理的启动初始化。
 
 - [x] **Step 4: 验证清理**
 

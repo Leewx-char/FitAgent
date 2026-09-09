@@ -62,7 +62,7 @@ def test_safety_policy_uses_frontend_chinese_experience_values(experience, expec
 
 def test_safety_policy_downgrades_for_injury_load_sleep_and_pain():
     """验证伤病、高负荷、睡眠不足和疼痛会降低安全强度上限。"""
-    profile = UserProfile(experience="advanced", injuries='["膝盖"]')
+    profile = UserProfile(experience="高级", injuries='["膝盖"]')
     snapshot = FitnessSnapshot(max_training_load_ratio=1.4, avg_sleep_hours=5.5)
     feedback = [type("Feedback", (), {"pain_score": 5, "rpe": 8})()]
 
@@ -71,6 +71,18 @@ def test_safety_policy_downgrades_for_injury_load_sleep_and_pain():
     assert safety.maximum_intensity == "低"
     assert len(safety.signals) >= 2
     assert safety.constraints
+
+
+def test_safety_policy_downgrades_high_experience_for_extreme_rpe():
+    """高级用户的极高主观用力程度必须从高强度降至中强度。"""
+    feedback = [type("Feedback", (), {"pain_score": None, "rpe": 9})()]
+
+    safety = TrainingSafetyPolicy.assess(
+        UserProfile(experience="高级"), FitnessSnapshot(), feedback
+    )
+
+    assert safety.maximum_intensity == "中"
+    assert "最近执行反馈中存在极高主观用力程度" in safety.signals
 
 
 def test_plan_validator_rejects_intensity_above_deterministic_safety_limit():

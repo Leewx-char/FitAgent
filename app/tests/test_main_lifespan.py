@@ -39,3 +39,24 @@ async def test_lifespan_does_not_run_runtime_work_when_schema_creation_fails(mon
             pass
 
     assert events == ["database", "schema"]
+
+
+@pytest.mark.anyio
+async def test_lifespan_does_not_create_schema_when_database_creation_fails(monkeypatch):
+    """建库失败后不得继续建表、运行检查或预热。"""
+    events: list[str] = []
+
+    def fail_database_creation():
+        events.append("database")
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(main, "ensure_database_exists", fail_database_creation)
+    monkeypatch.setattr(main, "ensure_schema_exists", lambda: events.append("schema"))
+    monkeypatch.setattr(main, "validate_runtime", lambda: events.append("runtime") or [])
+    monkeypatch.setattr(main, "warm_rag_retriever", lambda: events.append("warm"))
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        async with main.lifespan(main.app):
+            pass
+
+    assert events == ["database"]
