@@ -48,7 +48,7 @@
 
 ### 2. 会话摘要的数据契约
 
-继续使用现有 `session_summaries` 表，不做 Alembic 迁移。表的 `content` 与 `covered_through_message_id` 已足以实现缓存和增量更新。
+继续使用现有 `session_summaries` 表，不需要变更 schema。表的 `content` 与 `covered_through_message_id` 已足以实现缓存和增量更新。
 
 新的 `content` 是如下 JSON，而非旧版关键词事实：
 

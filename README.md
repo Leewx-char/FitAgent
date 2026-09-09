@@ -102,6 +102,10 @@ cd frontend && npm install && npm run dev
 
 只安装运行依赖时使用：`python -m pip install .`。
 
+## 数据库 Schema 初始化与升级
+
+应用启动时会根据 `app/models.py` 执行 `create_all()`，仅创建空 MySQL 数据库中缺失的模型表；它不会变更、删除或升级已存在的表。升级到包含新模型字段的版本前，必须先备份现有数据库，并由操作者删除或新建一个开发数据库后再启动应用。`create_all()` 不是数据库升级工具。
+
 ## Coros 本地 MCP 配置
 
 项目当前接入社区维护的 [`cygnusb/coros-mcp`](https://github.com/cygnusb/coros-mcp) **本地 stdio MCP**（固定到 `71d594c`），而非浏览器中的远程 OAuth connector。它是一个外部进程，刻意安装到 `.tools/coros-mcp-venv`，不写入后端 `.venv`：该 MCP 的 FastMCP 依赖可能升级 Starlette，从而破坏 FastAPI 服务的锁定依赖。
@@ -223,7 +227,7 @@ FitAgent/
 │   ├── models.py               # ORM 模型
 │   ├── schemas.py              # Pydantic 请求/响应模型
 │   ├── core/                   # 基础设施
-│   │   ├── database.py         # MySQL 连接
+│   │   ├── database.py         # MySQL 连接与新数据库模型表初始化
 │   │   ├── settings.py         # 环境配置
 │   │   ├── auth.py             # JWT 认证
 │   │   └── deps.py             # 依赖注入

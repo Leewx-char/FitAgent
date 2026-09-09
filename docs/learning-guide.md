@@ -13,11 +13,13 @@
 | [frontend/src/main.js](../frontend/src/main.js)、[router/index.js](../frontend/src/router/index.js) | Vue 从哪里启动，哪个页面负责聊天？ |
 | [frontend/src/views/Chat.vue](../frontend/src/views/Chat.vue) | 用户点击发送后，发往哪个 API，如何消费 SSE？ |
 | [frontend/src/components/Sidebar.vue](../frontend/src/components/Sidebar.vue) | 会话列表从哪里加载、如何新建/切换/删除会话？ |
-| [app/main.py](../app/main.py) | FastAPI 如何启动、注册路由、关闭 Coros 子进程？ |
+| [app/main.py](../app/main.py) | FastAPI 如何启动、先初始化新数据库模型表、注册路由、关闭 Coros 子进程？ |
 | [app/api/routers/chat.py](../app/api/routers/chat.py) | `POST /api/chat` 如何接住一次聊天？ |
 | [app/services/react_agent.py](../app/services/react_agent.py) | 请求如何通过 LangGraph 图分为 Direct RAG 与个性化 Agent？ |
 
 此时只需要记住边界：**前端负责交互和流式渲染，Router 负责 HTTP/鉴权/事务边界，Service 负责业务编排，Repository 或 Adapter 负责数据库与第三方系统。**
+
+应用的 lifespan 会先调用 `initialize_schema()`：它创建 `.env` 指定的缺失数据库，并从 `app/models.py` 注册的 ORM 定义创建空库中缺失的表。这个 `create_all()` 路径不修改已有表；升级开发数据库前必须先备份，再由操作者删除或新建数据库后重启应用。
 
 ```mermaid
 flowchart LR

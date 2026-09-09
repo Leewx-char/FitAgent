@@ -67,7 +67,7 @@ Collector 只负责官方运行记录采集；仓储仍负责将其投影为项�
 | `app/services/middleware.py` | 删除 `AgentTrace` 的手工工具记录，保留预算与业务日志。 |
 | `app/services/agent_trace.py` | 删除。 |
 | `app/repositories/agent_trace_repository.py` | 从 Collector 的工具运行投影为 ORM 行，不依赖手写 Trace。 |
-| `app/models.py`、`app/schemas.py`、Alembic | 对齐新字段与兼容查询响应。 |
+| `app/models.py`、`app/schemas.py` | 对齐新字段与兼容查询响应。 |
 
 ## 验证
 
@@ -77,6 +77,6 @@ Collector 只负责官方运行记录采集；仓储仍负责将其投影为项�
 2. SSE 成功与异常路径均保存用户问题、最终回答、状态和工具数量。
 3. 直接 RAG 的 `rag_summarize` 会被 Collector 记录。
 4. `ChatRuntimeContext` 和中间件不再持有或引用 `AgentTrace`。
-5. 迁移可从当前 Alembic 头版本升级；既有会话查询接口能序列化新字段。
+5. 既有会话查询接口能序列化新字段；新开发数据库由 ORM schema 初始化路径创建。
 
 范围内的测试通过后，运行 Ruff 检查和格式检查；全量测试如遇既有环境警告会单独报告，不能掩盖本次测试结果。

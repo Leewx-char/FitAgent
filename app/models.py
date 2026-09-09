@@ -25,7 +25,6 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.engine import Engine
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -254,8 +253,3 @@ class TrainingFeedback(Base):
     plan = relationship("TrainingPlan", back_populates="feedbacks")
 
     __table_args__ = (UniqueConstraint("plan_id", "day_of_week", name="uq_plan_feedback_day"),)
-
-
-def create_all_tables(bind: Engine) -> None:
-    """根据本模块已注册的 ORM 模型创建缺失表，不修改已有表。"""
-    Base.metadata.create_all(bind=bind)

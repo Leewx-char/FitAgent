@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Keep every messages row; session_summaries is a regenerable cache and needs no Alembic migration.
+- Keep every messages row; session_summaries is a regenerable cache and needs no schema change.
 - Use RECENT_AGENT_MESSAGE_LIMIT = 20; classification sees at most six normalized user/assistant messages.
 - Summary input is only early role == "user" text, output is at most 2400 characters, and cache content is v2 JSON; never write it to mem0 or a profile.
 - The summary tool reads user_id and session_id solely from ToolRuntime.context, validates both against Session, and accepts no model-supplied identity.

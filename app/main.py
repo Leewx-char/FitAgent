@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.response import error_response, success_response
 from app.schemas import ApiResponse
 from app.api.exception_handlers import register_exception_handlers
-from app.core.database import ensure_database_exists, ensure_schema_exists
+from app.core.database import initialize_schema
 from app.utils.bootstrap import validate_runtime
 from app.services.vector_store import VectorStoreService
 from app.core.deps import close_coros
@@ -45,8 +45,7 @@ limiter = Limiter(key_func=get_remote_address)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """执行启动校验，并在关闭时释放 Coros 客户端。"""
-    ensure_database_exists()
-    ensure_schema_exists()
+    initialize_schema()
     issues = validate_runtime()
     if issues:
         for issue in issues:

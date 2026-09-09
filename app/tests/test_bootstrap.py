@@ -2,6 +2,9 @@
 
 from types import SimpleNamespace
 
+from sqlalchemy import create_engine, inspect
+
+from app.core import database
 from app.utils import bootstrap
 
 
@@ -47,3 +50,17 @@ def test_runtime_validation_reports_missing_vision_model(monkeypatch, tmp_path):
     issues = bootstrap.validate_runtime()
 
     assert "模型配置缺失：vl_fallback_model_name" in issues
+
+
+def test_initialize_schema_creates_all_models(monkeypatch):
+    """模型表应能从空数据库显式创建。"""
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    monkeypatch.setattr(database, "engine", engine)
+    monkeypatch.setattr(database, "ensure_database_exists", lambda: None)
+
+    database.initialize_schema()
+
+    table_names = inspect(engine).get_table_names()
+    assert "users" in table_names
+    assert "sessions" in table_names
+    assert "agent_runs" in table_names
