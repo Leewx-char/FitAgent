@@ -8,6 +8,7 @@ collection_prefix: rag
 data_path: data
 manifest_path: storage/rag/index_manifest.json
 bm25_artifact_path: storage/rag/bm25_documents.json
+bm25_avg_len: 256
 evaluation_cases_path: app/evaluation/retrieval_cases.json
 evaluation_report_path: storage/rag/retrieval_evaluation_report.json
 preflight_report_path: storage/rag/index_preflight_report.json
