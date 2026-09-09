@@ -87,7 +87,6 @@ def test_build_evidence_cards_keeps_only_display_safe_hit_fields():
             "evidence_id": "guide.md#chunk-1",
             "source_id": "guide.md",
             "snippet": "深蹲时膝盖跟随脚尖方向。",
-            "tags": "动作,下肢",
             "score": 0.03,
         }
     ]

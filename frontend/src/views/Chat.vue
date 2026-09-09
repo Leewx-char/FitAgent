@@ -42,7 +42,6 @@
               <p>{{ item.snippet }}</p>
               <div class="evidence-card-meta">
                 <span>{{ item.evidence_id }}</span>
-                <span v-if="item.tags">{{ item.tags }}</span>
               </div>
             </article>
           </div>

@@ -47,7 +47,6 @@ def build_evidence_cards(result) -> list[dict[str, str | int | float | None]]:
                 "evidence_id": hit.evidence_id,
                 "source_id": hit.source_id,
                 "snippet": snippet[:240] + ("…" if len(snippet) > 240 else ""),
-                "tags": str(hit.metadata.get("tags", "")),
                 "score": hit.score,
             }
         )
