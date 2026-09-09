@@ -37,7 +37,6 @@ dependencies = [
     "Pillow==11.3.0",
     "rank-bm25==0.2.2",
     "slowapi==0.1.9",
-    "alembic==1.14.1",
     "mem0ai==2.0.20",
 ]
 

@@ -119,23 +119,21 @@ flowchart TB
     Graph[services/chat_routing_graph.py<br/>运行个性化或 Direct RAG 分支]
     Repo[repositories/agent_trace_repository.py<br/>从运行树提取工具并投影为数据库模型]
     Model[models.py / schemas.py<br/>定义本地记录与 API 返回结构]
-    Migration[alembic/versions/20260904_04_...py<br/>扩展问答字段和工具明细列]
 
     API --> Agent --> Graph
     API --> Repo --> Model
     Repo --> Model
-    Migration --> Model
 ```
 
-## 配置与迁移边界
+## 配置与表结构边界
 
 - 不配置 LangSmith，也不会将追踪数据上传到第三方云端。
-- 迁移 `20260904_04` 为 `agent_runs` 增加 `user_question`、`assistant_answer`，并将工具字段升级为 `tool_input`、`tool_output` 文本列。
-- 回滚到旧结构时，工具输入重置为 `{}`，工具输出截断为旧列允许的 120 字符；这是为了保证旧结构可恢复，代价是回滚会丢失详细追踪数据。
+- `app/models.py` 中的 `AgentRun` 保存用户问题和最终回答，`AgentToolCall` 保存每次工具调用的输入与输出。
+- 服务启动时仅创建缺失的模型表；模型字段变化不会自动更新已有表，必须采用显式数据库维护方案。
 - 日志查询继续使用现有的会话与用户边界，避免新的跨用户数据访问入口。
 
 ## 阅读路径
 
 1. 从 [`app/api/routers/chat.py`](../app/api/routers/chat.py) 查看 Collector 如何随 SSE 请求创建和持久化。
 2. 从 [`app/repositories/agent_trace_repository.py`](../app/repositories/agent_trace_repository.py) 查看运行树到两张表的转换规则。
-3. 从 [`alembic/versions/20260904_04_local_agent_run_logging.py`](../alembic/versions/20260904_04_local_agent_run_logging.py) 查看数据库迁移与回滚约束。
+3. 从 [`app/models.py`](../app/models.py) 查看 `AgentRun` 与 `AgentToolCall` 的表字段；从 [`app/core/database.py`](../app/core/database.py) 查看启动时的建库建表流程。

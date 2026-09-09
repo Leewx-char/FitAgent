@@ -186,9 +186,9 @@ sequenceDiagram
 
 按 `Chat.vue` 的 `handleFileSelect` → `upload.py` 的 `upload_health_doc` → `doc_parser.py` 的 `parse_health_doc` → `Chat.vue` 的 `confirmHealthData` → `profile.py` 阅读。回答时要强调：提取结果不是医疗诊断；用户取消、关闭或保留未解决冲突时，不会写入画像。
 
-## 8. 最后再读数据模型、迁移、API 契约与前端页面（45 分钟）
+## 8. 最后再读数据模型、初始化、API 契约与前端页面（45 分钟）
 
-此时再读 [models.py](../app/models.py)、[schemas.py](../app/schemas.py) 和 [alembic/versions](../alembic/versions)，你会知道每一张表和每个 Schema 为哪条事件流服务。
+此时再读 [models.py](../app/models.py)、[schemas.py](../app/schemas.py) 和 [database.py](../app/core/database.py)，你会知道每一张表和每个 Schema 为哪条事件流服务，以及服务如何在启动时创建缺失的数据库表。
 
 前端按用户闭环读：
 

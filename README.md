@@ -61,19 +61,15 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 
-# 3. 初始化空开发数据库并执行迁移
-# .env 中 AUTO_CREATE_DATABASE=true 时才允许创建数据库
-python -c "from app.core.database import ensure_database_exists; ensure_database_exists()"
-alembic upgrade head
-
-# 4. 启动 Qdrant，并构建知识库索引（首次或知识文件变更后执行）
+# 3. 启动 Qdrant，并构建知识库索引（首次或知识文件变更后执行）
 docker compose up -d qdrant
 python -m app.services.knowledge_indexer
 
-# 5. 确保 MySQL 服务已启动，然后启动后端
+# 4. 确保 MySQL 服务已启动，然后启动后端
+# 服务会自动创建 .env 指定的缺失数据库和 ORM 模型表
 uvicorn app.main:app --reload --port 8000
 
-# 6. 启动前端（新终端）
+# 5. 启动前端（新终端）
 cd frontend
 npm install
 npm run dev
@@ -90,18 +86,15 @@ python -m venv .venv && source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 
-# 3. 初始化空开发数据库并执行迁移
-python -c "from app.core.database import ensure_database_exists; ensure_database_exists()"
-alembic upgrade head
-
-# 4. 启动 Qdrant，并构建知识库索引
+# 3. 启动 Qdrant，并构建知识库索引
 docker compose up -d qdrant
 python -m app.services.knowledge_indexer
 
-# 5. 确保 MySQL 服务已启动，然后启动后端
+# 4. 确保 MySQL 服务已启动，然后启动后端
+# 服务会自动创建 .env 指定的缺失数据库和 ORM 模型表
 uvicorn app.main:app --reload --port 8000
 
-# 6. 启动前端
+# 5. 启动前端
 cd frontend && npm install && npm run dev
 ```
 
@@ -211,11 +204,7 @@ mem0 主向量库存记忆正文和元数据；Entity Store 按实体关联主�
 
 该记录功能只使用本地 MySQL，不接入 LangSmith；不新增日志表、HTTP 路由或长期运行时 `trace` 字段。
 
-升级代码后先执行数据库迁移并重启后端：
-
-```powershell
-alembic upgrade head
-```
+服务启动时会创建缺失的数据库和模型表。模型字段变更需要制定显式的数据库维护方案；重启服务不会修改已有表结构。
 
 登录后可调用 `GET /api/sessions/{session_id}/agent-runs` 查看该会话最近的执行轨迹。此操作不需要重新构建知识库索引。
 
@@ -273,8 +262,6 @@ FitAgent/
 ├── docs/                       # 学习路线与面试文档
 │   ├── learning-guide.md        # 按事件流阅读代码的学习路线
 │   └── interview/               # 项目简介、技术亮点、问答与简历写法
-├── alembic/                     # 数据库迁移
-├── alembic.ini
 ├── storage/uploads/            # 上传文件临时目录
 └── docker-compose.yml           # Qdrant 单节点演示部署
 ```
