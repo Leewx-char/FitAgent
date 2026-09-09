@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from qdrant_client import models
 
 from app.services.vector_repository import IndexedChunk, QdrantVectorRepository
@@ -60,6 +61,35 @@ def test_rebuild_creates_named_dense_and_sparse_vectors_and_upserts_both():
     assert point.vector["sparse"].options.language == "chinese"
     assert point.vector["sparse"].options.avg_len == 256
     assert point.payload == {"text": chunk.text, **chunk.metadata}
+
+
+def test_rebuild_rejects_mismatched_inputs_before_recreating_collection():
+    client = CapturingClient()
+    repository = QdrantVectorRepository("fitagent_knowledge", "http://unused", client=client)
+    chunk = IndexedChunk(
+        "5e196284-177a-5ee8-b496-a8582a50f9d1",
+        "深蹲时保持膝盖与脚尖方向一致。",
+        {"source_id": "动作.md"},
+    )
+
+    with pytest.raises(ValueError, match="数量必须一致"):
+        repository.rebuild([chunk], [[0.1, 0.2], [0.3, 0.4]])
+
+    assert client.recreate_collection_kwargs is None
+
+
+def test_rebuild_preserves_chunk_text_when_metadata_contains_text():
+    client = CapturingClient()
+    repository = QdrantVectorRepository("fitagent_knowledge", "http://unused", client=client)
+    chunk = IndexedChunk(
+        "5e196284-177a-5ee8-b496-a8582a50f9d1",
+        "深蹲时保持膝盖与脚尖方向一致。",
+        {"source_id": "动作.md", "text": "错误元数据文本"},
+    )
+
+    repository.rebuild([chunk], [[0.1, 0.2]])
+
+    assert client.upsert_kwargs["points"][0].payload["text"] == chunk.text
 
 
 def test_hybrid_search_uses_two_prefetches_and_one_rrf_query():

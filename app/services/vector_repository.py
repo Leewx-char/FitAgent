@@ -96,6 +96,8 @@ class QdrantVectorRepository:
 
     def rebuild(self, chunks: list[IndexedChunk], dense_vectors: list[list[float]]) -> None:
         """破坏性地重建 collection，并批量写入 dense 与 BM25 向量。"""
+        if len(chunks) != len(dense_vectors):
+            raise ValueError("Qdrant 重建的 chunks 与 dense vectors 数量必须一致。")
         if not dense_vectors:
             raise ValueError("重建 Qdrant collection 至少需要一个 dense vector。")
 
@@ -126,7 +128,7 @@ class QdrantVectorRepository:
                         options=self._bm25_config(),
                     ),
                 },
-                payload={self._TEXT_KEY: chunk.text, **chunk.metadata},
+                payload={**chunk.metadata, self._TEXT_KEY: chunk.text},
             )
             for chunk, dense_vector in zip(chunks, dense_vectors, strict=True)
         ]
