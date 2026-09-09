@@ -1,6 +1,7 @@
 import re
 import os
 import hashlib
+import unicodedata
 from app.utils.logger_handler import logger
 from langchain_core.documents import Document
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
@@ -54,23 +55,16 @@ def txt_loader(filepath: str) -> list[Document]:
 
 
 def clean_text(text: str) -> str:
-    """轻量文本清洗，统一空白、换行和BOM"""
-    """空值检查"""
+    """规范化 Unicode、零宽字符、换行和空白。"""
     if not text:
         return ""
 
-    # 去除特殊字符
-    cleaned = text.replace("\ufeff", "").replace("\u3000", " ")
-    # 统一换行符
+    cleaned = unicodedata.normalize("NFKC", text)
+    cleaned = cleaned.replace("\ufeff", "").replace("\u200b", "")
     cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
-    # 压缩空白字符
     cleaned = re.sub(r"[ \t]+", " ", cleaned)
-    # 清理行首尾空格
     cleaned = re.sub(r" *\n *", "\n", cleaned)
-    # 限制连续空行
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-
-    # 去除首尾空白
     return cleaned.strip()
 
 
