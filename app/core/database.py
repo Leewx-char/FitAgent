@@ -6,7 +6,8 @@
   - 创建 SQLAlchemy 引擎（含连接池配置）
   - 提供 SessionLocal 会话工厂，每次 API 请求通过 Depends 获取独立事务会话
   - 提供 Base 声明式基类，所有 ORM 模型继承它
-  - 提供仅供本地开发显式调用的 ensure_database_exists() 建库函数
+  - 提供服务启动时调用的 ensure_database_exists() 建库函数
+  - 延迟加载 ORM 模型并创建缺失表
 
 本文件是数据层的唯一入口。换数据库只需改本文件的连接字符串。
 """
@@ -24,10 +25,8 @@ DATABASE_URL = get_settings().database_url
 
 
 def ensure_database_exists(settings: Settings | None = None) -> None:
-    """仅在明确开启时为本地开发创建配置中的空数据库。"""
+    """为当前配置幂等创建数据库。"""
     settings = settings or get_settings()
-    if not settings.auto_create_database:
-        return
 
     if not re.fullmatch(r"[A-Za-z0-9_]+", settings.mysql_database):
         raise RuntimeError("MYSQL_DATABASE 只能包含字母、数字和下划线")
@@ -57,6 +56,13 @@ def ensure_database_exists(settings: Settings | None = None) -> None:
             )
     finally:
         conn.close()
+
+
+def ensure_schema_exists() -> None:
+    """加载全部 ORM 模型并创建缺失的模型表。"""
+    from app.models import create_all_tables
+
+    create_all_tables(engine)
 
 
 engine = create_engine(

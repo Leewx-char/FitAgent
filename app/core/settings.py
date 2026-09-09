@@ -21,7 +21,6 @@ class Settings(BaseSettings):
     mysql_host: str = "localhost"
     mysql_port: int = 3306
     mysql_database: str = "zhitong"
-    auto_create_database: bool = False
     health_document_max_pages: int = Field(default=20, ge=1, le=100)
     health_document_render_dpi: int = Field(default=200, ge=100, le=400)
     health_document_fallback_render_dpi: int = Field(default=300, ge=100, le=400)
