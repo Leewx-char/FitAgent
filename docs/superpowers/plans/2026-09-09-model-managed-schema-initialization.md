@@ -125,7 +125,7 @@ def test_ensure_database_exists_rejects_unsafe_database_name():
 
 - [x] **Step 2: 运行失败测试**
 
-Run: `.venv/bin/python -m pytest app/tests/test_database_schema.py -q -p no:cacheprovider`  
+Run: `.venv/bin/python -m pytest app/tests/test_database_schema.py -q -p no:cacheprovider`
 Expected: FAIL，提示 `models.create_all_tables` 和 `database.ensure_schema_exists` 尚不存在。
 
 - [x] **Step 3: 写最小实现**
@@ -154,10 +154,10 @@ def ensure_schema_exists() -> None:
 
 - [x] **Step 4: 验证 Task 1**
 
-Run: `.venv/bin/python -m pytest app/tests/test_database_schema.py app/tests/test_database_session.py app/tests/test_settings.py -q -p no:cacheprovider`  
+Run: `.venv/bin/python -m pytest app/tests/test_database_schema.py app/tests/test_database_session.py app/tests/test_settings.py -q -p no:cacheprovider`
 Expected: PASS。
 
-Run: `.venv/bin/python -m ruff format --check app/models.py app/core/database.py app/core/settings.py app/tests/test_database_schema.py && .venv/bin/python -m ruff check app/models.py app/core/database.py app/core/settings.py app/tests/test_database_schema.py`  
+Run: `.venv/bin/python -m ruff format --check app/models.py app/core/database.py app/core/settings.py app/tests/test_database_schema.py && .venv/bin/python -m ruff check app/models.py app/core/database.py app/core/settings.py app/tests/test_database_schema.py`
 Expected: PASS。
 
 - [x] **Step 5: 提交 Task 1**
@@ -221,7 +221,7 @@ async def test_lifespan_does_not_run_runtime_work_when_schema_creation_fails(mon
 
 - [x] **Step 2: 运行失败测试**
 
-Run: `.venv/bin/python -m pytest app/tests/test_main_lifespan.py -q -p no:cacheprovider`  
+Run: `.venv/bin/python -m pytest app/tests/test_main_lifespan.py -q -p no:cacheprovider`
 Expected: FAIL，`app.main` 尚未导入初始化函数。
 
 - [x] **Step 3: 最小接入**
@@ -243,10 +243,10 @@ from app.core.database import ensure_database_exists, ensure_schema_exists
 
 - [x] **Step 4: 验证 Task 2**
 
-Run: `.venv/bin/python -m pytest app/tests/test_main_lifespan.py app/tests/test_bootstrap.py app/tests/test_database_schema.py -q -p no:cacheprovider`  
+Run: `.venv/bin/python -m pytest app/tests/test_main_lifespan.py app/tests/test_bootstrap.py app/tests/test_database_schema.py -q -p no:cacheprovider`
 Expected: PASS。
 
-Run: `.venv/bin/python -m ruff format --check app/main.py app/tests/test_main_lifespan.py && .venv/bin/python -m ruff check app/main.py app/tests/test_main_lifespan.py`  
+Run: `.venv/bin/python -m ruff format --check app/main.py app/tests/test_main_lifespan.py && .venv/bin/python -m ruff check app/main.py app/tests/test_main_lifespan.py`
 Expected: PASS。
 
 - [x] **Step 5: 提交 Task 2**
@@ -276,7 +276,7 @@ git commit -m "feat: initialize missing schema at startup"
 
 - [x] **Step 1: 记录当前检查的失败证据**
 
-Run: `rg -n "alembic|AUTO_CREATE_DATABASE" pyproject.toml .env.example README.md docs app alembic.ini`  
+Run: `rg -n "alembic|AUTO_CREATE_DATABASE" pyproject.toml .env.example README.md docs app alembic.ini`
 Expected: 显示包依赖、示例设置、README 命令、文档链接、迁移脚本和迁移测试。
 
 - [x] **Step 2: 删除精确范围内的迁移资产**
@@ -303,10 +303,10 @@ Expected: 显示包依赖、示例设置、README 命令、文档链接、迁移
 
 - [x] **Step 4: 验证清理**
 
-Run: `test ! -e alembic && test ! -e alembic.ini && ! rg -n "alembic|AUTO_CREATE_DATABASE" pyproject.toml .env.example README.md docs/agent-run-logging-architecture.md docs/learning-guide.md app`  
+Run: `test ! -e alembic && test ! -e alembic.ini && ! rg -n "alembic|AUTO_CREATE_DATABASE" pyproject.toml .env.example README.md docs/agent-run-logging-architecture.md docs/learning-guide.md app`
 Expected: 退出码 0。
 
-Run: `.venv/bin/python -m pytest app/tests/test_database_schema.py app/tests/test_main_lifespan.py -q -p no:cacheprovider`  
+Run: `.venv/bin/python -m pytest app/tests/test_database_schema.py app/tests/test_main_lifespan.py -q -p no:cacheprovider`
 Expected: PASS。
 
 - [x] **Step 5: 提交 Task 3**
@@ -408,16 +408,16 @@ Expected: `verified_tables` 等于模型表数量且无缺失或额外表。
 
 - [x] **Step 4: 运行原中文经验值计划与新机制的全部门禁**
 
-Run: `.venv/bin/python -m pytest app/tests/test_training_safety.py::test_safety_policy_uses_frontend_chinese_experience_values -q -p no:cacheprovider`  
+Run: `.venv/bin/python -m pytest app/tests/test_training_safety.py::test_safety_policy_uses_frontend_chinese_experience_values -q -p no:cacheprovider`
 Expected: PASS。
 
-Run: `.venv/bin/python -m pytest app/tests/test_training_safety.py -q -p no:cacheprovider`  
+Run: `.venv/bin/python -m pytest app/tests/test_training_safety.py -q -p no:cacheprovider`
 Expected: PASS。
 
-Run: `.venv/bin/python -m pytest app/tests/test_training_plans.py -q -p no:cacheprovider`  
+Run: `.venv/bin/python -m pytest app/tests/test_training_plans.py -q -p no:cacheprovider`
 Expected: PASS。
 
-Run: `.venv/bin/python -m ruff format --check app/models.py app/services/training_plan_service.py app/tests/test_training_safety.py app/core/database.py app/main.py app/tests/test_database_schema.py app/tests/test_main_lifespan.py && .venv/bin/python -m ruff check app/models.py app/services/training_plan_service.py app/tests/test_training_safety.py app/core/database.py app/main.py app/tests/test_database_schema.py app/tests/test_main_lifespan.py`  
+Run: `.venv/bin/python -m ruff format --check app/models.py app/services/training_plan_service.py app/tests/test_training_safety.py app/core/database.py app/main.py app/tests/test_database_schema.py app/tests/test_main_lifespan.py && .venv/bin/python -m ruff check app/models.py app/services/training_plan_service.py app/tests/test_training_safety.py app/core/database.py app/main.py app/tests/test_database_schema.py app/tests/test_main_lifespan.py`
 Expected: PASS。
 
 - [x] **Step 5: 审计与回退点提交**
