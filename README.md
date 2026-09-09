@@ -13,7 +13,7 @@
 
 ## 项目能力
 
-- **可解释 RAG**：Qdrant Dense + 离线 BM25 双路召回、RRF 融合、revision/alias 安全发布；回答带 `[证据:N]` 和来源卡片。
+- **可解释 RAG**：一次 Qdrant Query API 请求完成 Dense + BM25 prefetch 与 RRF 融合；回答带 `[证据:N]` 和来源卡片。
 - **受控 Agent**：LangGraph ReAct 只在个性化问题中调用画像、已确认记忆、运动摘要、天气等工具；有递归步数、工具预算，以及基于官方 Collector 的本地执行记录。
 - **用户可控记忆**：mem0 调用 LLM 从用户消息提取 `proposed` 候选；用户在“我的记忆”页确认后，由模型自主选择调用工具进行语义检索。状态和有效期随记忆保存在向量库，助手回答不进入提取输入。
 - **自适应周计划**：Coros 近四周聚合快照 + 用户画像 + RPE/疼痛反馈 → 固定安全策略 → RAG 证据 → Pydantic JSON 契约和业务校验。
@@ -39,7 +39,7 @@
 | LLM | DashScope (deepseek-v4-pro / text-embedding-v1) |
 | Agent | LangGraph + LangChain（ReAct + 受控工具调用） |
 | 向量数据库 | Qdrant（单节点 Docker，生产演进 demo） |
-| 关键词检索 | rank-bm25 (BM25) |
+| 混合检索 | Qdrant 原生 Dense + BM25 + RRF |
 | 文档处理 | PyPDF + pdf2image + python-magic + Pillow |
 | 前端框架 | Vue 3 + Vite + Pinia + Naive UI |
 | 图表 | ECharts |
@@ -61,12 +61,13 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 
-# 3. 启动 Qdrant，并构建知识库索引（首次或知识文件变更后执行）
+# 3. 启动 Qdrant，并显式重建知识库索引（首次或知识文件变更后执行）
 docker compose up -d qdrant
+# 该命令会**重建** `fitagent_knowledge`；执行前确认可丢弃现有知识库数据。
 python -m app.services.knowledge_indexer
 
 # 4. 确保 MySQL 服务已启动，然后启动后端
-# 服务会自动创建 .env 指定的缺失数据库和 ORM 模型表
+# 应用启动只创建缺失关系表，不重建知识库
 uvicorn app.main:app --reload --port 8000
 
 # 5. 启动前端（新终端）
@@ -86,12 +87,13 @@ python -m venv .venv && source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 
-# 3. 启动 Qdrant，并构建知识库索引
+# 3. 启动 Qdrant，并显式重建知识库索引
 docker compose up -d qdrant
+# 该命令会**重建** `fitagent_knowledge`；执行前确认可丢弃现有知识库数据。
 python -m app.services.knowledge_indexer
 
 # 4. 确保 MySQL 服务已启动，然后启动后端
-# 服务会自动创建 .env 指定的缺失数据库和 ORM 模型表
+# 应用启动只创建缺失关系表，不重建知识库
 uvicorn app.main:app --reload --port 8000
 
 # 5. 启动前端
@@ -148,21 +150,13 @@ pytest app/tests
 
 当前测试还覆盖：assistant/tool 输出不能进入 mem0 候选、记忆确认/撤销、训练计划的强度与证据校验、Coros stdio 超时重置，以及同日多次活动不被覆盖。
 
-当前 Qdrant revision 的检索基线（需要 Qdrant 与 DashScope embedding 服务可访问）：
+检索质量基线（需要 Qdrant 与 DashScope embedding 服务可访问）：
 
 ```powershell
 .\.venv\Scripts\python.exe -m app.evaluation.retrieval_evaluator
 ```
 
-知识源变更后，可先运行不调用 embedding、不访问 Qdrant 的发布前数据预检：
-
-```powershell
-.\.venv\Scripts\python.exe -m app.services.knowledge_preflight
-```
-
-预检报告位于 Git 忽略的 `storage/rag/index_preflight_report.json`；通过后再执行索引构建。
-
-该命令不调用回答模型、不修改索引，输出的评测报告位于 Git 忽略的 `storage/rag/`。
+评测只检查最终返回的 Top-6 证据是否命中人工标注的 `source_id`/`chunk_id`，并强制 `Recall@6 >= 0.90` 与 `MRR >= 0.70`。它不调用回答模型，也不会改写索引；报告打印到标准输出。
 
 ## Agent 运行防护栏
 
@@ -249,9 +243,8 @@ FitAgent/
 │   │   ├── middleware.py       # Agent 中间件
 │   │   ├── rag_service.py      # RAG 检索与 RRF 融合
 │   │   ├── vector_repository.py # Qdrant 仓储边界
-│   │   ├── vector_store.py     # Qdrant 查询服务
+│   │   ├── vector_store.py     # Qdrant 查询与 embedding 服务
 │   │   ├── knowledge_indexer.py # 离线索引构建入口
-│   │   ├── bm25_retriever.py   # BM25 关键词检索
 │   │   └── doc_parser.py       # 多模态文档解析
 │   └── utils/                  # 工具函数
 │       ├── config_handler.py
@@ -274,25 +267,22 @@ FitAgent/
 
 ```
 用户提问
-  ├── 查询处理：归一化（口语→术语）+ 同义词扩展
-  ├── 双路并行检索：
-  │   ├── Qdrant 向量检索（语义、来源过滤）
-  │   └── BM25 关键词检索（字级分词 + TF-IDF + 长度归一化）
-  ├── RRF 排名融合
-  ├── Jaccard 去重（阈值 0.8）
-  └── 取 Top-6 返回
+  └── 一次 Qdrant Query API
+      ├── Dense prefetch（语义）
+      ├── Qdrant BM25 prefetch（关键词）
+      ├── RRF 融合
+      └── 取最终 Top-6 返回
 ```
 
 更多设计决策和技术细节请查看 [项目学习路线](./docs/learning-guide.md)，以及独立的 [项目简介](./docs/interview/项目简介.md)、[技术亮点](./docs/interview/技术亮点.md)、[常见面试题](./docs/interview/常见面试题.md)、[简历写法](./docs/interview/简历写法.md)。
 
 ## Qdrant 演进 Demo
 
-演示使用单节点 Qdrant 与离线构建：`data/` 中的知识文件经标题感知切分、父子关联、内容去重和 embedding 后，生成带 revision 的 collection；校验完成后才切换 `rag_active` 别名。在线 API 只读检索，绝不自动导入或重建索引。
+演示使用单节点 Qdrant 与显式离线构建：`data/` 中受控 TXT、Markdown 或 PDF 文件只做 Unicode 与空白规范化，再经切分和 embedding 写入 `fitagent_knowledge`。`python -m app.services.knowledge_indexer` 是破坏性重建命令；在线 API 只读检索，应用启动也只创建缺失关系表，不会自动导入或重建知识库。
 
 - `GET /api/health/rag`：检查当前 Qdrant collection 是否可读。
-- `python -m app.services.knowledge_indexer`：知识文件更新后显式构建并激活新 revision。
-- BM25 文档工件随离线构建生成；缺失时系统自动降级为 dense 检索，不会在请求中全量同步。
-- 索引发布后重启后端，使常驻的 BM25 工件与新的 Qdrant revision 一致。
+- `python -m app.services.knowledge_indexer`：知识文件更新后显式、破坏性地重建 `fitagent_knowledge`。
+- 每个查询以一次 Qdrant Query API 的 Dense + BM25 prefetch 和 RRF 获得最终证据；没有本地 BM25 工件或在线重排阶段。
 
 ## License
 
