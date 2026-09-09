@@ -31,6 +31,10 @@ class ScoredChunk:
 class VectorRepository(Protocol):
     """RAG 服务使用的存储边界；第三方 SDK 类型不得越过此处。"""
 
+    def health(self) -> dict[str, int | str]:
+        """返回向量仓储的只读就绪状态摘要。"""
+        ...
+
     def rebuild(self, chunks: list[IndexedChunk], dense_vectors: list[list[float]]) -> None:
         """破坏性地重建 native hybrid collection。"""
         ...
@@ -93,6 +97,15 @@ class QdrantVectorRepository:
             language="chinese",
             avg_len=self.bm25_avg_len,
         )
+
+    def health(self) -> dict[str, int | str]:
+        """返回 collection 的只读就绪状态，不触发索引变更。"""
+        collection = self.client.get_collection(self.collection_name)
+        return {
+            "status": "ready",
+            "collection": self.collection_name,
+            "points_count": int(collection.points_count or 0),
+        }
 
     def rebuild(self, chunks: list[IndexedChunk], dense_vectors: list[list[float]]) -> None:
         """破坏性地重建 collection，并批量写入 dense 与 BM25 向量。"""

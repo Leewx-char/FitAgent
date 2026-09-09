@@ -9,27 +9,51 @@ from app.services.vector_repository import IndexedChunk, QdrantVectorRepository
 class CapturingClient:
     """捕获仓储发往 Qdrant 的请求，而不依赖本地推理能力。"""
 
-    def __init__(self, points=None):
+    def __init__(self, points=None, collection=None):
+        self.calls = []
         self.recreate_collection_kwargs = None
         self.payload_index_kwargs = None
         self.upsert_kwargs = None
         self.query_points_calls = 0
         self.kwargs = None
         self._points = points or []
+        self._collection = collection
 
     def recreate_collection(self, **kwargs):
+        self.calls.append(("recreate_collection", kwargs))
         self.recreate_collection_kwargs = kwargs
 
     def create_payload_index(self, **kwargs):
+        self.calls.append(("create_payload_index", kwargs))
         self.payload_index_kwargs = kwargs
 
     def upsert(self, **kwargs):
+        self.calls.append(("upsert", kwargs))
         self.upsert_kwargs = kwargs
 
     def query_points(self, **kwargs):
+        self.calls.append(("query_points", kwargs))
         self.query_points_calls += 1
         self.kwargs = kwargs
         return SimpleNamespace(points=self._points)
+
+    def get_collection(self, collection_name):
+        self.calls.append(("get_collection", collection_name))
+        return self._collection
+
+
+def test_health_reads_collection_and_returns_ready_summary():
+    client = CapturingClient(collection=SimpleNamespace(points_count=17))
+    repository = QdrantVectorRepository("fitagent_knowledge", "http://unused", client=client)
+
+    health = repository.health()
+
+    assert health == {
+        "status": "ready",
+        "collection": "fitagent_knowledge",
+        "points_count": 17,
+    }
+    assert client.calls == [("get_collection", "fitagent_knowledge")]
 
 
 def test_rebuild_creates_named_dense_and_sparse_vectors_and_upserts_both():
