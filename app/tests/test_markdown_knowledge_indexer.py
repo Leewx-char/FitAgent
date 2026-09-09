@@ -92,7 +92,9 @@ def test_build_chunks_deduplicates_exact_chunk_text_and_keeps_scalar_loader_meta
     chunks = indexer._build_chunks([("动作.txt", documents)])
 
     expected_id = str(uuid.uuid5(knowledge_indexer._INDEX_NAMESPACE, "动作.txt:0:0"))
-    assert [(chunk.chunk_id, chunk.text) for chunk in chunks] == [(expected_id, "深蹲保持脊柱中立。")]
+    assert [(chunk.chunk_id, chunk.text) for chunk in chunks] == [
+        (expected_id, "深蹲保持脊柱中立。")
+    ]
     assert chunks[0].metadata == {
         "chunk_id": expected_id,
         "source_id": "动作.txt",

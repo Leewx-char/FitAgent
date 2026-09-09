@@ -164,9 +164,7 @@ class KnowledgeIndexer:
                         continue
                     seen_hashes.add(text_hash)
                     chunk_id = str(
-                        uuid.uuid5(
-                            _INDEX_NAMESPACE, f"{source}:{document_ordinal}:{chunk_ordinal}"
-                        )
+                        uuid.uuid5(_INDEX_NAMESPACE, f"{source}:{document_ordinal}:{chunk_ordinal}")
                     )
                     scalar_loader_metadata = {
                         key: value
