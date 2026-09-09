@@ -30,13 +30,20 @@ class FakeSession:
 def _save(db, collector, *, request_id="request-2"):
     """以固定请求元数据保存 Collector 运行树。"""
     return AgentTraceRepository.save(
-        db, collector, request_id=request_id, session_id="b" * 32, user_id=7,
-        user_question="北京天气怎么样？", assistant_answer="北京晴。", status="succeeded",
+        db,
+        collector,
+        request_id=request_id,
+        session_id="b" * 32,
+        user_id=7,
+        user_question="北京天气怎么样？",
+        assistant_answer="北京晴。",
+        status="succeeded",
     )
 
 
 def test_repository_projects_tool_input_and_output():
     """Collector 工具运行应保存真实输入、输出与问答摘要。"""
+
     @tool
     def get_weather(city: str) -> dict[str, str]:
         """返回测试城市的天气结果。"""
@@ -56,6 +63,7 @@ def test_repository_projects_tool_input_and_output():
 
 def test_repository_marks_failed_tool_and_preserves_error():
     """Collector 异常工具应保存失败状态和错误文本。"""
+
     @tool
     def get_weather(city: str) -> dict[str, str]:
         """模拟不可用的天气服务。"""

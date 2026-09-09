@@ -117,9 +117,7 @@ def test_graph_selects_direct_rag_edge_for_generic_intent():
     )
 
     result = graph.invoke(
-        build_initial_chat_state(
-            messages=[{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}]
-        ),
+        build_initial_chat_state(messages=[{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}]),
         context=_runtime_context(),
     )
 
@@ -174,9 +172,7 @@ def test_graph_node_receives_runtime_context_from_graph_invocation():
     runtime_context = _runtime_context()
 
     result = graph.invoke(
-        build_initial_chat_state(
-            messages=[{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}]
-        ),
+        build_initial_chat_state(messages=[{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}]),
         context=runtime_context,
     )
 
