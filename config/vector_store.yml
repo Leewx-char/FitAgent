@@ -10,7 +10,7 @@ sparse_vector_name: sparse
 sparse_model: Qdrant/bm25
 sparse_language: chinese
 sparse_tokenizer: multilingual
-bm25_avg_len: 256
+bm25_avg_len: 400
 
 data_path: data
 allow_knowledge_file_type: ["txt", "md", "pdf"]

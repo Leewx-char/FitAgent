@@ -116,7 +116,7 @@ def test_minimal_hybrid_configuration_and_docs_match_runtime_contract():
         "sparse_model": "Qdrant/bm25",
         "sparse_language": "chinese",
         "sparse_tokenizer": "multilingual",
-        "bm25_avg_len": 256,
+        "bm25_avg_len": 400,
         "data_path": "data",
         "allow_knowledge_file_type": ["txt", "md", "pdf"],
         "chunk_size": 500,

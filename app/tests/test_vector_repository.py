@@ -85,7 +85,7 @@ def test_rebuild_creates_named_dense_and_sparse_vectors_and_upserts_both():
     assert point.vector["sparse"].model == "Qdrant/bm25"
     assert point.vector["sparse"].options["tokenizer"] == "multilingual"
     assert point.vector["sparse"].options["language"] == "chinese"
-    assert point.vector["sparse"].options["avg_len"] == 256
+    assert point.vector["sparse"].options["avg_len"] == 400
     assert point.payload == {"text": chunk.text, **chunk.metadata}
 
 
@@ -107,7 +107,7 @@ def test_bm25_documents_use_grpc_serializable_options_for_indexing_and_search():
     assert dict(indexed_sparse_document.options) == {
         "k": 1.2,
         "b": 0.75,
-        "avg_len": 256.0,
+        "avg_len": 400.0,
         "tokenizer": "multilingual",
         "language": "chinese",
     }
