@@ -49,19 +49,26 @@ class DashScopeReranker:
 
         selected: list[ScoredChunk] = []
         seen_indexes: set[int] = set()
+        expected_count = min(limit, len(candidates))
         for item in results:
-            if len(selected) >= min(limit, len(candidates)):
+            if len(selected) >= expected_count:
                 raise RuntimeError("DashScope 重排返回了超出请求上限的候选。")
-            index = item.index
-            if not isinstance(index, int) or index < 0 or index >= len(candidates):
+            index = getattr(item, "index", None)
+            if type(index) is not int or index < 0 or index >= len(candidates):
                 raise RuntimeError("DashScope 重排返回无效候选索引。")
             if index in seen_indexes:
                 raise RuntimeError("DashScope 重排返回重复候选索引。")
             seen_indexes.add(index)
+            try:
+                score = float(item.relevance_score)
+            except (AttributeError, TypeError, ValueError) as error:
+                raise RuntimeError("DashScope 重排返回无效相关度。") from error
             selected.append(
                 ScoredChunk(
                     document=candidates[index].document,
-                    score=float(item.relevance_score),
+                    score=score,
                 )
             )
+        if len(selected) != expected_count:
+            raise RuntimeError("DashScope 重排返回结果数量与请求上限不符。")
         return selected

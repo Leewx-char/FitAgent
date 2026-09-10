@@ -114,3 +114,32 @@ def test_dashscope_reranker_rejects_provider_failure_and_invalid_indexes(monkeyp
     )
     with pytest.raises(RuntimeError, match="重复候选索引"):
         service.rerank("深蹲", candidates, limit=2)
+
+
+def test_dashscope_reranker_rejects_incomplete_results_and_boolean_indexes(monkeypatch):
+    service = reranker.DashScopeReranker("gte-rerank-v2", "test-key")
+    candidates = [make_candidate("first", 0.2), make_candidate("second", 0.1)]
+
+    monkeypatch.setattr(
+        reranker.dashscope.TextReRank,
+        "call",
+        lambda **kwargs: SimpleNamespace(
+            status_code=200,
+            code="",
+            output=SimpleNamespace(results=[]),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="结果数量与请求上限不符"):
+        service.rerank("深蹲", candidates, limit=2)
+
+    monkeypatch.setattr(
+        reranker.dashscope.TextReRank,
+        "call",
+        lambda **kwargs: SimpleNamespace(
+            status_code=200,
+            code="",
+            output=SimpleNamespace(results=[SimpleNamespace(index=True, relevance_score=0.9)]),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="无效候选索引"):
+        service.rerank("深蹲", candidates, limit=1)
