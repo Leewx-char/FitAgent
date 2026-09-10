@@ -13,7 +13,7 @@
 
 ## 项目能力
 
-- **可解释 RAG**：一次 Qdrant Query API 请求完成 Dense + BM25 prefetch 与 RRF 融合；回答带 `[证据:N]` 和来源卡片。
+- **可解释 RAG**：一次 Qdrant Query API 请求完成 Dense + BM25 prefetch 与 RRF 融合，DashScope 重排候选后返回最终证据；回答带 `[证据:N]` 和来源卡片。
 - **受控 Agent**：LangGraph ReAct 只在个性化问题中调用画像、已确认记忆、运动摘要、天气等工具；有递归步数、工具预算，以及基于官方 Collector 的本地执行记录。
 - **用户可控记忆**：mem0 调用 LLM 从用户消息提取 `proposed` 候选；用户在“我的记忆”页确认后，由模型自主选择调用工具进行语义检索。状态和有效期随记忆保存在向量库，助手回答不进入提取输入。
 - **自适应周计划**：Coros 近四周聚合快照 + 用户画像 + RPE/疼痛反馈 → 固定安全策略 → RAG 证据 → Pydantic JSON 契约和业务校验。
@@ -36,10 +36,10 @@
 | 后端框架 | FastAPI 0.136 + Uvicorn 0.47 |
 | 数据库 | MySQL 8.0 + SQLAlchemy 2.0 |
 | 认证 | JWT (python-jose) + bcrypt |
-| LLM | DashScope (deepseek-v4-pro / text-embedding-v1) |
+| LLM | DashScope (deepseek-v4-pro / text-embedding-v1 / gte-rerank-v2) |
 | Agent | LangGraph + LangChain（ReAct + 受控工具调用） |
 | 向量数据库 | Qdrant（单节点 Docker，生产演进 demo） |
-| 混合检索 | Qdrant 原生 Dense + BM25 + RRF |
+| 混合检索 | Qdrant 原生 Dense + BM25 + RRF + DashScope 二阶段重排 |
 | 文档处理 | PyPDF + pdf2image + python-magic + Pillow |
 | 前端框架 | Vue 3 + Vite + Pinia + Naive UI |
 | 图表 | ECharts |
@@ -150,7 +150,7 @@ pytest app/tests
 
 当前测试还覆盖：assistant/tool 输出不能进入 mem0 候选、记忆确认/撤销、训练计划的强度与证据校验、Coros stdio 超时重置，以及同日多次活动不被覆盖。
 
-检索质量基线（需要 Qdrant 与 DashScope embedding 服务可访问）：
+检索质量基线（需要 Qdrant 与 DashScope embedding、重排服务可访问）：
 
 ```powershell
 .\.venv\Scripts\python.exe -m app.evaluation.retrieval_evaluator
@@ -241,7 +241,8 @@ FitAgent/
 │   │   ├── training_plan_service.py # 计划编排与安全策略
 │   │   ├── fitness_insights.py # Coros 数据受限聚合快照
 │   │   ├── middleware.py       # Agent 中间件
-│   │   ├── rag_service.py      # RAG 检索与 RRF 融合
+│   │   ├── rag_service.py      # RAG 检索、RRF 融合与二阶段排序
+│   │   ├── reranker.py         # DashScope 重排边界
 │   │   ├── vector_repository.py # Qdrant 仓储边界
 │   │   ├── vector_store.py     # Qdrant 查询与 embedding 服务
 │   │   ├── knowledge_indexer.py # 离线索引构建入口
@@ -271,7 +272,9 @@ FitAgent/
       ├── Dense prefetch（语义）
       ├── Qdrant BM25 prefetch（关键词）
       ├── RRF 融合
-      └── 取最终 Top-6 返回
+      └── 取 Top-30 候选
+          └── DashScope `gte-rerank-v2` 重排
+              └── 返回最终 Top-6 证据
 ```
 
 更多设计决策和技术细节请查看 [项目学习路线](./docs/learning-guide.md)，以及独立的 [项目简介](./docs/interview/项目简介.md)、[技术亮点](./docs/interview/技术亮点.md)、[常见面试题](./docs/interview/常见面试题.md)、[简历写法](./docs/interview/简历写法.md)。
@@ -282,7 +285,7 @@ FitAgent/
 
 - `GET /api/health/rag`：检查当前 Qdrant collection 是否可读。
 - `python -m app.services.knowledge_indexer`：知识文件更新后显式、破坏性地重建 `fitagent_knowledge`。
-- 每个查询以一次 Qdrant Query API 的 Dense + BM25 prefetch 和 RRF 获得最终证据；没有本地 BM25 工件或在线重排阶段。
+- 每个查询只发起一次 Qdrant Query API：Dense + BM25 prefetch 经 RRF 选出最多 30 个候选，再由 DashScope `gte-rerank-v2` 返回最终 Top-6；没有本地 BM25 工件。重排请求仅发送用户问题和这些已召回的候选文本，且接口设置 `return_documents=false`，响应不回传候选正文。
 
 ## License
 

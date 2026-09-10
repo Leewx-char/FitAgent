@@ -20,7 +20,9 @@ batch_size: 32
 min_source_count: 1
 min_chunk_count: 1
 k: 6
-candidate_k: 15
+candidate_k: 30
+rerank_candidate_k: 30
+reranker_model: gte-rerank-v2
 max_context_chars: 6000
 max_chars_per_evidence: 1200
 evaluation_cases_path: app/evaluation/retrieval_cases.json

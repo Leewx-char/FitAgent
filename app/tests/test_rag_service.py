@@ -48,12 +48,24 @@ class CapturingVectorStore:
         return {"status": "ready"}
 
 
+class PassThroughReranker:
+    """测试中不调用 DashScope，保留首阶段候选的既有顺序。"""
+
+    @staticmethod
+    def rerank(query, candidates, *, limit):
+        return list(candidates)[:limit]
+
+
+def make_service(store, **kwargs):
+    return RagSummarizeService(vector_store=store, reranker=PassThroughReranker(), **kwargs)
+
+
 def test_retrieve_delegates_original_query_once():
     store = CapturingVectorStore()
 
-    result = RagSummarizeService(vector_store=store).retrieve("深蹲时膝盖怎么放？")
+    result = make_service(store).retrieve("深蹲时膝盖怎么放？")
 
-    assert store.calls == [("深蹲时膝盖怎么放？", 6, ())]
+    assert store.calls == [("深蹲时膝盖怎么放？", 30, ())]
     assert result.hits[0].rank == 1
     assert result.hits[0].source_id == "动作.md"
     assert result.hits[0].evidence_id == "动作.md#squat"
@@ -61,13 +73,36 @@ def test_retrieve_delegates_original_query_once():
     assert [hit.score for hit in result.hits] == [0.923456789, 0.72]
 
 
+def test_retrieve_reranks_thirty_first_stage_candidates_before_returning_top_six():
+    class CapturingReranker:
+        def __init__(self):
+            self.calls = []
+
+        def rerank(self, query, candidates, *, limit):
+            self.calls.append((query, candidates, limit))
+            return [
+                ScoredChunk(candidates[1].document, 0.98),
+                ScoredChunk(candidates[0].document, 0.77),
+            ]
+
+    store = CapturingVectorStore()
+    reranker = CapturingReranker()
+
+    result = RagSummarizeService(vector_store=store, reranker=reranker).retrieve("深蹲")
+
+    assert store.calls == [("深蹲", 30, ())]
+    assert reranker.calls == [("深蹲", store.results, 6)]
+    assert [hit.chunk_id for hit in result.hits] == ["warmup", "squat"]
+    assert [hit.score for hit in result.hits] == [0.98, 0.77]
+
+
 def test_retrieve_preserves_query_and_source_filter():
     store = CapturingVectorStore()
     query = "  Squat 深蹲\n怎么做？  "
 
-    result = RagSummarizeService(vector_store=store).retrieve(query, ["动作.md"])
+    result = make_service(store).retrieve(query, ["动作.md"])
 
-    assert store.calls == [(query, 6, ("动作.md",))]
+    assert store.calls == [(query, 30, ("动作.md",))]
     assert result.request.query == query
     assert result.request.source_filter == ("动作.md",)
 
@@ -76,7 +111,7 @@ def test_retrieve_preserves_returned_order_without_local_deduplication():
     store = CapturingVectorStore()
     store.results = [store.results[1], store.results[0], store.results[0]]
 
-    result = RagSummarizeService(vector_store=store).retrieve("深蹲")
+    result = make_service(store).retrieve("深蹲")
 
     assert [hit.chunk_id for hit in result.hits] == ["warmup", "squat", "squat"]
     assert [hit.rank for hit in result.hits] == [1, 2, 3]
@@ -84,7 +119,7 @@ def test_retrieve_preserves_returned_order_without_local_deduplication():
 
 
 def test_retrieve_rejects_history():
-    service = RagSummarizeService(vector_store=CapturingVectorStore())
+    service = make_service(CapturingVectorStore())
 
     with pytest.raises(TypeError, match="history"):
         service.retrieve("深蹲", history=[])
@@ -109,7 +144,7 @@ def test_retrieval_contract_contains_only_final_evidence_and_minimal_metrics():
     }
     token = request_id_var.set("rag-request-1")
     try:
-        result = RagSummarizeService(vector_store=CapturingVectorStore()).retrieve("深蹲")
+        result = make_service(CapturingVectorStore()).retrieve("深蹲")
     finally:
         request_id_var.reset(token)
 
@@ -124,7 +159,7 @@ def test_retrieval_contract_contains_only_final_evidence_and_minimal_metrics():
 
 
 def test_build_context_includes_citable_evidence_markers():
-    service = RagSummarizeService(vector_store=CapturingVectorStore())
+    service = make_service(CapturingVectorStore())
 
     context = service.build_context("深蹲时膝盖怎么放？")
 
@@ -135,8 +170,8 @@ def test_build_context_includes_citable_evidence_markers():
 
 
 def test_build_context_respects_injected_builder_budget():
-    service = RagSummarizeService(
-        vector_store=CapturingVectorStore(),
+    service = make_service(
+        CapturingVectorStore(),
         context_builder=ContextBuilder(max_context_chars=8, max_chars_per_evidence=8),
     )
 
@@ -148,7 +183,7 @@ def test_build_context_respects_injected_builder_budget():
 
 
 def test_empty_results_keep_structured_result():
-    context = RagSummarizeService(vector_store=CapturingVectorStore([])).build_context("深蹲")
+    context = make_service(CapturingVectorStore([])).build_context("深蹲")
 
     assert context.content == "未检索到相关参考资料。"
     assert context.result.hits == ()
@@ -160,7 +195,7 @@ def test_repository_failure_is_unavailable_not_empty_evidence():
         def hybrid_search(query, *, limit, source_filter=()):
             raise ConnectionError("Qdrant unavailable")
 
-    service = RagSummarizeService(vector_store=UnavailableStore())
+    service = make_service(UnavailableStore())
 
     with pytest.raises(RuntimeError, match="知识库检索暂时不可用"):
         service.retrieve("深蹲")
@@ -170,6 +205,4 @@ def test_repository_failure_is_unavailable_not_empty_evidence():
 
 
 def test_readiness_delegates_to_store():
-    assert RagSummarizeService(vector_store=CapturingVectorStore()).readiness() == {
-        "status": "ready"
-    }
+    assert make_service(CapturingVectorStore()).readiness() == {"status": "ready"}

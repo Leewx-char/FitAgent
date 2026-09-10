@@ -1,4 +1,4 @@
-"""受控中文知识库的最终检索结果质量评测。"""
+"""受控中文知识库的最终二阶段检索结果质量评测。"""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ class CaseEvaluation:
 
 @dataclass(frozen=True)
 class RetrievalEvaluationReport:
-    """只从最终 RRF 输出计算的聚合质量指标。"""
+    """只从最终二阶段输出计算的聚合质量指标。"""
 
     top_k: int
     recall_at_k: float
@@ -99,7 +99,7 @@ class RetrievalEvaluator:
         self.top_k = top_k
 
     def evaluate_case(self, case: RetrievalEvaluationCase) -> CaseEvaluation:
-        """只检查最终 RRF 输出的前 ``top_k`` 条，而非任何中间候选或排序。"""
+        """只检查最终二阶段输出的前 ``top_k`` 条，而非任何中间候选或排序。"""
         result = self.retrieve(case.query)
         hits = result.hits[: self.top_k]
         expected_pairs = {(item.source_id, item.chunk_id) for item in case.expected_chunks}
@@ -152,7 +152,7 @@ def assert_quality_gate(report: RetrievalEvaluationReport) -> None:
 
 
 def main() -> None:
-    """运行在线最终结果评测，并在标准输出提供可留存的 JSON 报告。"""
+    """运行在线二阶段最终结果评测，并在标准输出提供可留存的 JSON 报告。"""
     config = get_vector_store_config()
     cases = load_cases(get_abs_path(config["evaluation_cases_path"]))
     service = RagSummarizeService()

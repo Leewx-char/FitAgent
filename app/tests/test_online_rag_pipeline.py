@@ -38,7 +38,7 @@ def test_vector_store_embeds_once_and_delegates_native_hybrid(monkeypatch):
             [0.1, 0.2],
             {
                 "limit": 4,
-                "candidate_limit": 15,
+                "candidate_limit": 30,
                 "source_filter": ("动作.md",),
             },
         )

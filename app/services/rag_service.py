@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 from app.core.request_context import request_id_var
 from app.services.context_builder import ContextBuilder
+from app.services.factory import get_reranker
+from app.services.reranker import Reranker
 from app.services.retrieval_contracts import RetrievalHit, RetrievalRequest, RetrievalResult
 from app.services.vector_repository import ScoredChunk
 from app.services.vector_store import VectorStoreService
@@ -24,17 +26,22 @@ class RagContext:
 
 
 class RagSummarizeService:
-    """将原始查询交给 Qdrant，并构建受预算约束的证据上下文。"""
+    """执行 Qdrant 首阶段召回、DashScope 排序并构建受预算约束的上下文。"""
 
     def __init__(
         self,
         vector_store: VectorStoreService | None = None,
         context_builder: ContextBuilder | None = None,
+        reranker: Reranker | None = None,
     ) -> None:
-        """组装只读检索与上下文构建组件，不加载本地索引工件。"""
+        """组装首阶段召回、二阶段排序与上下文组件，不加载本地索引工件。"""
         config = get_vector_store_config()
         self.vector_store = vector_store or VectorStoreService()
         self.top_k = config["k"]
+        self.rerank_candidate_k = config["rerank_candidate_k"]
+        if self.rerank_candidate_k < self.top_k:
+            raise ValueError("rerank_candidate_k 不能小于最终 k。")
+        self.reranker = reranker or get_reranker()
         self.context_builder = context_builder or ContextBuilder(
             max_context_chars=config["max_context_chars"],
             max_chars_per_evidence=config["max_chars_per_evidence"],
@@ -69,7 +76,7 @@ class RagSummarizeService:
         query: str,
         source_filter: list[str] | None = None,
     ) -> RetrievalResult:
-        """原样转交查询一次，仅记录最终证据和检索耗时。"""
+        """原样执行一次首阶段查询与一次候选排序，仅记录最终证据和耗时。"""
         request = RetrievalRequest(
             query=query,
             source_filter=tuple(source_filter or ()),
@@ -77,11 +84,12 @@ class RagSummarizeService:
         )
         started_at = time.perf_counter()
         try:
-            chunks = self.vector_store.hybrid_search(
-                query, limit=self.top_k, source_filter=request.source_filter
+            candidates = self.vector_store.hybrid_search(
+                query, limit=self.rerank_candidate_k, source_filter=request.source_filter
             )
+            chunks = self.reranker.rerank(query, candidates, limit=self.top_k)
         except Exception as error:
-            logger.error("Qdrant 混合检索失败：%s", error, exc_info=True)
+            logger.error("RAG 二阶段检索失败：%s", error, exc_info=True)
             raise RuntimeError("知识库检索暂时不可用，请稍后重试。") from error
         result = RetrievalResult(
             request=request,

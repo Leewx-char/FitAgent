@@ -1,4 +1,4 @@
-"""中文检索评测集、最终 RRF 输出指标与架构文档测试。"""
+"""中文检索评测集、二阶段最终输出指标与架构文档测试。"""
 
 from pathlib import Path
 
@@ -29,7 +29,7 @@ def _hit(source_id: str, chunk_id: str, rank: int) -> RetrievalHit:
 
 
 def _result_for(query: str) -> RetrievalResult:
-    """构造最终 RRF 输出，而非 dense/BM25 中间排序。"""
+    """构造最终二阶段输出，而非 dense/BM25 的中间排序。"""
     return RetrievalResult(
         request=RetrievalRequest(query=query),
         hits=(
@@ -125,7 +125,9 @@ def test_minimal_hybrid_configuration_and_docs_match_runtime_contract():
         "min_source_count": 1,
         "min_chunk_count": 1,
         "k": 6,
-        "candidate_k": 15,
+        "candidate_k": 30,
+        "rerank_candidate_k": 30,
+        "reranker_model": "gte-rerank-v2",
         "max_context_chars": 6000,
         "max_chars_per_evidence": 1200,
         "evaluation_cases_path": "app/evaluation/retrieval_cases.json",
@@ -139,6 +141,7 @@ def test_minimal_hybrid_configuration_and_docs_match_runtime_contract():
     for document in (readme, guide):
         assert "knowledge_preflight" not in document
         assert "一次 Qdrant Query API" in document
+        assert "DashScope" in document
         assert "Unicode" in document
     assert "会**重建** `fitagent_knowledge`" in readme
     assert "只创建缺失关系表，不重建知识库" in readme
