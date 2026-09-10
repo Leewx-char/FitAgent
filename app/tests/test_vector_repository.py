@@ -1,7 +1,9 @@
+from collections.abc import Mapping
 from types import SimpleNamespace
 
 import pytest
 from qdrant_client import models
+from qdrant_client.conversions.conversion import RestToGrpc
 
 from app.services.vector_repository import IndexedChunk, QdrantVectorRepository
 
@@ -81,10 +83,42 @@ def test_rebuild_creates_named_dense_and_sparse_vectors_and_upserts_both():
     assert point.vector["dense"] == [0.1, 0.2]
     assert point.vector["sparse"].text == chunk.text
     assert point.vector["sparse"].model == "Qdrant/bm25"
-    assert point.vector["sparse"].options.tokenizer == models.TokenizerType.MULTILINGUAL
-    assert point.vector["sparse"].options.language == "chinese"
-    assert point.vector["sparse"].options.avg_len == 256
+    assert point.vector["sparse"].options["tokenizer"] == "multilingual"
+    assert point.vector["sparse"].options["language"] == "chinese"
+    assert point.vector["sparse"].options["avg_len"] == 256
     assert point.payload == {"text": chunk.text, **chunk.metadata}
+
+
+def test_bm25_documents_use_grpc_serializable_options_for_indexing_and_search():
+    client = CapturingClient()
+    repository = QdrantVectorRepository("fitagent_knowledge", "http://unused", client=client)
+    chunk = IndexedChunk(
+        "5e196284-177a-5ee8-b496-a8582a50f9d1",
+        "深蹲时保持膝盖与脚尖方向一致。",
+        {"source_id": "动作.md", "ordinal": 0},
+    )
+
+    repository.rebuild([chunk], [[0.1, 0.2]])
+
+    indexed_point = client.upsert_kwargs["points"][0]
+    indexed_sparse_document = indexed_point.vector["sparse"]
+    RestToGrpc.convert_point_struct(indexed_point)
+    assert isinstance(indexed_sparse_document.options, Mapping)
+    assert dict(indexed_sparse_document.options) == {
+        "k": 1.2,
+        "b": 0.75,
+        "avg_len": 256.0,
+        "tokenizer": "multilingual",
+        "language": "chinese",
+    }
+
+    repository.hybrid_search("深蹲膝盖内扣", [0.1, 0.2], limit=6, candidate_limit=15)
+
+    sparse_prefetch = client.kwargs["prefetch"][1]
+    sparse_query_document = sparse_prefetch.query
+    RestToGrpc.convert_prefetch_query(sparse_prefetch)
+    assert isinstance(sparse_query_document.options, Mapping)
+    assert dict(sparse_query_document.options) == dict(indexed_sparse_document.options)
 
 
 def test_rebuild_rejects_mismatched_inputs_before_recreating_collection():

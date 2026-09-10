@@ -98,6 +98,10 @@ class QdrantVectorRepository:
             avg_len=self.bm25_avg_len,
         )
 
+    def _bm25_options(self) -> dict[str, object]:
+        """将 BM25 配置序列化为 Qdrant gRPC 可接受的 JSON 映射。"""
+        return self._bm25_config().model_dump(mode="json", exclude_none=True)
+
     def health(self) -> dict[str, int | str]:
         """返回 collection 的只读就绪状态，不触发索引变更。"""
         collection = self.client.get_collection(self.collection_name)
@@ -138,7 +142,7 @@ class QdrantVectorRepository:
                     "sparse": models.Document(
                         text=chunk.text,
                         model="Qdrant/bm25",
-                        options=self._bm25_config(),
+                        options=self._bm25_options(),
                     ),
                 },
                 payload={**chunk.metadata, self._TEXT_KEY: chunk.text},
@@ -171,7 +175,7 @@ class QdrantVectorRepository:
                     query=models.Document(
                         text=query,
                         model="Qdrant/bm25",
-                        options=self._bm25_config(),
+                        options=self._bm25_options(),
                     ),
                     using="sparse",
                     filter=query_filter,
