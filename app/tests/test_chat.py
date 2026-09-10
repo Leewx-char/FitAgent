@@ -24,9 +24,7 @@ class TestChat:
             def execute_stream(cls, _messages, **kwargs):
                 """通过本地 Runnable 消费回调配置并输出固定文本事件。"""
                 cls.captured_config = kwargs["config"]
-                RunnableLambda(lambda _input: "已执行").invoke(
-                    {}, config=cls.captured_config
-                )
+                RunnableLambda(lambda _input: "已执行").invoke({}, config=cls.captured_config)
                 return iter(['{"type": "text", "content": "膝盖跟随脚尖。"}'])
 
         class FakeDb:
@@ -264,7 +262,7 @@ class TestChat:
                 (
                     '{"type": "evidence", "items": [{"rank": 1, '
                     '"evidence_id": "动作指南.md#squat", "source_id": "动作指南.md", '
-                    '"snippet": "膝盖与脚尖方向一致。", "tags": "动作"}]}'
+                    '"snippet": "膝盖与脚尖方向一致。", "score": 0.03}]}'
                 ),
                 '{"type": "text", "content": "膝盖跟随脚尖。[证据:1]"}',
             ]
@@ -284,7 +282,7 @@ class TestChat:
                 "evidence_id": "动作指南.md#squat",
                 "source_id": "动作指南.md",
                 "snippet": "膝盖与脚尖方向一致。",
-                "tags": "动作",
+                "score": 0.03,
             }
         ]
 

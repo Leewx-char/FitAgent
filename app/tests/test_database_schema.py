@@ -5,29 +5,18 @@ from unittest.mock import Mock
 
 import pytest
 
-from app import models
 from app.core import database
 
 
-def test_create_all_tables_uses_the_supplied_engine(monkeypatch):
-    """模型建表入口必须把调用方传入的引擎交给 SQLAlchemy。"""
-    bind = object()
+def test_initialize_schema_creates_all_models_with_configured_engine(monkeypatch):
+    """数据库层直接以配置引擎创建所有已注册模型表。"""
     create_all = Mock()
-    monkeypatch.setattr(models.Base.metadata, "create_all", create_all)
+    monkeypatch.setattr(database, "ensure_database_exists", Mock())
+    monkeypatch.setattr(database.Base.metadata, "create_all", create_all)
 
-    models.create_all_tables(bind)
+    database.initialize_schema()
 
-    create_all.assert_called_once_with(bind=bind)
-
-
-def test_ensure_schema_exists_delegates_to_model_entry(monkeypatch):
-    """数据库层只调度模型入口，不在自身定义表结构。"""
-    create_all_tables = Mock()
-    monkeypatch.setattr(models, "create_all_tables", create_all_tables)
-
-    database.ensure_schema_exists()
-
-    create_all_tables.assert_called_once_with(database.engine)
+    create_all.assert_called_once_with(bind=database.engine)
 
 
 def test_ensure_database_exists_creates_the_configured_database(monkeypatch):

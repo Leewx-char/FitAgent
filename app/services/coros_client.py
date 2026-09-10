@@ -22,8 +22,8 @@ load_dotenv()
 
 class CorosClient:
     """管理 ``coros-mcp serve`` 生命周期和串行 JSON-RPC 通信。
-该社区服务仅以只读工具集启动，认证须在启动子进程前通过服务方 CLI 完成。
-"""
+    该社区服务仅以只读工具集启动，认证须在启动子进程前通过服务方 CLI 完成。
+    """
 
     _RESPONSE_TIMEOUT_SECONDS = 30.0
 

@@ -1,141 +1,194 @@
-import pytest
-from qdrant_client import QdrantClient
-from qdrant_client.http.exceptions import UnexpectedResponse
-from httpx import Headers
+from collections.abc import Mapping
+from types import SimpleNamespace
 
-from app.services import vector_repository
+import pytest
+from qdrant_client import models
+from qdrant_client.conversions.conversion import RestToGrpc
+
 from app.services.vector_repository import IndexedChunk, QdrantVectorRepository
 
 
-def test_qdrant_repository_skips_eager_version_probe(monkeypatch):
-    """验证仓储初始化禁用 Qdrant 的即时版本兼容性探测。"""
-    captured = {}
+class CapturingClient:
+    """捕获仓储发往 Qdrant 的请求，而不依赖本地推理能力。"""
 
-    class FakeClient:
-        def __init__(self, **kwargs):
-            """捕获仓储初始化传给 Qdrant 客户端的选项。"""
-            captured.update(kwargs)
+    def __init__(self, points=None, collection=None):
+        self.calls = []
+        self.recreate_collection_kwargs = None
+        self.payload_index_kwargs = None
+        self.upsert_kwargs = None
+        self.query_points_calls = 0
+        self.kwargs = None
+        self._points = points or []
+        self._collection = collection
 
-    monkeypatch.setattr(vector_repository, "QdrantClient", FakeClient)
+    def recreate_collection(self, **kwargs):
+        self.calls.append(("recreate_collection", kwargs))
+        self.recreate_collection_kwargs = kwargs
 
-    QdrantVectorRepository("rag_active", "http://qdrant", api_key="test-key")
+    def create_payload_index(self, **kwargs):
+        self.calls.append(("create_payload_index", kwargs))
+        self.payload_index_kwargs = kwargs
 
-    assert captured["check_compatibility"] is False
-    assert captured["prefer_grpc"] is True
-    assert captured["grpc_port"] == 6334
-    assert captured["timeout"] == 60
+    def upsert(self, **kwargs):
+        self.calls.append(("upsert", kwargs))
+        self.upsert_kwargs = kwargs
 
+    def query_points(self, **kwargs):
+        self.calls.append(("query_points", kwargs))
+        self.query_points_calls += 1
+        self.kwargs = kwargs
+        return SimpleNamespace(points=self._points)
 
-def test_qdrant_repository_retries_transient_collection_gateway_error(monkeypatch):
-    """验证集合存在性检查会重试短暂的 502 网关错误。"""
-    class TransientClient:
-        def __init__(self):
-            """初始化集合存在性检查次数。"""
-            self.calls = 0
-
-        def collection_exists(self, _collection_name):
-            """首次模拟 502，后续返回集合不存在。"""
-            self.calls += 1
-            if self.calls == 1:
-                raise UnexpectedResponse(502, "Bad Gateway", b"", Headers())
-            return False
-
-    client = TransientClient()
-    repository = QdrantVectorRepository("rag_active", "http://unused", client=client)
-    monkeypatch.setattr(vector_repository.time, "sleep", lambda _seconds: None)
-
-    assert repository._collection_exists_with_retry("rag_next") is False
-    assert client.calls == 2
+    def get_collection(self, collection_name):
+        self.calls.append(("get_collection", collection_name))
+        return self._collection
 
 
-def test_qdrant_repository_refreshes_network_client_after_gateway_error(monkeypatch):
-    """验证网关错误后仓储刷新网络客户端再执行检查。"""
-    created_clients = []
+def test_health_reads_collection_and_returns_ready_summary():
+    client = CapturingClient(collection=SimpleNamespace(points_count=17))
+    repository = QdrantVectorRepository("fitagent_knowledge", "http://unused", client=client)
 
-    class TransientClient:
-        def __init__(self, **_kwargs):
-            """首个客户端标记为失败，后续客户端可正常响应。"""
-            self.should_fail = len(created_clients) == 0
-            created_clients.append(self)
+    health = repository.health()
 
-        def collection_exists(self, _collection_name):
-            """失败客户端抛 502，替换后的客户端返回不存在。"""
-            if self.should_fail:
-                raise UnexpectedResponse(502, "Bad Gateway", b"", Headers())
-            return False
-
-    monkeypatch.setattr(vector_repository, "QdrantClient", TransientClient)
-    monkeypatch.setattr(vector_repository.time, "sleep", lambda _seconds: None)
-    repository = QdrantVectorRepository("rag_active", "http://qdrant", api_key="test-key")
-
-    assert repository._collection_exists_with_retry("rag_next") is False
-    assert len(created_clients) == 2
+    assert health == {
+        "status": "ready",
+        "collection": "fitagent_knowledge",
+        "points_count": 17,
+    }
+    assert client.calls == [("get_collection", "fitagent_knowledge")]
 
 
-def test_qdrant_repository_cleans_collection_when_create_response_times_out():
-    """验证创建集合超时且状态不明时清理可能残留的集合。"""
-    class AmbiguousCreateClient:
-        def __init__(self):
-            """初始化创建后集合存在性检查和删除记录。"""
-            self.exists_calls = 0
-            self.deleted: list[str] = []
-
-        def collection_exists(self, _collection_name):
-            """第一次视为不存在，后续视为可能已创建。"""
-            self.exists_calls += 1
-            return self.exists_calls > 1
-
-        def create_collection(self, **_kwargs):
-            """模拟创建集合的请求超时。"""
-            raise RuntimeError("Deadline Exceeded")
-
-        def delete_collection(self, *, collection_name):
-            """记录清理状态不明集合的删除请求。"""
-            self.deleted.append(collection_name)
-
-    client = AmbiguousCreateClient()
-    repository = QdrantVectorRepository("rag_active", "http://unused", client=client)
-
-    with pytest.raises(RuntimeError, match="Deadline Exceeded"):
-        repository.create_collection("rag_incomplete", vector_size=2)
-
-    assert client.deleted == ["rag_incomplete"]
-
-
-def test_qdrant_repository_filters_by_source_and_activates_revision():
-    """验证向量仓储激活版本别名后能按来源筛选检索结果。"""
-    client = QdrantClient(":memory:")
-    repository = QdrantVectorRepository("rag_v1", "http://unused", client=client)
-    repository.create_collection("rag_v1", vector_size=2)
-    repository.upsert(
-        "rag_v1",
-        [
-            IndexedChunk(
-                "5e196284-177a-5ee8-b496-a8582a50f9d1",
-                "深蹲动作要保持脊柱中立。",
-                {
-                    "source_id": "动作指南大全.txt",
-                    "ordinal": 0,
-                    "index_revision": "revision-1",
-                },
-            ),
-            IndexedChunk(
-                "bc574e94-c5ee-5c58-8d68-27f9f72fa596",
-                "蛋白质有助于训练后的恢复。",
-                {
-                    "source_id": "营养学知识.txt",
-                    "ordinal": 0,
-                    "index_revision": "revision-1",
-                },
-            ),
-        ],
-        [[1.0, 0.0], [0.0, 1.0]],
+def test_rebuild_creates_named_dense_and_sparse_vectors_and_upserts_both():
+    client = CapturingClient()
+    repository = QdrantVectorRepository("fitagent_knowledge", "http://unused", client=client)
+    chunk = IndexedChunk(
+        "5e196284-177a-5ee8-b496-a8582a50f9d1",
+        "深蹲时保持膝盖与脚尖方向一致。",
+        {"source_id": "动作.md", "ordinal": 0},
     )
 
-    repository.activate_alias("rag_active", "rag_v1")
-    results = repository.search([1.0, 0.0], limit=5, source_filter=["动作指南大全.txt"])
+    repository.rebuild([chunk], [[0.1, 0.2]])
+
+    schema = client.recreate_collection_kwargs
+    assert schema["collection_name"] == "fitagent_knowledge"
+    assert schema["vectors_config"]["dense"].size == 2
+    assert schema["vectors_config"]["dense"].distance == models.Distance.COSINE
+    assert schema["sparse_vectors_config"]["sparse"].modifier == models.Modifier.IDF
+    assert client.payload_index_kwargs == {
+        "collection_name": "fitagent_knowledge",
+        "field_name": "source_id",
+        "field_schema": models.PayloadSchemaType.KEYWORD,
+    }
+    point = client.upsert_kwargs["points"][0]
+    assert point.vector["dense"] == [0.1, 0.2]
+    assert point.vector["sparse"].text == chunk.text
+    assert point.vector["sparse"].model == "Qdrant/bm25"
+    assert point.vector["sparse"].options["tokenizer"] == "multilingual"
+    assert point.vector["sparse"].options["language"] == "chinese"
+    assert point.vector["sparse"].options["avg_len"] == 400
+    assert point.payload == {"text": chunk.text, **chunk.metadata}
+
+
+def test_bm25_documents_use_grpc_serializable_options_for_indexing_and_search():
+    client = CapturingClient()
+    repository = QdrantVectorRepository("fitagent_knowledge", "http://unused", client=client)
+    chunk = IndexedChunk(
+        "5e196284-177a-5ee8-b496-a8582a50f9d1",
+        "深蹲时保持膝盖与脚尖方向一致。",
+        {"source_id": "动作.md", "ordinal": 0},
+    )
+
+    repository.rebuild([chunk], [[0.1, 0.2]])
+
+    indexed_point = client.upsert_kwargs["points"][0]
+    indexed_sparse_document = indexed_point.vector["sparse"]
+    RestToGrpc.convert_point_struct(indexed_point)
+    assert isinstance(indexed_sparse_document.options, Mapping)
+    assert dict(indexed_sparse_document.options) == {
+        "k": 1.2,
+        "b": 0.75,
+        "avg_len": 400.0,
+        "tokenizer": "multilingual",
+        "language": "chinese",
+    }
+
+    repository.hybrid_search("深蹲膝盖内扣", [0.1, 0.2], limit=6, candidate_limit=15)
+
+    sparse_prefetch = client.kwargs["prefetch"][1]
+    sparse_query_document = sparse_prefetch.query
+    RestToGrpc.convert_prefetch_query(sparse_prefetch)
+    assert isinstance(sparse_query_document.options, Mapping)
+    assert dict(sparse_query_document.options) == dict(indexed_sparse_document.options)
+
+
+def test_rebuild_rejects_mismatched_inputs_before_recreating_collection():
+    client = CapturingClient()
+    repository = QdrantVectorRepository("fitagent_knowledge", "http://unused", client=client)
+    chunk = IndexedChunk(
+        "5e196284-177a-5ee8-b496-a8582a50f9d1",
+        "深蹲时保持膝盖与脚尖方向一致。",
+        {"source_id": "动作.md"},
+    )
+
+    with pytest.raises(ValueError, match="数量必须一致"):
+        repository.rebuild([chunk], [[0.1, 0.2], [0.3, 0.4]])
+
+    assert client.recreate_collection_kwargs is None
+
+
+def test_rebuild_preserves_chunk_text_when_metadata_contains_text():
+    client = CapturingClient()
+    repository = QdrantVectorRepository("fitagent_knowledge", "http://unused", client=client)
+    chunk = IndexedChunk(
+        "5e196284-177a-5ee8-b496-a8582a50f9d1",
+        "深蹲时保持膝盖与脚尖方向一致。",
+        {"source_id": "动作.md", "text": "错误元数据文本"},
+    )
+
+    repository.rebuild([chunk], [[0.1, 0.2]])
+
+    assert client.upsert_kwargs["points"][0].payload["text"] == chunk.text
+
+
+def test_hybrid_search_uses_two_prefetches_and_one_rrf_query():
+    client = CapturingClient()
+    repository = QdrantVectorRepository("fitagent_knowledge", "http://unused", client=client)
+
+    repository.hybrid_search(
+        "深蹲膝盖内扣",
+        [0.1, 0.2],
+        limit=6,
+        candidate_limit=15,
+        source_filter=("动作.md",),
+    )
+
+    assert client.query_points_calls == 1
+    assert len(client.kwargs["prefetch"]) == 2
+    assert client.kwargs["query"].fusion == models.Fusion.RRF
+    assert all(prefetch.filter is not None for prefetch in client.kwargs["prefetch"])
+    assert client.kwargs["prefetch"][0].using == "dense"
+    assert client.kwargs["prefetch"][0].query == [0.1, 0.2]
+    assert client.kwargs["prefetch"][1].using == "sparse"
+    assert client.kwargs["prefetch"][1].query.model == "Qdrant/bm25"
+    assert client.kwargs["limit"] == 6
+    assert client.kwargs["with_payload"] is True
+    assert client.kwargs["with_vectors"] is False
+
+
+def test_hybrid_search_maps_qdrant_points_to_scored_chunks():
+    client = CapturingClient(
+        [
+            SimpleNamespace(
+                payload={"text": "深蹲时保持脊柱中立。", "source_id": "动作.md", "ordinal": 1},
+                score=0.75,
+            )
+        ]
+    )
+    repository = QdrantVectorRepository("fitagent_knowledge", "http://unused", client=client)
+
+    results = repository.hybrid_search("深蹲", [0.1, 0.2], limit=6, candidate_limit=15)
 
     assert len(results) == 1
-    assert results[0].document.metadata["source_id"] == "动作指南大全.txt"
-    assert "深蹲" in results[0].document.page_content
-    assert repository.active_revision() == "revision-1"
+    assert results[0].document.page_content == "深蹲时保持脊柱中立。"
+    assert results[0].document.metadata == {"source_id": "动作.md", "ordinal": 1}
+    assert results[0].score == 0.75

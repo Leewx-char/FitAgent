@@ -343,10 +343,9 @@ def test_direct_rag_graph_emits_tool_evidence_then_text():
         """记录请求并返回固定检索上下文。"""
 
         @staticmethod
-        def build_context(query, history):
-            """捕获直接 RAG 的查询与历史，并返回固定检索结果。"""
+        def build_context(query):
+            """捕获直接 RAG 的原始查询，并返回固定检索结果。"""
             captured["query"] = query
-            captured["history"] = history
             return SimpleNamespace(content="[证据:1] 深蹲资料", result="retrieval-result")
 
     class FakeModel:
@@ -384,8 +383,8 @@ def test_direct_rag_graph_emits_tool_evidence_then_text():
     assert [event["type"] for event in result["events"]] == ["tool", "evidence", "text"]
     assert result["events"][1]["items"][0]["evidence_id"] == "guide.md#1"
     assert result["rag_evidence"] == [{"rank": 1, "evidence_id": "guide.md#1"}]
-    assert captured["query"] == "那膝盖呢？"
-    assert captured["history"] == [
+    assert captured == {"query": "那膝盖呢？"}
+    assert result["retrieval_history"] == [
         {"role": "user", "content": "先说深蹲。"},
         {"role": "assistant", "content": "好的。"},
     ]
@@ -398,7 +397,7 @@ def test_direct_rag_uses_collector_for_named_retrieval_runnable():
         """提供无需外部服务的固定检索上下文。"""
 
         @staticmethod
-        def build_context(_query, history):
+        def build_context(_query):
             """返回无证据的固定上下文。"""
             return SimpleNamespace(content="未检索到资料", result=None)
 
@@ -441,9 +440,7 @@ def test_direct_rag_graph_rejects_non_json_executor_events():
 
     with pytest.raises(ValueError, match="不可序列化"):
         graph.invoke(
-            build_initial_chat_state(
-                messages=[{"role": "user", "content": "解释一下深蹲。"}]
-            ),
+            build_initial_chat_state(messages=[{"role": "user", "content": "解释一下深蹲。"}]),
             context=ChatRuntimeContext(
                 user_id=1,
                 session_id="session-1",

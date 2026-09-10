@@ -25,10 +25,7 @@ HUMAN_PAYLOAD_PREFIX = "已有摘要（可为空）：\n"
 HUMAN_PAYLOAD_SUFFIX = "\n\n新增早期已存储消息：\n"
 PRIOR_SUMMARY_BUDGET = MAX_SUMMARY_CHARS // 2
 SOURCE_TEXT_BUDGET = (
-    MAX_SUMMARY_CHARS
-    - PRIOR_SUMMARY_BUDGET
-    - len(HUMAN_PAYLOAD_PREFIX)
-    - len(HUMAN_PAYLOAD_SUFFIX)
+    MAX_SUMMARY_CHARS - PRIOR_SUMMARY_BUDGET - len(HUMAN_PAYLOAD_PREFIX) - len(HUMAN_PAYLOAD_SUFFIX)
 )
 
 
@@ -72,9 +69,7 @@ class SessionSummaryService:
         covered = row.covered_through_message_id if cached_summary is not None else 0
         summary = cached_summary or ""
         pending_messages = [
-            (message.id, message.content)
-            for message in older_messages
-            if message.id > covered
+            (message.id, message.content) for message in older_messages if message.id > covered
         ]
         while pending_messages:
             chunk, pending_messages = self._take_chunk(summary, pending_messages)

@@ -82,10 +82,8 @@ class DirectRagExecutor:
         )
 
     def _build_rag_context(self, payload: dict[str, object]) -> object:
-        """基于查询和历史构建直接检索所需的证据上下文。"""
-        return self._rag_service_factory().build_context(
-            str(payload["query"]), history=payload["history"]
-        )
+        """基于原始查询构建直接检索所需的证据上下文。"""
+        return self._rag_service_factory().build_context(str(payload["query"]))
 
     @staticmethod
     def _content_to_text(content: object) -> str:

@@ -37,7 +37,7 @@ def validate_runtime() -> list[str]:
             issues.append(f"模型配置缺失：{key}")
 
     # 检查 4: 向量库配置
-    for key in ("url", "grpc_port", "prefer_grpc", "collection_alias", "data_path"):
+    for key in ("url", "grpc_port", "prefer_grpc", "collection_name", "data_path"):
         if not get_vector_store_config().get(key):
             issues.append(f"向量库配置缺失：{key}")
 

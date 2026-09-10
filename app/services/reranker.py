@@ -1,65 +1,74 @@
-"""在线 RAG V1 的可回退轻量重排序器。"""
+"""Qdrant 首阶段候选的 DashScope 二阶段排序边界。"""
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Protocol
 
+import dashscope
 
-@dataclass(frozen=True)
-class RerankCandidate:
-    """重排序器所需的最小候选信息。"""
-
-    candidate_id: str
-    text: str
-    base_score: float
-
-
-@dataclass(frozen=True)
-class RerankResult:
-    """重排序后的候选标识与融合分数。"""
-
-    candidate_id: str
-    score: float
+from app.services.vector_repository import ScoredChunk
 
 
 class Reranker(Protocol):
-    """候选集精排边界；未来可替换为 Cross-Encoder 或云端 rerank API。"""
+    """只接收已召回的候选，并返回最终排序后的证据。"""
 
-    def rerank(self, query: str, candidates: list[RerankCandidate]) -> list[RerankResult]:
-        """按查询对候选集精排并返回融合分数。"""
+    def rerank(
+        self, query: str, candidates: Sequence[ScoredChunk], *, limit: int
+    ) -> list[ScoredChunk]:
+        """按查询相关性重排候选，最多返回 ``limit`` 条。"""
         ...
 
 
-class LexicalReranker:
-    """用查询词覆盖率微调 RRF 顺序，避免在 V1 再引入一套模型运行时。"""
+class DashScopeReranker:
+    """通过 DashScope 文本排序模型重排小规模 Qdrant 候选集。"""
 
-    def __init__(self, base_score_weight: float = 0.7) -> None:
-        """设置原始 RRF 分数在最终精排分数中的权重。"""
-        self.base_score_weight = base_score_weight
+    def __init__(self, model_name: str, api_key: str) -> None:
+        self.model_name = model_name
+        self.api_key = api_key
 
-    @staticmethod
-    def _terms(text: str) -> set[str]:
-        """提取英文数字词与中文单字构成的去重词集。"""
-        terms = set(re.findall(r"[a-z0-9]+|[一-鿿]", text.lower()))
-        return terms
-
-    def rerank(self, query: str, candidates: list[RerankCandidate]) -> list[RerankResult]:
-        """保留 RRF 为主导，以命中子片段的词覆盖率进行稳定微调。"""
-
-        if not candidates:
+    def rerank(
+        self, query: str, candidates: Sequence[ScoredChunk], *, limit: int
+    ) -> list[ScoredChunk]:
+        """将候选正文发送给排序模型，仅保留其返回的索引和分数。"""
+        if limit <= 0 or not candidates:
             return []
-        query_terms = self._terms(query)
-        max_base_score = max(candidate.base_score for candidate in candidates) or 1.0
-        results = []
-        for candidate in candidates:
-            candidate_terms = self._terms(candidate.text)
-            lexical_score = len(query_terms & candidate_terms) / max(len(query_terms), 1)
-            normalized_base_score = candidate.base_score / max_base_score
-            score = (
-                self.base_score_weight * normalized_base_score
-                + (1 - self.base_score_weight) * lexical_score
+        response = dashscope.TextReRank.call(
+            model=self.model_name,
+            query=query,
+            documents=[candidate.document.page_content for candidate in candidates],
+            top_n=min(limit, len(candidates)),
+            return_documents=False,
+            api_key=self.api_key,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"DashScope 重排暂时不可用：{response.code}")
+        results = getattr(getattr(response, "output", None), "results", None)
+        if results is None:
+            raise RuntimeError("DashScope 重排返回缺少结果。")
+
+        selected: list[ScoredChunk] = []
+        seen_indexes: set[int] = set()
+        expected_count = min(limit, len(candidates))
+        for item in results:
+            if len(selected) >= expected_count:
+                raise RuntimeError("DashScope 重排返回了超出请求上限的候选。")
+            index = getattr(item, "index", None)
+            if type(index) is not int or index < 0 or index >= len(candidates):
+                raise RuntimeError("DashScope 重排返回无效候选索引。")
+            if index in seen_indexes:
+                raise RuntimeError("DashScope 重排返回重复候选索引。")
+            seen_indexes.add(index)
+            try:
+                score = float(item.relevance_score)
+            except (AttributeError, TypeError, ValueError) as error:
+                raise RuntimeError("DashScope 重排返回无效相关度。") from error
+            selected.append(
+                ScoredChunk(
+                    document=candidates[index].document,
+                    score=score,
+                )
             )
-            results.append(RerankResult(candidate.candidate_id, round(score, 8)))
-        return sorted(results, key=lambda item: item.score, reverse=True)
+        if len(selected) != expected_count:
+            raise RuntimeError("DashScope 重排返回结果数量与请求上限不符。")
+        return selected

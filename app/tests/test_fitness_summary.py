@@ -281,9 +281,7 @@ class TestFitnessSummary:
             day = activity_day.strftime("%Y%m%d")
 
             candidates = _fitness_summary(user_id, start_day=day, end_day=day)
-            detail = _fitness_summary(
-                user_id, start_day=day, end_day=day, activity_id=evening_id
-            )
+            detail = _fitness_summary(user_id, start_day=day, end_day=day, activity_id=evening_id)
 
             assert morning_id in candidates
             assert evening_id in candidates

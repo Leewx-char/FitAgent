@@ -13,11 +13,13 @@
 | [frontend/src/main.js](../frontend/src/main.js)、[router/index.js](../frontend/src/router/index.js) | Vue 从哪里启动，哪个页面负责聊天？ |
 | [frontend/src/views/Chat.vue](../frontend/src/views/Chat.vue) | 用户点击发送后，发往哪个 API，如何消费 SSE？ |
 | [frontend/src/components/Sidebar.vue](../frontend/src/components/Sidebar.vue) | 会话列表从哪里加载、如何新建/切换/删除会话？ |
-| [app/main.py](../app/main.py) | FastAPI 如何启动、注册路由、关闭 Coros 子进程？ |
+| [app/main.py](../app/main.py) | FastAPI 如何启动、先初始化新数据库模型表、注册路由、关闭 Coros 子进程？ |
 | [app/api/routers/chat.py](../app/api/routers/chat.py) | `POST /api/chat` 如何接住一次聊天？ |
 | [app/services/react_agent.py](../app/services/react_agent.py) | 请求如何通过 LangGraph 图分为 Direct RAG 与个性化 Agent？ |
 
 此时只需要记住边界：**前端负责交互和流式渲染，Router 负责 HTTP/鉴权/事务边界，Service 负责业务编排，Repository 或 Adapter 负责数据库与第三方系统。**
+
+应用的 lifespan 会先调用 `initialize_schema()`：它创建 `.env` 指定的缺失数据库，并从 `app/models.py` 注册的 ORM 定义创建空库中缺失的表。这个 `create_all()` 路径不修改已有表；升级开发数据库前必须先备份，再由操作者删除或新建数据库后重启应用。
 
 ```mermaid
 flowchart LR
@@ -26,7 +28,7 @@ flowchart LR
   API --> DB1[(MySQL: session / message)]
   API --> MEM[mem0 记忆候选]
   API --> A{ReactAgent 路由}
-  A -->|通用知识| RAG[Dense + BM25 + RRF]
+  A -->|通用知识| RAG[Dense + BM25 + RRF → DashScope 重排]
   A -->|个性化问题| LG[LangGraph Agent + 工具]
   LG -->|仅早期引用无法解释时| SS[get_session_summary]
   SS --> DB1
@@ -48,7 +50,7 @@ flowchart LR
 3. 同文件的 `sse_generator`：它在请求开始时创建 LangChain 官方 `RunCollectorCallbackHandler`，把它经 `RunnableConfig.callbacks` 传给图；随后把同步生成器放到 executor 中逐块取值，转换为 `text`、`tool`、`evidence`、`error` 四类 SSE 事件。正常结束额外发送 `[DONE]`，前端在 `[DONE]` 或 `error` 时收敛加载状态；SSE 流结束后，才将 Collector 在内存中的运行树投影到既有 MySQL `agent_runs`、`agent_tool_calls`，并持久化 assistant 回复。这里不使用 LangSmith，也不新增日志表或路由。
 4. [react_agent.py](../app/services/react_agent.py) 的 `execute_stream`：它构造 `ChatRuntimeContext` 与初始 `ChatGraphState`，消费图的 custom stream，再编码为既有 SSE JSON 行。
 5. [chat_routing_graph.py](../app/services/chat_routing_graph.py)：`StateGraph` 先让模型以结构化 `IntentDecision` 分类；明确的通用知识进入 Direct RAG，个性化、模糊或分类失败都进入个性化 Agent。Direct RAG 先发“检索知识库”事件，发送真实证据卡片，再流式生成答案。
-6. [rag_service.py](../app/services/rag_service.py) 的 `RagSummarizeService.build_context`：查看查询规划、Dense/BM25 召回、RRF 融合、去重、轻量重排与上下文预算如何产出 `RagContext`。
+6. [rag_service.py](../app/services/rag_service.py) 的 `RagSummarizeService.build_context`：查看它如何把一次 Qdrant Query API 的 Dense + BM25 prefetch、RRF Top-30 候选交给 [reranker.py](../app/services/reranker.py)，再将 DashScope 排出的最终 Top-6 与上下文预算转换为 `RagContext`。
 
 ### 要追踪的三个数据
 
@@ -97,15 +99,16 @@ flowchart LR
 
 | 路径 | 主要文件 | 一句话职责 |
 | --- | --- | --- |
-| 离线构建 | [knowledge_preflight.py](../app/services/knowledge_preflight.py) → [knowledge_indexer.py](../app/services/knowledge_indexer.py) → [vector_repository.py](../app/services/vector_repository.py) | 校验知识源，构建 Qdrant revision 与 BM25 工件，校验后切换 `rag_active` alias |
-| 在线检索 | [rag_service.py](../app/services/rag_service.py) → [vector_store.py](../app/services/vector_store.py) / [bm25_retriever.py](../app/services/bm25_retriever.py) | 使用当前 alias 做 Dense/BM25 双路召回、RRF、重排和上下文裁剪 |
+| 离线构建 | [knowledge_indexer.py](../app/services/knowledge_indexer.py) → [vector_repository.py](../app/services/vector_repository.py) | 对受控文件做有限的 Unicode/空白规范化、切分与 embedding，再显式、破坏性地重建 `fitagent_knowledge` |
+| 在线检索 | [rag_service.py](../app/services/rag_service.py) → [vector_store.py](../app/services/vector_store.py) → [vector_repository.py](../app/services/vector_repository.py) → [reranker.py](../app/services/reranker.py) | 一次 Qdrant Query API 完成 Dense + BM25 prefetch 与 RRF，取 Top-30 候选交给 DashScope 重排，再返回最终 Top-6 证据并裁剪上下文 |
 
 建议按这个顺序提问自己：
 
-1. 为什么不直接覆盖旧 Qdrant collection？——revision + alias 让线上始终读到一套完整索引。
-2. 为什么 BM25 要有离线工件并检查 revision？——避免词法索引和向量索引对应不同版本知识。
-3. 为什么使用 RRF 而不混合相似度分数？——不同检索器分数没有可比的量纲，按排名融合更稳妥。
-4. 为什么上下文要预算？——召回多不等于应该全部塞给模型，需控制成本与噪声。
+1. 为什么索引构建需要显式确认？——`knowledge_indexer` 会破坏性重建 `fitagent_knowledge`，应用启动不会做这件事。
+2. 为什么清洗范围很小？——输入是受控文件，只做 Unicode/空白规范化；它不是网页内容抓取或网页清洗管线。
+3. 为什么使用 RRF 而不混合相似度分数？——Dense 与 BM25 的分数没有可比的量纲，Qdrant 按排名融合更稳妥。
+4. 为什么要二阶段排序？——RRF 适合合并不同量纲的 Dense/BM25 排名；将不超过 30 个已召回候选交给专用重排模型，能在受控延迟和成本内提高最终证据的精度。
+5. 为什么上下文要预算？——召回多不等于应该全部塞给模型，需控制成本与噪声。
 
 配合阅读 [test_retrieval_evaluator.py](../app/tests/test_retrieval_evaluator.py)。
 
@@ -204,7 +207,7 @@ sequenceDiagram
 | --- | --- | --- |
 | Day 1 | 架构与通用聊天主链路 | 用 3 分钟讲完一次 Direct RAG SSE 请求 |
 | Day 2 | Agent 工具与执行轨迹 | 解释何时进入 Agent、工具为何受限 |
-| Day 3 | 离线/在线 RAG | 解释 revision、alias、BM25、RRF 与证据卡片 |
+| Day 3 | 离线/在线 RAG | 解释显式重建、一次 Qdrant Query API、BM25、RRF、DashScope 二阶段重排与证据卡片 |
 | Day 4 | 三层记忆 | 解释候选—确认—撤销与防模型污染 |
 | Day 5 | 训练计划 | 解释“先规则、后生成、再校验” |
 | Day 6 | Coros/MCP 与幂等 | 解释 stdio 串行、缓存隔离、partial、external id |

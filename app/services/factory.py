@@ -42,6 +42,18 @@ def get_embedding_model() -> Embeddings:
     )
 
 
+@lru_cache(maxsize=1)
+def get_reranker():
+    """惰性构造 DashScope 二阶段排序器，避免在应用启动时发起网络请求。"""
+    from app.services.reranker import DashScopeReranker
+    from app.utils.config_handler import get_vector_store_config
+
+    return DashScopeReranker(
+        model_name=get_vector_store_config()["reranker_model"],
+        api_key=_get_dashscope_api_key(),
+    )
+
+
 @lru_cache(maxsize=2)
 def get_vl_model(tier: Literal["primary", "fallback"] = "primary") -> BaseChatModel:
     """返回指定质量层级配置的视觉语言模型。"""

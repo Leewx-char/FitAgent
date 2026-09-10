@@ -6,8 +6,7 @@
   - 创建 SQLAlchemy 引擎（含连接池配置）
   - 提供 SessionLocal 会话工厂，每次 API 请求通过 Depends 获取独立事务会话
   - 提供 Base 声明式基类，所有 ORM 模型继承它
-  - 提供服务启动时调用的 ensure_database_exists() 建库函数
-  - 延迟加载 ORM 模型并创建缺失表
+  - 提供服务启动时调用的 initialize_schema() 建库与建表函数
 
 本文件是数据层的唯一入口。换数据库只需改本文件的连接字符串。
 """
@@ -17,7 +16,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.core.settings import Settings, get_settings
 
@@ -58,13 +57,6 @@ def ensure_database_exists(settings: Settings | None = None) -> None:
         conn.close()
 
 
-def ensure_schema_exists() -> None:
-    """加载全部 ORM 模型并创建缺失的模型表。"""
-    from app.models import create_all_tables
-
-    create_all_tables(engine)
-
-
 engine = create_engine(
     DATABASE_URL,
     pool_size=5,  # 连接池大小，默认5
@@ -92,3 +84,11 @@ def get_db_session() -> Iterator:
 
 class Base(DeclarativeBase):
     pass
+
+
+def initialize_schema() -> None:
+    """为新建或可丢弃的数据库创建当前 ORM 模型表。"""
+    ensure_database_exists()
+    import app.models  # noqa: F401
+
+    Base.metadata.create_all(bind=engine)
