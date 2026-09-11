@@ -6,6 +6,7 @@ from langchain.tools import ToolRuntime
 
 from app.core.database import SessionLocal
 from app.services.agent_tools import get_fitness_summary
+from app.services.fitness_insights import _record_payload
 from app.services.chat_routing_graph import ChatRuntimeContext
 from app.models import FitnessData
 
@@ -28,6 +29,20 @@ def _fitness_summary(user_id: int | None, **tool_args: str) -> str:
 
 
 class TestFitnessSummary:
+    def test_fitness_data_instance_attributes_remain_python_scalars(self):
+        """ORM 映射升级后，实例字段仍可按普通 Python 值读取。"""
+        record = FitnessData(
+            user_id=1,
+            date=date.today(),
+            data_type="daily_metrics",
+            external_id="test:scalar-attributes",
+            data='{"rhr": 55}',
+        )
+
+        assert record.data_type == "daily_metrics"
+        assert record.external_id == "test:scalar-attributes"
+        assert _record_payload(record) == {"rhr": 55}
+
     def test_missing_user_id(self):
         """无 user_id → 提示登录"""
         result = _fitness_summary(None)

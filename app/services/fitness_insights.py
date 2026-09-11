@@ -251,6 +251,7 @@ def load_fitness_snapshot(
             activities.append(value)
 
     durations = _numeric(sleep_records, "total_duration_minutes")
+    average_sleep_duration = _mean(durations)
     deep_sleep = [
         float(item["phases"]["deep_minutes"])
         for item in sleep_records
@@ -280,7 +281,9 @@ def load_fitness_snapshot(
         max_training_load_ratio=max(_numeric(daily_records, "training_load_ratio"), default=None),
         avg_tired_rate=_mean(_numeric(daily_records, "tired_rate")),
         latest_vo2max=vo2max_values[-1] if vo2max_values else None,
-        avg_sleep_hours=(_mean(durations) / 60) if durations else None,
+        avg_sleep_hours=(
+            average_sleep_duration / 60 if average_sleep_duration is not None else None
+        ),
         avg_deep_sleep_minutes=_mean(deep_sleep),
     )
 

@@ -10,6 +10,8 @@
 三张表的关系链：User (1) → (N) Session (1) → (N) Message。
 """
 
+from datetime import date, datetime
+
 from sqlalchemy import (
     CHAR,
     Boolean,
@@ -25,7 +27,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 
@@ -155,15 +157,15 @@ class AgentToolCall(Base):
 class FitnessData(Base):
     __tablename__ = "fitness_data"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    date = Column(Date, nullable=False)
-    data_type = Column(String(20), nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    data_type: Mapped[str] = mapped_column(String(20), nullable=False)
     # 来自 Coros 的稳定记录键。日指标/睡眠按日期幂等，活动按 activity id 幂等，
     # 因而同一天的多次活动不会再互相覆盖。
-    external_id = Column(String(128), nullable=False)
-    data = Column(Text, default="{}")
-    created_at = Column(DateTime, server_default=func.now())
+    external_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    data: Mapped[str | None] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
 
     __table_args__ = (
         Index("ix_fitness_user_type_external", "user_id", "data_type", "external_id", unique=True),
