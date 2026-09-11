@@ -20,11 +20,21 @@ def _tool_argument_shape(tool_args: object) -> dict[str, str]:
     return {str(key): type(value).__name__ for key, value in tool_args.items()}
 
 
+def _coerce_int(value: object, default: int) -> int:
+    """仅接受可安全转换的预算值，损坏状态回退到给定默认值。"""
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def _consume_tool_budget(
     state: MutableMapping[str, object], *, limit: int, tool_call_position: int = 0
 ) -> tuple[bool, int, int]:
     """以同批工具调用的位置计算稳定的预算序号。"""
-    count = int(state.get("tool_call_count", 0)) + tool_call_position + 1
+    count = _coerce_int(state.get("tool_call_count", 0), 0) + tool_call_position + 1
     state["tool_call_count"] = count
     return count <= limit, count, limit
 
@@ -43,12 +53,13 @@ def _tool_call_limit(request: ToolCallRequest) -> int:
     """优先读取内层状态预算，缺失时使用请求执行器配置的上限。"""
     limit = request.state.get("tool_call_limit")
     if limit is not None:
-        return int(limit)
-    dependencies = request.runtime.context.dependencies
+        return _coerce_int(limit, 6)
+    dependencies = getattr(request.runtime.context, "dependencies", None)
     limit = getattr(dependencies, "max_tool_calls", None)
     if limit is None:
-        limit = getattr(dependencies.personalized_agent_executor, "max_tool_calls", 6)
-    return int(limit)
+        executor = getattr(dependencies, "personalized_agent_executor", None)
+        limit = getattr(executor, "max_tool_calls", 6)
+    return _coerce_int(limit, 6)
 
 
 def _log_tool_event(
@@ -157,6 +168,10 @@ def _with_tool_call_count(
 ) -> Command:
     """把中间件预算计数与工具原有的状态更新合并返回。"""
     if isinstance(result, Command):
+        if result.update is None:
+            return Command(update={"tool_call_count": tool_call_count})
+        if not isinstance(result.update, dict):
+            raise TypeError("工具 Command 的 update 必须是字典")
         return Command(update={**result.update, "tool_call_count": tool_call_count})
     return Command(update={"messages": [result], "tool_call_count": tool_call_count})
 

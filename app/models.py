@@ -10,12 +10,12 @@
 三张表的关系链：User (1) → (N) Session (1) → (N) Message。
 """
 
-from datetime import date, datetime
+from datetime import date as DateValue
+from datetime import datetime
 
 from sqlalchemy import (
     CHAR,
     Boolean,
-    Column,
     Date,
     DateTime,
     Float,
@@ -34,18 +34,22 @@ from app.core.database import Base
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    username = Column(String(50), unique=True, nullable=False, index=True)
-    password_hash = Column(String(128), nullable=False)  # bcrypt 哈希，不存明文
-    city = Column(String(50), default="")
-    extra_info = Column(Text, default="")  # 扩展字段（JSON字符串，存用户画像）
-    created_at = Column(DateTime, server_default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(String(128), nullable=False)  # bcrypt 哈希，不存明文
+    city: Mapped[str] = mapped_column(String(50), default="", nullable=True)
+    extra_info: Mapped[str] = mapped_column(
+        Text, default="", nullable=True
+    )  # 扩展字段（JSON字符串，存用户画像）
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
     # 与 Session 建立双向关系；删除用户时级联删除其会话。
-    sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
-    profile = relationship(
+    sessions: Mapped[list["Session"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    profile: Mapped["UserProfile | None"] = relationship(
         "UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
-    agent_runs = relationship(
+    agent_runs: Mapped[list["AgentRun"]] = relationship(
         "AgentRun", back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
 
@@ -53,43 +57,61 @@ class User(Base):
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    gender = Column(String(10), default="")  # 性别值，如 male、female 或 other
-    age = Column(Integer, nullable=True)  # 年龄
-    height = Column(Integer, nullable=True)  # 身高(cm)
-    weight = Column(Float, nullable=True)  # 体重(kg)
-    goal = Column(String(20), default="")  # 目标值，如减脂、增肌、塑形、耐力或健康管理
-    weekly_days = Column(Integer, default=3)  # 每周训练天数 1-7
+    gender: Mapped[str] = mapped_column(
+        String(10), default="", nullable=True
+    )  # 性别值，如 male、female 或 other
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 年龄
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 身高(cm)
+    weight: Mapped[float | None] = mapped_column(Float, nullable=True)  # 体重(kg)
+    goal: Mapped[str] = mapped_column(
+        String(20), default="", nullable=True
+    )  # 目标值，如减脂、增肌、塑形、耐力或健康管理
+    weekly_days: Mapped[int] = mapped_column(Integer, default=3, nullable=True)  # 每周训练天数 1-7
     # 经验等级实际取值：新手、中级或高级。
-    experience = Column(String(20), default="新手")
-    injuries = Column(Text, default="[]")  # JSON 数组，例如 ["膝盖", "腰椎"]
-    diet_restrict = Column(Text, default="[]")  # JSON 数组，例如 ["素食", "低碳"]
-    preferences = Column(Text, default="{}")  # JSON 对象，例如训练时间和场馆偏好
-    health_data = Column(Text, default="{}")  # JSON: 从文档提取的健康指标
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    experience: Mapped[str] = mapped_column(String(20), default="新手", nullable=True)
+    injuries: Mapped[str] = mapped_column(
+        Text, default="[]", nullable=True
+    )  # JSON 数组，例如 ["膝盖", "腰椎"]
+    diet_restrict: Mapped[str] = mapped_column(
+        Text, default="[]", nullable=True
+    )  # JSON 数组，例如 ["素食", "低碳"]
+    preferences: Mapped[str] = mapped_column(
+        Text, default="{}", nullable=True
+    )  # JSON 对象，例如训练时间和场馆偏好
+    health_data: Mapped[str] = mapped_column(
+        Text, default="{}", nullable=True
+    )  # JSON: 从文档提取的健康指标
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=True
+    )
 
-    user = relationship("User", back_populates="profile")
+    user: Mapped["User"] = relationship(back_populates="profile")
 
 
 class Session(Base):
     __tablename__ = "sessions"
 
-    id = Column(CHAR(32), primary_key=True)  # UUID 的十六进制字符串
-    title = Column(String(100), default="新对话")
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    id: Mapped[str] = mapped_column(CHAR(32), primary_key=True)  # UUID 的十六进制字符串
+    title: Mapped[str] = mapped_column(String(100), default="新对话", nullable=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=True
+    )
 
-    user = relationship("User", back_populates="sessions")
-    messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
-    session_summary = relationship(
+    user: Mapped["User"] = relationship(back_populates="sessions")
+    messages: Mapped[list["Message"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+    session_summary: Mapped["SessionSummary | None"] = relationship(
         "SessionSummary", back_populates="session", uselist=False, cascade="all, delete-orphan"
     )
-    agent_runs = relationship(
+    agent_runs: Mapped[list["AgentRun"]] = relationship(
         "AgentRun", back_populates="session", cascade="all, delete-orphan", passive_deletes=True
     )
 
@@ -97,13 +119,13 @@ class Session(Base):
 class Message(Base):
     __tablename__ = "messages"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(32), ForeignKey("sessions.id"), nullable=False)
-    role = Column(String(20), nullable=False)
-    content = Column(Text, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(32), ForeignKey("sessions.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
 
-    session = relationship("Session", back_populates="messages")
+    session: Mapped["Session"] = relationship(back_populates="messages")
 
 
 class AgentRun(Base):
@@ -111,21 +133,25 @@ class AgentRun(Base):
 
     __tablename__ = "agent_runs"
 
-    id = Column(CHAR(32), primary_key=True)
-    request_id = Column(String(32), nullable=False, index=True)
-    session_id = Column(CHAR(32), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    mode = Column(String(20), nullable=False)  # 固定聊天运行模式：chat
-    status = Column(String(20), nullable=False)  # 执行状态：succeeded 或 failed
-    elapsed_ms = Column(Integer, nullable=False)
-    tool_call_count = Column(Integer, nullable=False, default=0)
-    user_question = Column(Text, nullable=False, default="")
-    assistant_answer = Column(Text, nullable=False, default="")
-    created_at = Column(DateTime, server_default=func.now())
+    id: Mapped[str] = mapped_column(CHAR(32), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(
+        CHAR(32), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)  # 固定聊天运行模式：chat
+    status: Mapped[str] = mapped_column(String(20), nullable=False)  # 执行状态：succeeded 或 failed
+    elapsed_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    tool_call_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    user_question: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    assistant_answer: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
 
-    user = relationship("User", back_populates="agent_runs")
-    session = relationship("Session", back_populates="agent_runs")
-    tool_calls = relationship(
+    user: Mapped["User"] = relationship(back_populates="agent_runs")
+    session: Mapped["Session"] = relationship(back_populates="agent_runs")
+    tool_calls: Mapped[list["AgentToolCall"]] = relationship(
         "AgentToolCall",
         back_populates="agent_run",
         cascade="all, delete-orphan",
@@ -139,17 +165,19 @@ class AgentToolCall(Base):
 
     __tablename__ = "agent_tool_calls"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    agent_run_id = Column(CHAR(32), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False)
-    sequence = Column(Integer, nullable=False)
-    tool_name = Column(String(80), nullable=False)
-    tool_input = Column(Text, nullable=False, default="{}")
-    status = Column(String(20), nullable=False)
-    elapsed_ms = Column(Integer, nullable=False)
-    tool_output = Column(Text, nullable=False, default="")
-    created_at = Column(DateTime, server_default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_run_id: Mapped[str] = mapped_column(
+        CHAR(32), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    tool_input: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    elapsed_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    tool_output: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
 
-    agent_run = relationship("AgentRun", back_populates="tool_calls")
+    agent_run: Mapped["AgentRun"] = relationship(back_populates="tool_calls")
 
     __table_args__ = (Index("ix_agent_tool_calls_run_sequence", "agent_run_id", "sequence"),)
 
@@ -159,13 +187,13 @@ class FitnessData(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
-    date: Mapped[date] = mapped_column(Date, nullable=False)
+    date: Mapped[DateValue] = mapped_column(Date, nullable=False)
     data_type: Mapped[str] = mapped_column(String(20), nullable=False)
     # 来自 Coros 的稳定记录键。日指标/睡眠按日期幂等，活动按 activity id 幂等，
     # 因而同一天的多次活动不会再互相覆盖。
     external_id: Mapped[str] = mapped_column(String(128), nullable=False)
     data: Mapped[str | None] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
 
     __table_args__ = (
         Index("ix_fitness_user_type_external", "user_id", "data_type", "external_id", unique=True),
@@ -177,16 +205,18 @@ class SessionSummary(Base):
 
     __tablename__ = "session_summaries"
 
-    id = Column(CHAR(32), primary_key=True)
-    session_id = Column(
+    id: Mapped[str] = mapped_column(CHAR(32), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
         CHAR(32), ForeignKey("sessions.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    content = Column(Text, nullable=False, default="{}")
-    covered_through_message_id = Column(Integer, nullable=False, default=0)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    covered_through_message_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=True
+    )
 
-    session = relationship("Session", back_populates="session_summary")
+    session: Mapped["Session"] = relationship(back_populates="session_summary")
 
 
 class MemoryFact(Base):
@@ -194,22 +224,24 @@ class MemoryFact(Base):
 
     __tablename__ = "memory_facts"
 
-    id = Column(CHAR(32), primary_key=True)
-    user_id = Column(
+    id: Mapped[str] = mapped_column(CHAR(32), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    source_message_id = Column(
+    source_message_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
     )
-    supersedes_id = Column(CHAR(32), nullable=True)
-    fact_key = Column(String(80), nullable=False)
-    category = Column(String(30), nullable=False)
-    value = Column(Text, nullable=False, default="{}")
-    display_text = Column(String(300), nullable=False)
-    status = Column(String(20), nullable=False, default="proposed")
-    expires_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    supersedes_id: Mapped[str | None] = mapped_column(CHAR(32), nullable=True)
+    fact_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    category: Mapped[str] = mapped_column(String(30), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    display_text: Mapped[str] = mapped_column(String(300), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="proposed")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=True
+    )
 
     __table_args__ = (Index("ix_memory_facts_user_status_key", "user_id", "status", "fact_key"),)
 
@@ -219,19 +251,21 @@ class TrainingPlan(Base):
 
     __tablename__ = "training_plans"
 
-    id = Column(CHAR(32), primary_key=True)
-    user_id = Column(
+    id: Mapped[str] = mapped_column(CHAR(32), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    week_start = Column(Date, nullable=False)
-    version = Column(Integer, nullable=False, default=1)
-    status = Column(String(20), nullable=False, default="draft")
-    plan_data = Column(Text, nullable=False, default="{}")
-    safety_data = Column(Text, nullable=False, default="{}")
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    week_start: Mapped[DateValue] = mapped_column(Date, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    plan_data: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    safety_data: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=True
+    )
 
-    feedbacks = relationship(
+    feedbacks: Mapped[list["TrainingFeedback"]] = relationship(
         "TrainingFeedback", back_populates="plan", cascade="all, delete-orphan"
     )
 
@@ -243,15 +277,17 @@ class TrainingFeedback(Base):
 
     __tablename__ = "training_feedbacks"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    plan_id = Column(CHAR(32), ForeignKey("training_plans.id", ondelete="CASCADE"), nullable=False)
-    day_of_week = Column(Integer, nullable=False)
-    completed = Column(Boolean, nullable=False, default=False)
-    rpe = Column(Integer, nullable=True)
-    pain_score = Column(Integer, nullable=True)
-    notes = Column(String(500), nullable=False, default="")
-    created_at = Column(DateTime, server_default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    plan_id: Mapped[str] = mapped_column(
+        CHAR(32), ForeignKey("training_plans.id", ondelete="CASCADE"), nullable=False
+    )
+    day_of_week: Mapped[int] = mapped_column(Integer, nullable=False)
+    completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    rpe: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pain_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
 
-    plan = relationship("TrainingPlan", back_populates="feedbacks")
+    plan: Mapped["TrainingPlan"] = relationship(back_populates="feedbacks")
 
     __table_args__ = (UniqueConstraint("plan_id", "day_of_week", name="uq_plan_feedback_day"),)

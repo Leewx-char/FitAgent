@@ -24,7 +24,7 @@ class PlanGenerationError(RuntimeError):
     """面向用户的预期生成失败，不会持久化不完整计划。"""
 
 
-def _parse_json_field(value: str | dict | list | None, default):
+def _parse_json_field(value: str | dict[str, Any] | list[Any] | None, default: object) -> object:
     """解析 JSON 字段；为空或格式异常时返回默认值。"""
     if not value:
         return default
@@ -283,9 +283,14 @@ class TrainingPlanService:
         feedback: TrainingFeedbackCreate,
     ) -> TrainingFeedback:
         """校验星期后创建或更新训练计划的当日反馈。"""
-        if feedback.day_of_week not in {
-            day["day_of_week"] for day in _parse_json_field(plan.plan_data, {}).get("days", [])
-        }:
+        plan_data = _parse_json_field(plan.plan_data, {})
+        days = plan_data.get("days", []) if isinstance(plan_data, dict) else []
+        feedback_days = {
+            day["day_of_week"]
+            for day in days
+            if isinstance(day, dict) and isinstance(day.get("day_of_week"), int)
+        }
+        if feedback.day_of_week not in feedback_days:
             raise PlanGenerationError("反馈的星期不属于该训练计划")
         record = (
             db.query(TrainingFeedback)

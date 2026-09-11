@@ -37,7 +37,18 @@ class _SanitizedMem0Handler(logging.Handler):
             f"mem0_sdk_event source={record.name} module={record.module} "
             f"function={record.funcName} line={record.lineno}"
         )
-        logging.getLogger(_SAFE_SDK_LOGGER_NAME).log(record.levelno, message)
+        safe_logger = logging.getLogger(_SAFE_SDK_LOGGER_NAME)
+        safe_record = safe_logger.makeRecord(
+            _SAFE_SDK_LOGGER_NAME,
+            record.levelno,
+            record.pathname,
+            record.lineno,
+            message,
+            (),
+            None,
+            func=record.funcName,
+        )
+        safe_logger.callHandlers(safe_record)
 
 
 def _configure_mem0_logging() -> None:

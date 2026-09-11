@@ -33,15 +33,19 @@ class MemoryBackend(Protocol):
         session_id: str | None = None,
     ) -> list[MemoryRecord]:
         """Extract proposed memories from one isolated user message."""
+        ...
 
     def create(self, *, user_id: int, text: str, metadata: dict[str, object]) -> MemoryRecord:
         """Store one exact memory without provider inference."""
+        ...
 
     def list(self, *, user_id: int, include_revoked: bool = False) -> list[MemoryRecord]:
         """List memories owned by one user."""
+        ...
 
     def get(self, *, user_id: int, memory_id: str) -> MemoryRecord | None:
         """Return an owned memory, hiding missing and foreign records alike."""
+        ...
 
     def update(
         self,
@@ -52,9 +56,11 @@ class MemoryBackend(Protocol):
         metadata: dict[str, object],
     ) -> MemoryRecord:
         """Update the text or metadata of an owned memory."""
+        ...
 
     def search(self, *, user_id: int, query: str, limit: int) -> list[MemoryRecord]:
         """Search confirmed memories owned by one user."""
+        ...
 
 
 _backend: MemoryBackend | None = None

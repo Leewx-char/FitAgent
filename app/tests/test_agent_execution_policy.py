@@ -108,6 +108,13 @@ def test_tool_budget_blocks_only_calls_after_limit():
     assert _consume_tool_budget(state, limit=2) == (False, 3, 2)
 
 
+def test_tool_budget_treats_invalid_counter_as_zero():
+    """损坏的图状态不能让工具中间件在预算检查时崩溃。"""
+    state = {"tool_call_count": object()}
+
+    assert _consume_tool_budget(state, limit=2) == (True, 1, 2)
+
+
 def test_create_agent_allows_two_parallel_tool_calls_without_count_conflict():
     """同一 AIMessage 的两个工具调用应分别计数且不会触发并发状态冲突。"""
     result, calls = _invoke_parallel_tool_calls(["first", "second"], tool_limit=2)

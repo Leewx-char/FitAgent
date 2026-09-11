@@ -146,7 +146,7 @@ class MemoryService:
                 raise ValueError("不支持的记忆状态")
             if record.metadata.get("status") == "revoked" and status == "confirmed":
                 raise ValueError("已撤销的记忆不能直接确认，请重新创建")
-            metadata = {"status": status}
+            metadata: dict[str, object] = {"status": status}
             if display_text is not None:
                 metadata["value"] = {"value": display_text}
             if expires_at is not _UNSET:

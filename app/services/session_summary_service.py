@@ -63,10 +63,14 @@ class SessionSummaryService:
         boundary = older_messages[-1].id
         row = db.query(SessionSummary).filter(SessionSummary.session_id == session_id).one_or_none()
         cached_summary = self._valid_summary(row.content) if row is not None else None
-        if cached_summary is not None and row.covered_through_message_id == boundary:
+        if (
+            row is not None
+            and cached_summary is not None
+            and row.covered_through_message_id == boundary
+        ):
             return self._format(cached_summary)
 
-        covered = row.covered_through_message_id if cached_summary is not None else 0
+        covered = row.covered_through_message_id if row is not None and cached_summary else 0
         summary = cached_summary or ""
         pending_messages = [
             (message.id, message.content) for message in older_messages if message.id > covered

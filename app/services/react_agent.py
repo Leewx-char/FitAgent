@@ -1,8 +1,9 @@
 import json
 from operator import add, or_
 from types import SimpleNamespace
-from typing import Annotated, Callable, Iterable, Iterator
+from typing import Annotated, Any, Callable, Iterable, Iterator, cast
 from langchain.agents import AgentState, create_agent
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.runnables.config import merge_configs
@@ -23,6 +24,7 @@ from app.services.agent_tools import (
     get_fitness_summary,
 )
 from app.services.middleware import monitor_tool, log_before_model, report_prompt_switch
+from app.services.rag_service import RagContext, RagSummarizeService
 from app.services.chat_routing_graph import (
     ChatGraphState,
     ChatRuntimeContext,
@@ -67,8 +69,8 @@ class DirectRagExecutor:
     def __init__(
         self,
         *,
-        model: object,
-        rag_service_factory: Callable[[], object] | None = None,
+        model: BaseChatModel,
+        rag_service_factory: Callable[[], RagSummarizeService] | None = None,
         evidence_builder: Callable[
             [object], list[dict[str, str | int | float | None]]
         ] = build_evidence_cards,
@@ -81,7 +83,7 @@ class DirectRagExecutor:
             run_name="rag_summarize", tags=["agent_tool"]
         )
 
-    def _build_rag_context(self, payload: dict[str, object]) -> object:
+    def _build_rag_context(self, payload: dict[str, object]) -> RagContext:
         """基于原始查询构建直接检索所需的证据上下文。"""
         return self._rag_service_factory().build_context(str(payload["query"]))
 
@@ -103,8 +105,9 @@ class DirectRagExecutor:
     ) -> Iterator[dict]:
         """执行直接检索并让调用配置贯穿检索与模型流。"""
         yield {"type": "tool", "name": TOOL_DISPLAY["rag_summarize"]}
-        rag_context = self._rag_context_runnable.invoke(
-            {"query": query, "history": history}, config=config
+        rag_context = cast(
+            RagContext,
+            self._rag_context_runnable.invoke({"query": query, "history": history}, config=config),
         )
         cards = self._evidence_builder(rag_context.result)
         if cards:
@@ -133,7 +136,7 @@ class ReactAgent:
         self.direct_rag_executor = DirectRagExecutor(model=self.model)
         self.max_steps = settings.agent_max_steps
         self.max_tool_calls = settings.agent_max_tool_calls
-        self.agent = create_agent(
+        self.agent: Any = create_agent(
             model=self.model,
             system_prompt=load_system_prompts(),
             tools=[
@@ -147,11 +150,11 @@ class ReactAgent:
                 get_fitness_summary,
                 trigger_report,
             ],
-            middleware=[monitor_tool, log_before_model, report_prompt_switch],
+            middleware=cast(Any, [monitor_tool, log_before_model, report_prompt_switch]),
             state_schema=PersonalizedAgentState,
             context_schema=ChatRuntimeContext,
         )
-        self.routing_graph = build_chat_routing_graph(
+        self.routing_graph: Any = build_chat_routing_graph(
             classifier=StructuredOutputIntentClassifier(self.model)
         )
 
