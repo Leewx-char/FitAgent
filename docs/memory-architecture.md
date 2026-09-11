@@ -24,7 +24,7 @@
 ## 写入
 
 1. 聊天接口先保存用户消息，取得稳定的会话和消息 ID。
-2. 在线程池调用 `extract`，仅向 mem0 提交用户消息；会话 ID 限定提取上下文，来源消息 ID 用于幂等检查。
+2. 当前 SSE 回复完成后，由后台线程池调用 `extract`，仅向 mem0 提交用户消息；会话 ID 限定提取上下文，来源消息 ID 用于幂等检查。
 3. mem0 通过 LLM 生成候选，元数据强制为 `status=proposed`、`source=chat`、`source_message_id`、`expires_at`。模型不能选择确认状态。
 4. 用户在原有“我的记忆”页面确认或撤销。接口修改 mem0 元数据，不复制到另一张业务表。
 5. 用户通过 POST 主动添加的记忆直接确认，使用 `infer=False` 保存原文。模型没有长期记忆写入工具。
@@ -84,4 +84,4 @@ LLM 提取在当前 SSE 回答完成后作为后台任务在线程池执行，�
 .\.venv\Scripts\python.exe -m pytest app/tests/test_memory.py app/tests/test_memory_service.py app/tests/test_mem0_backend.py app/tests/test_memory_migration.py app/tests/test_chat.py -q -p no:cacheprovider
 ```
 
-另已使用配置的真实 DashScope 模型与 embedding、隔离的本地 Qdrant 做中文冒烟验证：从“偏好早晨跑步，目标完成半程马拉松”提取两条候选，确认后语义命中两条，其他用户不可读，撤销后无法召回。该样例证明基本链路可用；模型是否在需要时调用工具，以及中文召回准确率、无关召回比例和延迟，仍需用独立评测集衡量。
+另已使用配置的真实 DeepSeek 提取模型、DashScope embedding 与隔离的本地 Qdrant 做中文冒烟验证：从“偏好早晨跑步，目标完成半程马拉松”提取两条候选，确认后语义命中两条，其他用户不可读，撤销后无法召回。该样例证明基本链路可用；模型是否在需要时调用工具，以及中文召回准确率、无关召回比例和延迟，仍需用独立评测集衡量。
