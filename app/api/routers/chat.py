@@ -9,9 +9,8 @@ SSE 格式：每块数据以 "data: <文本>\n\n" 发送，前端 EventSource �
 
 import json
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from starlette.concurrency import run_in_threadpool
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session as DBSession
@@ -47,6 +46,35 @@ def _redact_sensitive(text: str) -> str:
 
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+
+def _extract_memory_candidates_after_reply(
+    *, message_id: int, user_id: int, timing: ChatLatencyTracker
+) -> None:
+    """在 SSE 完成后用独立会话提取候选记忆，失败不影响已发送回答。"""
+    try:
+        with timing.span("memory.extract_candidates_background"):
+            with get_db_session() as db:
+                message = (
+                    db.query(Message)
+                    .join(SessionModel)
+                    .filter(
+                        Message.id == message_id,
+                        Message.role == "user",
+                        SessionModel.user_id == user_id,
+                    )
+                    .first()
+                )
+                if message is None:
+                    timing.mark("memory.background_skipped", reason="message_unavailable")
+                    return
+                MemoryService().extract_candidates(message, user_id=user_id)
+    except Exception:
+        logger.exception(
+            "后台记忆提取失败：request_id=%s message_id=%s",
+            timing.request_id,
+            message_id,
+        )
 
 
 def _rate_limit_key(request: Request) -> str:
@@ -209,6 +237,7 @@ async def sse_generator(
 async def chat(
     request: Request,
     payload: ChatRequest,
+    background_tasks: BackgroundTasks,
     db: DBSession = Depends(get_db),
     agent: ReactAgent = Depends(get_agent),
     current_user: User = Depends(get_current_user),
@@ -254,13 +283,14 @@ async def chat(
         db.commit()
         db.refresh(user_message_record)
 
-    # mem0 LLM 只提取用户消息；外部调用在线程池执行，候选直接保存在记忆库。
-    with timing.span("memory.extract_candidates"):
-        await run_in_threadpool(
-            MemoryService().extract_candidates,
-            user_message_record,
-            user_id=current_user.id,
-        )
+    # 后台任务会在 SSE 流结束后在线程池运行；传 ID 并重新查询，避免复用请求会话。
+    background_tasks.add_task(
+        _extract_memory_candidates_after_reply,
+        message_id=user_message_record.id,
+        user_id=current_user.id,
+        timing=timing,
+    )
+    timing.mark("memory.extract_scheduled")
     # 3. 从数据库加载历史消息，拼接新消息
     with timing.span("chat.history_load"):
         history_messages = (
@@ -285,6 +315,7 @@ async def chat(
             timing,
         ),
         media_type="text/event-stream",
+        background=background_tasks,
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",

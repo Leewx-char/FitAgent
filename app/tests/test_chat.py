@@ -337,3 +337,30 @@ class TestChat:
         assert len(recent_messages) == RECENT_AGENT_MESSAGE_LIMIT == 20
         assert recent_messages[0]["role"] == "assistant"
         assert "session_summary" not in agent_mock.execute_stream.call_args.kwargs
+
+    def test_chat_extracts_memories_after_stream_completion(
+        self, auth_client, agent_mock, monkeypatch
+    ):
+        """长期记忆提取必须在回答流结束后执行，不能阻塞模型首字。"""
+        call_order = []
+
+        def stream_response(*_args, **_kwargs):
+            call_order.append("model")
+            return iter(['{"type": "text", "content": "已生成回答"}'])
+
+        class BackgroundMemoryService:
+            """记录后台提取时机，不触发外部 mem0 调用。"""
+
+            @staticmethod
+            def extract_candidates(_message, *, user_id):
+                assert user_id
+                call_order.append("memory")
+                return []
+
+        agent_mock.execute_stream.side_effect = stream_response
+        monkeypatch.setattr(chat_router, "MemoryService", BackgroundMemoryService)
+
+        response = auth_client.post("/api/chat", json={"message": "我习惯晚上训练"})
+
+        assert response.status_code == 200
+        assert call_order == ["model", "memory"]
