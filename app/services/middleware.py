@@ -10,6 +10,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Command
 from app.core.request_context import request_id_var
+from app.utils.chat_latency import ChatLatencyTracker
 from app.utils.logger_handler import logger
 
 
@@ -85,6 +86,21 @@ def _log_tool_event(
     logger.info("AGENT_TOOL_CALL %s", json.dumps(event, ensure_ascii=False))
 
 
+def _record_tool_latency(
+    request: ToolCallRequest, *, tool_name: str, status: str, elapsed_ms: int
+) -> None:
+    """将工具耗时写入请求级链路日志，不记录工具参数值。"""
+    dependencies = getattr(request.runtime.context, "dependencies", None)
+    timing = getattr(dependencies, "latency_tracker", None)
+    if isinstance(timing, ChatLatencyTracker):
+        timing.record_duration(
+            "agent.tool_completed",
+            elapsed_ms,
+            tool=tool_name,
+            status=status,
+        )
+
+
 @wrap_tool_call
 def monitor_tool(
     request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command]
@@ -107,6 +123,12 @@ def monitor_tool(
             elapsed_ms=0,
             tool_call_count=tool_call_count,
             detail=f"limit={tool_call_limit}",
+        )
+        _record_tool_latency(
+            request,
+            tool_name=tool_name,
+            status="budget_exceeded",
+            elapsed_ms=0,
         )
         return Command(
             update={
@@ -135,6 +157,7 @@ def monitor_tool(
             elapsed_ms=elapsed_ms,
             tool_call_count=tool_call_count,
         )
+        _record_tool_latency(request, tool_name=tool_name, status="success", elapsed_ms=elapsed_ms)
         return _with_tool_call_count(result, tool_call_count, request)
     except Exception:
         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
@@ -147,6 +170,7 @@ def monitor_tool(
             tool_call_count=tool_call_count,
             detail="internal_error",
         )
+        _record_tool_latency(request, tool_name=tool_name, status="error", elapsed_ms=elapsed_ms)
         return Command(
             update={
                 "messages": [

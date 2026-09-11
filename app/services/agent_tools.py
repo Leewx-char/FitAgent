@@ -24,6 +24,7 @@ from app.services.memory_service import MemoryService
 from app.services.factory import get_chat_model
 from app.services.session_summary_service import SessionSummaryService
 from app.core.settings import get_settings
+from app.utils.chat_latency import ChatLatencyTracker
 
 
 @lru_cache(maxsize=1)
@@ -219,10 +220,18 @@ SOURCE_MAP = {
 def rag_summarize(query: str, runtime: ToolRuntime, source: str = "") -> Command:
     """检索问题并保存可展示证据，返回受预算约束的上下文。"""
     source_filter = SOURCE_MAP.get(source) if source else None
-    rag_context = _get_rag_service().build_context(
-        query,
-        source_filter,
-    )
+    timing = _runtime_context_value(runtime, "latency_tracker")
+    if isinstance(timing, ChatLatencyTracker):
+        rag_context = _get_rag_service().build_context(
+            query,
+            source_filter,
+            timing=timing,
+        )
+    else:
+        rag_context = _get_rag_service().build_context(
+            query,
+            source_filter,
+        )
     evidence = build_evidence_cards(rag_context.result)
     return _tool_state_command(
         rag_context.content,

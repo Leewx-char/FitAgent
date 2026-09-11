@@ -25,6 +25,7 @@ from app.services.memory_service import MemoryService
 from app.services.session_summary_service import RECENT_AGENT_MESSAGE_LIMIT
 from app.repositories.agent_trace_repository import AgentTraceRepository
 from app.core.database import get_db_session
+from app.utils.chat_latency import ChatLatencyTracker
 from app.utils.logger_handler import logger
 from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 import uuid
@@ -70,8 +71,11 @@ async def sse_generator(
     session_id: str,
     user_message: str,
     current_user: User,
+    timing: ChatLatencyTracker | None = None,
 ):
     """执行 Agent 流式响应，转发 SSE 事件并保存回答与执行轨迹。"""
+    timing = timing or ChatLatencyTracker(request_id_var.get())
+    timing.mark("sse.started")
     # 获取当前事件循环
     loop = asyncio.get_event_loop()
     full_response = ""
@@ -95,6 +99,7 @@ async def sse_generator(
             user_id=user_id,
             session_id=session_id,
             config={"callbacks": [collector]},
+            timing=timing,
         )
     )
     stream_failed = False
@@ -114,11 +119,14 @@ async def sse_generator(
                 chunk = _redact_sensitive(chunk)
                 full_response += chunk
                 payload = {"type": "text", "content": chunk}
+                timing.mark_once("sse_first_event", "sse.first_event", event_type="text")
+                timing.mark_once("sse_first_text", "sse.first_text", content_chars=len(chunk))
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 continue
             if event.get("type") == "tool":
                 # 工具调用通知：把英文名翻译成中文显示给用户
                 payload = {"type": "tool", "name": event.get("name", "")}
+                timing.mark_once("sse_first_event", "sse.first_event", event_type="tool")
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
             elif event.get("type") == "evidence":
                 # 证据卡片属于检索结果的一部分，原样转发给前端与回答中的 [证据:N] 对应。
@@ -126,15 +134,19 @@ async def sse_generator(
                     "type": "evidence",
                     "items": event.get("items", []),
                 }
+                timing.mark_once("sse_first_event", "sse.first_event", event_type="evidence")
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
             elif event.get("type") == "text":
                 # 文本增量：只有新增的部分
                 content = _redact_sensitive(event.get("content", ""))
                 full_response += content
                 payload = {"type": "text", "content": content}
+                timing.mark_once("sse_first_event", "sse.first_event", event_type="text")
+                timing.mark_once("sse_first_text", "sse.first_text", content_chars=len(content))
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
     except Exception as e:
         stream_failed = True
+        timing.mark("sse.error", error_type=type(e).__name__)
         # 捕获所有异常（API Key 无效、额度不足、超时等），给用户友好的中文提示
         logger.error(f"Agent流式响应异常：{str(e)}", exc_info=True)  # ← 加这行
         error_msg = str(e)
@@ -152,40 +164,43 @@ async def sse_generator(
             error_msg = "服务暂时不可用，请稍后重试"
         yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
     try:
-        with get_db_session() as trace_db:
-            AgentTraceRepository.save(
-                trace_db,
-                collector,
-                request_id=request_id_var.get(),
-                session_id=session_id,
-                user_id=current_user.id,
-                user_question=user_message,
-                assistant_answer=full_response.strip(),
-                status="failed" if stream_failed else "succeeded",
-            )
+        with timing.span("trace.save"):
+            with get_db_session() as trace_db:
+                AgentTraceRepository.save(
+                    trace_db,
+                    collector,
+                    request_id=request_id_var.get(),
+                    session_id=session_id,
+                    user_id=current_user.id,
+                    user_question=user_message,
+                    assistant_answer=full_response.strip(),
+                    status="failed" if stream_failed else "succeeded",
+                )
     except Exception:
         # 轨迹表尚未迁移或单独写入失败时，不得影响用户已经得到的流式回答。
         logger.exception("Agent 执行轨迹写入失败：request_id=%s", request_id_var.get())
     # 流式结束后：存 assistant 消息到数据库
-    db.add(
-        Message(
-            session_id=session_id,
-            role="assistant",
-            content=full_response.strip() if full_response.strip() else "（回复异常）",
+    with timing.span("chat.assistant_message_persist"):
+        db.add(
+            Message(
+                session_id=session_id,
+                role="assistant",
+                content=full_response.strip() if full_response.strip() else "（回复异常）",
+            )
         )
-    )
-    # 如果是第一条消息，自动更新会话标题
-    session = (
-        db.query(SessionModel)
-        .filter(
-            SessionModel.id == session_id,
-            SessionModel.user_id == current_user.id,
+        # 如果是第一条消息，自动更新会话标题
+        session = (
+            db.query(SessionModel)
+            .filter(
+                SessionModel.id == session_id,
+                SessionModel.user_id == current_user.id,
+            )
+            .first()
         )
-        .first()
-    )
-    if session and session.title == "新对话":
-        session.title = user_message[:24] + ("..." if len(user_message) > 24 else "")
-    db.commit()
+        if session and session.title == "新对话":
+            session.title = user_message[:24] + ("..." if len(user_message) > 24 else "")
+        db.commit()
+    timing.mark("sse.completed", status="failed" if stream_failed else "ok")
     yield "data: [DONE]\n\n"
 
 
@@ -199,6 +214,8 @@ async def chat(
     current_user: User = Depends(get_current_user),
 ):
     """保存用户消息与短期会话状态，并返回 Agent 的 SSE 响应流。"""
+    timing = ChatLatencyTracker(request_id_var.get())
+    timing.mark("chat.request_received")
     # 0. 输入校验：防 token 炸弹 + 空消息
     if not payload.message or not payload.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")
@@ -209,47 +226,54 @@ async def chat(
         )
 
     # 1. 如果没有 session_id，自动创建新会话
-    if payload.session_id:
-        session = (
-            db.query(SessionModel)
-            .filter(SessionModel.id == payload.session_id, SessionModel.user_id == current_user.id)
-            .first()
-        )
-        if not session:
-            raise HTTPException(status_code=404, detail="会话不存在")
-        session_id = session.id
-    else:
-        session_id = uuid.uuid4().hex[:32]
-        new_session = SessionModel(
-            id=session_id,
-            title="新对话",
-            user_id=current_user.id,
-        )
-        db.add(new_session)
-        db.commit()
+    with timing.span("chat.session_resolution"):
+        if payload.session_id:
+            session = (
+                db.query(SessionModel)
+                .filter(
+                    SessionModel.id == payload.session_id, SessionModel.user_id == current_user.id
+                )
+                .first()
+            )
+            if not session:
+                raise HTTPException(status_code=404, detail="会话不存在")
+            session_id = session.id
+        else:
+            session_id = uuid.uuid4().hex[:32]
+            new_session = SessionModel(
+                id=session_id,
+                title="新对话",
+                user_id=current_user.id,
+            )
+            db.add(new_session)
+            db.commit()
     # 2. 存用户消息到数据库
-    user_message_record = Message(session_id=session_id, role="user", content=payload.message)
-    db.add(user_message_record)
-    db.commit()
-    db.refresh(user_message_record)
+    with timing.span("chat.user_message_persist"):
+        user_message_record = Message(session_id=session_id, role="user", content=payload.message)
+        db.add(user_message_record)
+        db.commit()
+        db.refresh(user_message_record)
 
     # mem0 LLM 只提取用户消息；外部调用在线程池执行，候选直接保存在记忆库。
-    await run_in_threadpool(
-        MemoryService().extract_candidates,
-        user_message_record,
-        user_id=current_user.id,
-    )
+    with timing.span("memory.extract_candidates"):
+        await run_in_threadpool(
+            MemoryService().extract_candidates,
+            user_message_record,
+            user_id=current_user.id,
+        )
     # 3. 从数据库加载历史消息，拼接新消息
-    history_messages = (
-        db.query(Message)
-        .filter(Message.session_id == session_id)
-        .order_by(Message.created_at, Message.id)
-        .all()
-    )
+    with timing.span("chat.history_load"):
+        history_messages = (
+            db.query(Message)
+            .filter(Message.session_id == session_id)
+            .order_by(Message.created_at, Message.id)
+            .all()
+        )
     all_messages = [{"role": m.role, "content": m.content} for m in history_messages]
     # 最近 10 轮（20 条）原文进入 Agent，避免全量历史进入模型上下文。
     messages = all_messages[-RECENT_AGENT_MESSAGE_LIMIT:]
     # 4. 流式响应
+    timing.mark("chat.sse_ready", history_count=len(messages))
     return StreamingResponse(
         sse_generator(
             agent,
@@ -258,6 +282,7 @@ async def chat(
             session_id,
             payload.message,
             current_user,
+            timing,
         ),
         media_type="text/event-stream",
         headers={

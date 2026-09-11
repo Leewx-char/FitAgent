@@ -13,6 +13,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
+from app.utils.chat_latency import ChatLatencyTracker
 
 Route = Literal["direct_rag", "personalized_agent"]
 CLASSIFIER_MESSAGE_LIMIT = 6
@@ -54,6 +55,12 @@ class ChatRuntimeContext:
     user_id: int
     session_id: str
     dependencies: object
+
+
+def _latency_tracker(runtime: Runtime[ChatRuntimeContext]) -> ChatLatencyTracker | None:
+    """读取请求级计时器；单元测试和非 HTTP 调用可不提供。"""
+    tracker = getattr(runtime.context.dependencies, "latency_tracker", None)
+    return tracker if isinstance(tracker, ChatLatencyTracker) else None
 
 
 class IntentClassifier(Protocol):
@@ -171,8 +178,14 @@ def _classify_intent_node(
     classifier: IntentClassifier,
 ) -> dict[str, Route]:
     """调用分类契约并仅将路由结果写回图状态。"""
-    del runtime
-    return {"route": classify_intent(state, classifier, config=config)}
+    timing = _latency_tracker(runtime)
+    if timing is None:
+        route = classify_intent(state, classifier, config=config)
+    else:
+        with timing.span("agent.intent_classification"):
+            route = classify_intent(state, classifier, config=config)
+        timing.mark("agent.intent_classified", route=route)
+    return {"route": route}
 
 
 def _empty_execution_node(
@@ -188,6 +201,16 @@ def _personalized_agent_node(
 ) -> dict[str, JsonValue]:
     """复用内层 Agent 的工具循环，并保留本次运行生成的短期产物。"""
     executor = runtime.context.dependencies.personalized_agent_executor
+    timing = _latency_tracker(runtime)
+    if timing is not None:
+        timing.mark("agent.personalized_started")
+        return executor.stream_personalized_events(
+            state,
+            runtime.context,
+            stream_writer=get_stream_writer(),
+            config=config,
+            timing=timing,
+        )
     return executor.stream_personalized_events(
         state,
         runtime.context,
@@ -204,13 +227,14 @@ def _direct_rag_node(
     query_index, query = _latest_user_turn(messages)
     history = [dict(message) for message in messages[:query_index][-6:]]
     executor = getattr(runtime.context.dependencies, "direct_rag_executor")
+    timing = _latency_tracker(runtime)
     events = []
     writer = get_stream_writer()
-    for event in executor.stream(
-        query=query,
-        history=history,
-        config=config,
-    ):
+    stream_arguments = {"query": query, "history": history, "config": config}
+    if timing is not None:
+        timing.mark("agent.direct_rag_started")
+        stream_arguments["timing"] = timing
+    for event in executor.stream(**stream_arguments):
         if not is_json_value(event):
             raise ValueError("直接检索事件包含不可序列化值")
         writer(event)
@@ -219,6 +243,8 @@ def _direct_rag_node(
         (event["items"] for event in events if event.get("type") == "evidence"),
         [],
     )
+    if timing is not None:
+        timing.mark("agent.direct_rag_completed", evidence_count=len(evidence))
     return {
         "retrieval_history": history,
         "rag_evidence": evidence,

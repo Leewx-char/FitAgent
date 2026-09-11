@@ -13,6 +13,7 @@ from app.services.reranker import Reranker
 from app.services.retrieval_contracts import RetrievalHit, RetrievalRequest, RetrievalResult
 from app.services.vector_repository import ScoredChunk
 from app.services.vector_store import VectorStoreService
+from app.utils.chat_latency import ChatLatencyTracker
 from app.utils.config_handler import get_vector_store_config
 from app.utils.logger_handler import logger
 
@@ -75,6 +76,7 @@ class RagSummarizeService:
         self,
         query: str,
         source_filter: list[str] | None = None,
+        timing: ChatLatencyTracker | None = None,
     ) -> RetrievalResult:
         """原样执行一次首阶段查询与一次候选排序，仅记录最终证据和耗时。"""
         request = RetrievalRequest(
@@ -84,10 +86,21 @@ class RagSummarizeService:
         )
         started_at = time.perf_counter()
         try:
-            candidates = self.vector_store.hybrid_search(
-                query, limit=self.rerank_candidate_k, source_filter=request.source_filter
-            )
-            chunks = self.reranker.rerank(query, candidates, limit=self.top_k)
+            if timing is None:
+                candidates = self.vector_store.hybrid_search(
+                    query, limit=self.rerank_candidate_k, source_filter=request.source_filter
+                )
+                chunks = self.reranker.rerank(query, candidates, limit=self.top_k)
+            else:
+                with timing.span("rag.retrieve"):
+                    candidates = self.vector_store.hybrid_search(
+                        query,
+                        limit=self.rerank_candidate_k,
+                        source_filter=request.source_filter,
+                        timing=timing,
+                    )
+                    with timing.span("rag.rerank", candidate_count=len(candidates)):
+                        chunks = self.reranker.rerank(query, candidates, limit=self.top_k)
         except Exception as error:
             logger.error("RAG 二阶段检索失败：%s", error, exc_info=True)
             raise RuntimeError("知识库检索暂时不可用，请稍后重试。") from error
@@ -109,31 +122,41 @@ class RagSummarizeService:
         self,
         query: str,
         source_filter: list[str] | None = None,
+        timing: ChatLatencyTracker | None = None,
     ) -> RagContext:
         """构建预算内上下文，并保留结构化证据供 API 层展示。"""
         try:
-            result = self.retrieve(query, source_filter)
+            result = self.retrieve(query, source_filter, timing=timing)
         except RuntimeError as error:
             return RagContext(str(error), None)
         if not result.hits:
             return RagContext("未检索到相关参考资料。", result)
 
-        snippets = {
-            snippet.evidence_id: snippet for snippet in self.context_builder.build(result.hits)
-        }
-        context_parts = []
-        for hit in result.hits:
-            snippet = snippets.get(hit.evidence_id)
-            if snippet is None:
-                continue
-            location = hit.metadata.get("ordinal")
-            location_text = f"来源={hit.source_id} | 证据ID={hit.evidence_id}"
-            if location is not None:
-                location_text += f" | 切片={location}"
-            truncation = " | 已按上下文预算截取" if snippet.truncated else ""
-            context_parts.append(
-                f"[证据:{hit.rank}] {location_text}{truncation}\n{snippet.text.strip()}"
-            )
+        def build_content() -> list[str]:
+            """将命中片段裁剪为提示词上下文，不保留额外运行态。"""
+            snippets = {
+                snippet.evidence_id: snippet for snippet in self.context_builder.build(result.hits)
+            }
+            context_parts = []
+            for hit in result.hits:
+                snippet = snippets.get(hit.evidence_id)
+                if snippet is None:
+                    continue
+                location = hit.metadata.get("ordinal")
+                location_text = f"来源={hit.source_id} | 证据ID={hit.evidence_id}"
+                if location is not None:
+                    location_text += f" | 切片={location}"
+                truncation = " | 已按上下文预算截取" if snippet.truncated else ""
+                context_parts.append(
+                    f"[证据:{hit.rank}] {location_text}{truncation}\n{snippet.text.strip()}"
+                )
+            return context_parts
+
+        if timing is None:
+            context_parts = build_content()
+        else:
+            with timing.span("rag.context_format", hit_count=len(result.hits)):
+                context_parts = build_content()
         return RagContext(
             "\n\n".join(context_parts)
             + self._format_references(result.hits)

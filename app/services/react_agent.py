@@ -34,6 +34,7 @@ from app.services.chat_routing_graph import (
     is_json_value,
 )
 from app.core.settings import get_settings
+from app.utils.chat_latency import ChatLatencyTracker
 
 TOOL_DISPLAY = {
     "get_user_profile": "获取用户画像",
@@ -85,7 +86,11 @@ class DirectRagExecutor:
 
     def _build_rag_context(self, payload: dict[str, object]) -> RagContext:
         """基于原始查询构建直接检索所需的证据上下文。"""
-        return self._rag_service_factory().build_context(str(payload["query"]))
+        timing = payload.get("timing")
+        service = self._rag_service_factory()
+        if isinstance(timing, ChatLatencyTracker):
+            return service.build_context(str(payload["query"]), timing=timing)
+        return service.build_context(str(payload["query"]))
 
     @staticmethod
     def _content_to_text(content: object) -> str:
@@ -102,15 +107,27 @@ class DirectRagExecutor:
         query: str,
         history: list[dict],
         config: RunnableConfig | None = None,
+        timing: ChatLatencyTracker | None = None,
     ) -> Iterator[dict]:
         """执行直接检索并让调用配置贯穿检索与模型流。"""
+        if timing is not None:
+            timing.mark("direct_rag.started")
         yield {"type": "tool", "name": TOOL_DISPLAY["rag_summarize"]}
-        rag_context = cast(
-            RagContext,
-            self._rag_context_runnable.invoke({"query": query, "history": history}, config=config),
-        )
+        payload: dict[str, object] = {"query": query, "history": history}
+        if timing is not None:
+            payload["timing"] = timing
+            with timing.span("direct_rag.rag_context"):
+                rag_context = cast(
+                    RagContext, self._rag_context_runnable.invoke(payload, config=config)
+                )
+        else:
+            rag_context = cast(
+                RagContext, self._rag_context_runnable.invoke(payload, config=config)
+            )
         cards = self._evidence_builder(rag_context.result)
         if cards:
+            if timing is not None:
+                timing.mark("direct_rag.evidence_ready", evidence_count=len(cards))
             yield {"type": "evidence", "items": cards}
 
         direct_prompt = (
@@ -118,12 +135,29 @@ class DirectRagExecutor:
             "不要调用工具、不要提及检索过程；采用证据时保留对应 [证据:N] 标记。\n\n"
             f"用户问题：{query}\n\n知识库证据：\n{rag_context.content}"
         )
-        for chunk in self._model.stream(
-            [("system", load_system_prompts()), ("human", direct_prompt)], config=config
-        ):
-            content = self._content_to_text(getattr(chunk, "content", chunk))
-            if content:
-                yield {"type": "text", "content": content}
+        if timing is not None:
+            timing.mark("direct_rag.model_stream_started")
+        try:
+            for chunk in self._model.stream(
+                [("system", load_system_prompts()), ("human", direct_prompt)], config=config
+            ):
+                content = self._content_to_text(getattr(chunk, "content", chunk))
+                if content:
+                    if timing is not None:
+                        timing.mark_once(
+                            "model_first_text",
+                            "model.first_text",
+                            branch="direct_rag",
+                            content_chars=len(content),
+                        )
+                    yield {"type": "text", "content": content}
+        except Exception as error:
+            if timing is not None:
+                timing.mark("direct_rag.model_stream_error", error_type=type(error).__name__)
+            raise
+        else:
+            if timing is not None:
+                timing.mark("direct_rag.model_stream_completed")
 
 
 class ReactAgent:
@@ -164,6 +198,7 @@ class ReactAgent:
         context: ChatRuntimeContext,
         stream_writer: Callable[[dict], None] | None = None,
         config: RunnableConfig | None = None,
+        timing: ChatLatencyTracker | None = None,
     ) -> dict:
         """转发内层事件，并让外层运行配置贯穿 Agent 调用。"""
         latest_user_index = max(
@@ -195,47 +230,68 @@ class ReactAgent:
                 stream_writer(event)
             events.append(event)
 
-        for stream_mode, payload in self.agent.stream(
-            input_state,
-            stream_mode=["messages", "values"],
-            context=context,
-            config=merge_configs(config or {}, {"recursion_limit": self.max_steps}),
-        ):
-            if stream_mode == "messages":
-                message, metadata = payload
-                if isinstance(message, AIMessageChunk):
-                    for tool_call in getattr(message, "tool_call_chunks", None) or []:
-                        tool_id = tool_call.get("id")
-                        tool_name = tool_call.get("name")
-                        if tool_id and tool_name and tool_id not in seen_tool_ids:
-                            seen_tool_ids.add(tool_id)
-                            last_tool_step = None
-                            event = {
-                                "type": "tool",
-                                "name": TOOL_DISPLAY.get(tool_name, tool_name),
-                            }
+        if timing is not None:
+            timing.mark("agent.personalized_model_stream_started")
+        try:
+            for stream_mode, payload in self.agent.stream(
+                input_state,
+                stream_mode=["messages", "values"],
+                context=context,
+                config=merge_configs(config or {}, {"recursion_limit": self.max_steps}),
+            ):
+                if stream_mode == "messages":
+                    message, metadata = payload
+                    if isinstance(message, AIMessageChunk):
+                        for tool_call in getattr(message, "tool_call_chunks", None) or []:
+                            tool_id = tool_call.get("id")
+                            tool_name = tool_call.get("name")
+                            if tool_id and tool_name and tool_id not in seen_tool_ids:
+                                seen_tool_ids.add(tool_id)
+                                last_tool_step = None
+                                if timing is not None:
+                                    timing.mark("agent.tool_requested", tool=tool_name)
+                                event = {
+                                    "type": "tool",
+                                    "name": TOOL_DISPLAY.get(tool_name, tool_name),
+                                }
+                                emit(event)
+                        if message.content and (
+                            not seen_tool_ids
+                            or (
+                                last_tool_step is not None
+                                and metadata.get("langgraph_step", 0) > last_tool_step
+                            )
+                        ):
+                            if timing is not None:
+                                timing.mark_once(
+                                    "model_first_text",
+                                    "model.first_text",
+                                    branch="personalized_agent",
+                                    content_chars=len(str(message.content)),
+                                )
+                            event = {"type": "text", "content": message.content}
                             emit(event)
-                    if message.content and (
-                        not seen_tool_ids
-                        or (
-                            last_tool_step is not None
-                            and metadata.get("langgraph_step", 0) > last_tool_step
-                        )
-                    ):
-                        event = {"type": "text", "content": message.content}
+                    elif isinstance(message, ToolMessage):
+                        last_tool_step = metadata.get("langgraph_step", 0)
+                        evidence_pending = True
+                elif stream_mode == "values":
+                    latest_state = payload
+                    evidence = latest_state.get("rag_evidence", [])
+                    new_evidence = evidence[emitted_evidence_count:]
+                    if evidence_pending and new_evidence:
+                        event = {"type": "evidence", "items": new_evidence}
                         emit(event)
-                elif isinstance(message, ToolMessage):
-                    last_tool_step = metadata.get("langgraph_step", 0)
-                    evidence_pending = True
-            elif stream_mode == "values":
-                latest_state = payload
-                evidence = latest_state.get("rag_evidence", [])
-                new_evidence = evidence[emitted_evidence_count:]
-                if evidence_pending and new_evidence:
-                    event = {"type": "evidence", "items": new_evidence}
-                    emit(event)
-                emitted_evidence_count = len(evidence)
-                evidence_pending = False
+                    emitted_evidence_count = len(evidence)
+                    evidence_pending = False
+        except Exception as error:
+            if timing is not None:
+                timing.mark(
+                    "agent.personalized_model_stream_error", error_type=type(error).__name__
+                )
+            raise
+        else:
+            if timing is not None:
+                timing.mark("agent.personalized_model_stream_completed")
         output = {
             "retrieval_history": latest_state.get("retrieval_history", state["retrieval_history"]),
             "rag_evidence": latest_state.get("rag_evidence", state["rag_evidence"]),
@@ -264,8 +320,11 @@ class ReactAgent:
         user_id: int | None = None,
         session_id: str = "",
         config: RunnableConfig | None = None,
+        timing: ChatLatencyTracker | None = None,
     ):
         """构造请求级图上下文，并编码兼容既有 SSE 的执行事件。"""
+        if timing is not None:
+            timing.mark("agent.execute_stream_started", message_count=len(messages))
         normalized_messages = self._normalize_messages(messages)
         initial_state = build_initial_chat_state(normalized_messages)
         runtime_context = ChatRuntimeContext(
@@ -275,6 +334,7 @@ class ReactAgent:
                 direct_rag_executor=self.direct_rag_executor,
                 personalized_agent_executor=self,
                 max_tool_calls=self.max_tool_calls,
+                latency_tracker=timing,
             ),
         )
         for stream_mode, event in self.routing_graph.stream(

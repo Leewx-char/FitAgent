@@ -9,6 +9,7 @@ from __future__ import annotations
 from app.core.settings import get_settings
 from app.services.factory import get_embedding_model
 from app.services.vector_repository import QdrantVectorRepository, ScoredChunk
+from app.utils.chat_latency import ChatLatencyTracker
 from app.utils.config_handler import get_vector_store_config
 
 
@@ -30,17 +31,33 @@ class VectorStoreService:
         )
 
     def hybrid_search(
-        self, query: str, *, limit: int, source_filter: tuple[str, ...] = ()
+        self,
+        query: str,
+        *,
+        limit: int,
+        source_filter: tuple[str, ...] = (),
+        timing: ChatLatencyTracker | None = None,
     ) -> list[ScoredChunk]:
         """嵌入原始查询一次，并转调 Qdrant 的单次混合检索。"""
-        dense_vector = get_embedding_model().embed_query(query)
-        return self.repository.hybrid_search(
-            query,
-            dense_vector,
-            limit=limit,
-            candidate_limit=self.candidate_limit,
-            source_filter=source_filter,
-        )
+        if timing is None:
+            dense_vector = get_embedding_model().embed_query(query)
+            return self.repository.hybrid_search(
+                query,
+                dense_vector,
+                limit=limit,
+                candidate_limit=self.candidate_limit,
+                source_filter=source_filter,
+            )
+        with timing.span("rag.embedding"):
+            dense_vector = get_embedding_model().embed_query(query)
+        with timing.span("rag.qdrant_hybrid_search"):
+            return self.repository.hybrid_search(
+                query,
+                dense_vector,
+                limit=limit,
+                candidate_limit=self.candidate_limit,
+                source_filter=source_filter,
+            )
 
     def health(self) -> dict[str, int | str]:
         """暴露 Qdrant 就绪状态，不修改索引状态。"""
