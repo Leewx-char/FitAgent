@@ -36,7 +36,7 @@
 | 后端框架 | FastAPI 0.136 + Uvicorn 0.47 |
 | 数据库 | MySQL 8.0 + SQLAlchemy 2.0 |
 | 认证 | JWT (python-jose) + bcrypt |
-| LLM | DashScope (deepseek-v4-pro / text-embedding-v1 / gte-rerank-v2) |
+| LLM | DeepSeek 官方 API (`deepseek-flash`)；DashScope（`text-embedding-v1` / `gte-rerank-v2` / 视觉模型） |
 | Agent | LangGraph + LangChain（ReAct + 受控工具调用） |
 | 向量数据库 | Qdrant（单节点 Docker，生产演进 demo） |
 | 混合检索 | Qdrant 原生 Dense + BM25 + RRF + DashScope 二阶段重排 |
@@ -52,7 +52,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 # 1. 克隆并配置环境变量
 cp .env.example .env
-# 编辑 .env，填入 DASHSCOPE_API_KEY、MySQL 配置、JWT_SECRET_KEY
+# 编辑 .env，填入 DEEPSEEK_API_KEY、DASHSCOPE_API_KEY、MySQL 配置、JWT_SECRET_KEY
 # Coros 同步是可选能力：另见“Coros 本地 MCP 配置”
 
 # 2. Python 环境与开发依赖（pyproject.toml 是唯一依赖入口）
@@ -181,7 +181,7 @@ AGENT_MAX_TOOL_CALLS=6
 
 ## mem0 长期记忆
 
-安装项目依赖会安装固定的 `mem0ai==2.0.20`。在 `.env` 中设置现有 `DASHSCOPE_API_KEY` 和 `QDRANT_URL`，其余 `MEMORY_*` 配置见 `.env.example`。默认使用 `config/models.yml` 的模型及 1536 维嵌入，记忆使用独立 Qdrant collection，不写入知识库 RAG 集合。
+安装项目依赖会安装固定的 `mem0ai==2.0.20`。在 `.env` 中设置 `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY` 和 `QDRANT_URL`，其余 `MEMORY_*` 配置见 `.env.example`。默认使用 `config/models.yml` 的 DeepSeek 提取模型及 1536 维 DashScope 嵌入，记忆使用独立 Qdrant collection，不写入知识库 RAG 集合。
 
 mem0 主向量库存记忆正文和元数据；Entity Store 按实体关联主库记忆；SQLite 存变更日志与每个 scope 最近 10 条消息。当前基础安装使用语义检索，不安装 NLP extras，也不启用图谱记忆。详细数据流、状态边界与故障行为见 [记忆架构说明](docs/memory-architecture.md)。
 

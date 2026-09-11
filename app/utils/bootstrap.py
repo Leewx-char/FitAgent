@@ -9,7 +9,10 @@ def validate_runtime() -> list[str]:
     issues = []
 
     # 检查 1: API KEY
-    if not get_settings().dashscope_api_key.strip():
+    settings = get_settings()
+    if not getattr(settings, "deepseek_api_key", "").strip():
+        issues.append("缺少 .env 配置 DEEPSEEK_API_KEY，请配置后再启动应用。")
+    if not settings.dashscope_api_key.strip():
         issues.append("缺少 .env 配置 DASHSCOPE_API_KEY，请配置后再启动应用。")
 
     # 检查 2：关键文件路径

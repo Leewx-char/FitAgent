@@ -11,7 +11,7 @@ from app.utils import bootstrap
 def test_runtime_validation_reports_missing_vision_model(monkeypatch, tmp_path):
     """应用启动前必须配置两个视觉模型层级。"""
 
-    settings = SimpleNamespace(dashscope_api_key="test-key")
+    settings = SimpleNamespace(deepseek_api_key="test-key", dashscope_api_key="test-key")
     monkeypatch.setattr(bootstrap, "get_settings", lambda: settings)
     main_prompt = tmp_path / "main.txt"
     report_prompt = tmp_path / "report.txt"
@@ -54,7 +54,7 @@ def test_runtime_validation_reports_missing_vision_model(monkeypatch, tmp_path):
 
 def test_runtime_validation_accepts_canonical_collection_name(monkeypatch, tmp_path):
     """原生混合检索的最小配置不应再要求已删除的 collection_alias。"""
-    settings = SimpleNamespace(dashscope_api_key="test-key")
+    settings = SimpleNamespace(deepseek_api_key="test-key", dashscope_api_key="test-key")
     main_prompt = tmp_path / "main.txt"
     report_prompt = tmp_path / "report.txt"
     data_path = tmp_path / "data"

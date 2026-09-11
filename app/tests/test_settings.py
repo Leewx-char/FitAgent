@@ -4,14 +4,19 @@ from app.core.settings import Settings
 
 
 def test_settings_reads_dashscope_api_key_from_env_file(monkeypatch, tmp_path):
-    """验证设置对象可从指定 .env 文件读取 DashScope 密钥。"""
+    """验证设置对象可从指定 .env 文件读取两个模型提供商的密钥。"""
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     env_file = tmp_path / ".env"
-    env_file.write_text("DASHSCOPE_API_KEY=key-from-dotenv\n", encoding="utf-8")
+    env_file.write_text(
+        "DEEPSEEK_API_KEY=deepseek-key-from-dotenv\nDASHSCOPE_API_KEY=dashscope-key-from-dotenv\n",
+        encoding="utf-8",
+    )
 
     settings = Settings(_env_file=env_file)
 
-    assert settings.dashscope_api_key == "key-from-dotenv"
+    assert settings.deepseek_api_key == "deepseek-key-from-dotenv"
+    assert settings.dashscope_api_key == "dashscope-key-from-dotenv"
 
 
 def test_settings_reads_agent_execution_budgets_from_env_file(monkeypatch, tmp_path):

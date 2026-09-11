@@ -11,6 +11,7 @@ from threading import Lock
 from typing import Any
 
 from app.core.settings import Settings, get_settings
+from app.services.factory import create_deepseek_chat_model
 from app.services.memory_backend import MemoryRecord
 from app.utils.config_handler import get_models_config, get_vector_store_config
 
@@ -298,9 +299,8 @@ def _resolve_storage_path(settings: Settings) -> Path:
 
 
 def _create_mem0_memory(*, settings: Settings, storage_path: Path) -> Any:
-    """Build the real SDK with project DashScope models and a bounded Qdrant client."""
+    """Build mem0 with DeepSeek extraction, DashScope embeddings and bounded Qdrant."""
 
-    from langchain_community.chat_models.tongyi import ChatTongyi
     from langchain_community.embeddings import DashScopeEmbeddings
     from mem0 import Memory
     from qdrant_client import QdrantClient
@@ -314,12 +314,13 @@ def _create_mem0_memory(*, settings: Settings, storage_path: Path) -> Any:
     embedding_model_name = (
         settings.memory_embedding_model.strip() or model_config["embedding_model_name"]
     )
-    llm = ChatTongyi(
+    llm = create_deepseek_chat_model(
         model=llm_model_name,
+        api_key=settings.deepseek_api_key,
         streaming=False,
-        api_key=api_key,
+        max_tokens=4096,
         max_retries=settings.memory_max_retries,
-        model_kwargs={"request_timeout": settings.memory_timeout_seconds},
+        timeout=settings.memory_timeout_seconds,
     )
     embedder = DashScopeEmbeddings(
         model=embedding_model_name,

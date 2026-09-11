@@ -329,12 +329,13 @@ def test_from_settings_builds_private_bounded_single_store(monkeypatch, tmp_path
     configured = SimpleNamespace(
         project_root=tmp_path,
         memory_storage_path="private-memory",
-        memory_llm_model="qwen-test",
+        memory_llm_model="deepseek-flash",
         memory_embedding_model="text-embedding-v1",
         memory_embedding_dimensions=1536,
         memory_timeout_seconds=7.0,
         memory_max_retries=2,
         memory_collection_prefix="isolated",
+        deepseek_api_key="deepseek-test-key",
         dashscope_api_key="test-key",
         qdrant_url="http://127.0.0.1:6333",
         qdrant_api_key="",
@@ -349,8 +350,8 @@ def test_from_settings_builds_private_bounded_single_store(monkeypatch, tmp_path
     assert config["history_db_path"] == str(tmp_path / "private-memory" / "history.db")
     assert config["vector_store"]["config"]["collection_name"] == "isolated_main"
     assert config["vector_store"]["config"]["embedding_model_dims"] == 1536
-    assert config["llm"]["config"]["model"].model_name == "qwen-test"
-    assert config["llm"]["config"]["model"].model_kwargs["request_timeout"] == 7.0
+    assert config["llm"]["config"]["model"].model_name == "deepseek-flash"
+    assert config["llm"]["config"]["model"].request_timeout == 7.0
     assert config["llm"]["config"]["model"].max_retries == 2
     assert config["embedder"]["config"]["model"].model == "text-embedding-v1"
     config["vector_store"]["config"]["client"].close()

@@ -5,6 +5,7 @@ from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_community.chat_models.tongyi import ChatTongyi
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
+from langchain_deepseek import ChatDeepSeek
 
 from app.utils.config_handler import get_models_config
 from app.core.settings import get_settings
@@ -18,16 +19,45 @@ def _get_dashscope_api_key() -> str:
     return api_key
 
 
+def _get_deepseek_api_key() -> str:
+    """从 Settings 获取 .env 中的 DeepSeek 密钥，并在缺失时给出明确错误。"""
+    api_key = get_settings().deepseek_api_key.strip()
+    if not api_key:
+        raise EnvironmentError("缺少 .env 配置 DEEPSEEK_API_KEY，无法初始化聊天模型。")
+    return api_key
+
+
+def create_deepseek_chat_model(
+    *,
+    model: str,
+    streaming: bool,
+    max_tokens: int = 4096,
+    timeout: float | None = None,
+    max_retries: int = 2,
+    api_key: str | None = None,
+) -> BaseChatModel:
+    """创建 DeepSeek 官方聊天模型，供主对话和 mem0 提取共用。"""
+    resolved_api_key = api_key.strip() if api_key is not None else _get_deepseek_api_key()
+    if not resolved_api_key:
+        raise EnvironmentError("缺少 .env 配置 DEEPSEEK_API_KEY，无法初始化聊天模型。")
+    return ChatDeepSeek(
+        model=model,
+        api_key=resolved_api_key,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+
+
 @lru_cache(maxsize=1)
 def get_chat_model() -> BaseChatModel:
-    """惰性获取聊天模型，并通过缓存避免重复初始化。"""
+    """惰性获取 DeepSeek 聊天模型，并通过缓存避免重复初始化。"""
 
-    api_key = _get_dashscope_api_key()
-    return ChatTongyi(
+    return create_deepseek_chat_model(
         model=get_models_config()["chat_model_name"],
         max_tokens=4096,
         streaming=True,
-        dashscope_api_key=api_key,
     )
 
 
