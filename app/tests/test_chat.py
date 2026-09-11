@@ -346,7 +346,8 @@ class TestChat:
 
         def stream_response(*_args, **_kwargs):
             call_order.append("model")
-            return iter(['{"type": "text", "content": "已生成回答"}'])
+            yield '{"type": "text", "content": "已生成回答"}'
+            call_order.append("model_completed")
 
         class BackgroundMemoryService:
             """记录后台提取时机，不触发外部 mem0 调用。"""
@@ -363,4 +364,4 @@ class TestChat:
         response = auth_client.post("/api/chat", json={"message": "我习惯晚上训练"})
 
         assert response.status_code == 200
-        assert call_order == ["model", "memory"]
+        assert call_order == ["model", "model_completed", "memory"]

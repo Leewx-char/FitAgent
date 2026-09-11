@@ -69,11 +69,12 @@ def _extract_memory_candidates_after_reply(
                     timing.mark("memory.background_skipped", reason="message_unavailable")
                     return
                 MemoryService().extract_candidates(message, user_id=user_id)
-    except Exception:
-        logger.exception(
-            "后台记忆提取失败：request_id=%s message_id=%s",
+    except Exception as error:
+        logger.error(
+            "后台记忆提取失败：request_id=%s message_id=%s error_type=%s",
             timing.request_id,
             message_id,
+            type(error).__name__,
         )
 
 

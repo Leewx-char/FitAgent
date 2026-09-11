@@ -55,11 +55,11 @@ flowchart LR
 
 ## 配置和运行
 
-连接复用项目的 DashScope 与 Qdrant 配置；记忆模型可用 `MEMORY_LLM_MODEL`、`MEMORY_EMBEDDING_MODEL` 独立覆盖，留空时从 `config/models.yml` 派生。默认嵌入维度 1536 对应 `text-embedding-v1`。切换模型维度必须使用新集合前缀并迁移数据，不要对现有集合混写向量。
+连接复用项目的聊天模型、DashScope 嵌入模型与 Qdrant 配置；记忆模型可用 `MEMORY_LLM_MODEL`、`MEMORY_EMBEDDING_MODEL` 独立覆盖，留空时从 `config/models.yml` 派生。默认嵌入维度 1536 对应 `text-embedding-v1`。切换模型维度必须使用新集合前缀并迁移数据，不要对现有集合混写向量。
 
 `MEMORY_STORAGE_PATH` 默认 `storage/memory`，`MEMORY_COLLECTION_PREFIX` 默认 `fitagent_memory`，主集合为 `fitagent_memory_main`。SQLite 与向量集合均应持久化备份。SDK 延迟初始化，项目不向 mem0 发送遥测；提取仍会向配置的模型提供商发送用户文本。
 
-LLM 提取在线程池中等待完成后才开始当前 SSE 回答，因此会增加首段响应等待。`MEMORY_TIMEOUT_SECONDS` 和 `MEMORY_MAX_RETRIES` 限制外部调用；它们是单次调用配置，不是整轮提取的总时限。暂不添加任务队列。
+LLM 提取在当前 SSE 回答完成后作为后台任务在线程池执行，不阻塞首段响应。`MEMORY_TIMEOUT_SECONDS` 和 `MEMORY_MAX_RETRIES` 限制外部调用；它们是单次调用配置，不是整轮提取的总时限。暂不添加任务队列。
 
 提取失败记录脱敏错误且继续聊天。查询故障返回“暂时不可用”，不能解释为没有相关记忆。管理失败返回 503，用户可重试；SDK 的主库更新与 SQLite 日志不具备跨存储事务原子性，错误后的状态需重新读取确认。超过 `MEMORY_MAX_LIST_ITEMS` 时列表明确失败，不静默漏项。
 
