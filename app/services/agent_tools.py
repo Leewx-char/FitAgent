@@ -222,8 +222,6 @@ SOURCE_MAP = {
 @tool(
     description="从知识库检索专业资料原始片段。可选通过source指定领域缩小范围：动作指南、营养学、训练计划、损伤预防、基础知识"
 )
-@_with_circuit_breaker(name="rag_summarize")
-@_with_retry()
 def rag_summarize(query: str, runtime: ToolRuntime, source: str = "") -> Command:
     """检索问题并保存可展示证据，返回受预算约束的上下文。"""
     source_filter = SOURCE_MAP.get(source) if source else None
@@ -285,15 +283,6 @@ def get_weather(city: str):
         f"湿度：{humidity}%，"
         f"风速：{wind_speed} km/h。"
     )
-
-
-@tool(description="获取当前会话绑定的用户ID。未绑定时明确返回未知，不允许随机生成。")
-def get_user_id(runtime: ToolRuntime):
-    """返回当前会话用户标识或说明其缺失。"""
-    user_id = _runtime_context_value(runtime, "user_id")
-    if user_id:
-        return str(user_id)
-    return "当前会话未绑定用户ID，请让用户明确提供用户ID。"
 
 
 @tool(

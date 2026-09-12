@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from typing import Literal, Protocol, TypeAlias, TypedDict
@@ -19,11 +19,6 @@ Route = Literal["direct_rag", "personalized_agent"]
 CLASSIFIER_MESSAGE_LIMIT = 6
 JsonPrimitive: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"]
-ChatGraphNode: TypeAlias = Callable[
-    ["ChatGraphState", Runtime["ChatRuntimeContext"], RunnableConfig], dict[str, JsonValue]
-]
-
-
 class IntentDecision(BaseModel):
     """约束分类模型只能返回两个受支持的路由。"""
 
@@ -245,17 +240,15 @@ async def _direct_rag_node(
 def build_chat_routing_graph(
     *,
     classifier: IntentClassifier,
-    direct_rag_node: ChatGraphNode | None = None,
-    personalized_agent_node: ChatGraphNode | None = None,
 ) -> CompiledStateGraph:
-    """编译分类后按条件边进入两个可替换执行节点的聊天图。"""
+    """编译分类后按条件边进入固定的两个执行节点。"""
     graph = StateGraph(ChatGraphState, context_schema=ChatRuntimeContext)
     graph.add_node(
         "classify_intent",
         partial(_classify_intent_node, classifier=classifier),
     )
-    graph.add_node("direct_rag", direct_rag_node or _direct_rag_node)
-    graph.add_node("personalized_agent", personalized_agent_node or _personalized_agent_node)
+    graph.add_node("direct_rag", _direct_rag_node)
+    graph.add_node("personalized_agent", _personalized_agent_node)
     graph.add_edge(START, "classify_intent")
     graph.add_conditional_edges(
         "classify_intent",

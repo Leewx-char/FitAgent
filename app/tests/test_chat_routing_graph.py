@@ -1,7 +1,9 @@
 """LangGraph 聊天路由图的行为测试。"""
 
+import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.services.chat_routing_graph import (
     ChatRuntimeContext,
@@ -28,11 +30,44 @@ class CapturingClassifier:
         return self.decision
 
 
-def _runtime_context() -> ChatRuntimeContext:
+class FakeDirectRagExecutor:
+    """返回固定事件并记录图节点传入的检索参数。"""
+
+    def __init__(self, events):
+        self.events = events
+        self.calls = []
+
+    async def astream(self, **kwargs):
+        self.calls.append(kwargs)
+        for event in self.events:
+            yield event
+
+
+class FakePersonalizedExecutor:
+    """返回固定事件并记录图节点传入的可信运行时。"""
+
+    def __init__(self, events):
+        self.events = events
+        self.contexts = []
+
+    async def astream_personalized_events(self, state, context, **_kwargs):
+        self.contexts.append(context)
+        return {
+            "retrieval_history": state["retrieval_history"],
+            "rag_evidence": state["rag_evidence"],
+            "events": self.events,
+        }
+
+
+def _runtime_context(*, direct_executor=None, personalized_executor=None) -> ChatRuntimeContext:
     return ChatRuntimeContext(
         user_id=1,
         session_id="session-1",
-        dependencies={"api_key": "secret-value"},
+        dependencies=SimpleNamespace(
+            api_key="secret-value",
+            direct_rag_executor=direct_executor,
+            personalized_agent_executor=personalized_executor,
+        ),
     )
 
 
@@ -109,37 +144,44 @@ def test_classifier_failure_falls_back_to_personalized_agent():
 
 
 def test_graph_selects_direct_rag_edge_for_generic_intent():
+    executor = FakeDirectRagExecutor([{"branch": "direct_rag"}])
     graph = build_chat_routing_graph(
         classifier=CapturingClassifier(IntentDecision(route="direct_rag")),
-        direct_rag_node=lambda _state, runtime, config: {"events": [{"branch": "direct_rag"}]},
-        personalized_agent_node=lambda _state, runtime, config: {"events": [{"branch": "agent"}]},
     )
 
-    result = graph.invoke(
-        build_initial_chat_state(messages=[{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}]),
-        context=_runtime_context(),
+    result = asyncio.run(
+        graph.ainvoke(
+            build_initial_chat_state(
+                messages=[{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}]
+            ),
+            context=_runtime_context(direct_executor=executor),
+        )
     )
 
     assert result["route"] == "direct_rag"
     assert result["events"] == [{"branch": "direct_rag"}]
+    assert executor.calls[0]["query"] == "深蹲时膝盖应该朝哪里？"
 
 
 def test_graph_selects_personalized_agent_edge_for_personal_intent():
+    executor = FakePersonalizedExecutor([{"branch": "agent"}])
     graph = build_chat_routing_graph(
         classifier=CapturingClassifier(IntentDecision(route="personalized_agent")),
-        direct_rag_node=lambda _state, runtime, config: {"events": [{"branch": "direct_rag"}]},
-        personalized_agent_node=lambda _state, runtime, config: {"events": [{"branch": "agent"}]},
     )
 
-    result = graph.invoke(
-        build_initial_chat_state(
-            messages=[{"role": "user", "content": "结合我的体重安排减脂训练。"}]
-        ),
-        context=_runtime_context(),
+    runtime_context = _runtime_context(personalized_executor=executor)
+    result = asyncio.run(
+        graph.ainvoke(
+            build_initial_chat_state(
+                messages=[{"role": "user", "content": "结合我的体重安排减脂训练。"}]
+            ),
+            context=runtime_context,
+        )
     )
 
     assert result["route"] == "personalized_agent"
     assert result["events"] == [{"branch": "agent"}]
+    assert executor.contexts == [runtime_context]
 
 
 def test_state_does_not_contain_runtime_identity_or_secret_values():
@@ -153,31 +195,6 @@ def test_state_does_not_contain_runtime_identity_or_secret_values():
     assert "secret-value" not in serialized_state
     assert "user_id" not in state
     assert "session_id" not in state
-
-
-def test_graph_node_receives_runtime_context_from_graph_invocation():
-    received_contexts = []
-
-    def direct_rag_node(_state, runtime, config):
-        """记录图运行时上下文，同时接受回调配置。"""
-        del config
-        received_contexts.append(runtime.context)
-        return {"events": [{"branch": "direct_rag"}]}
-
-    graph = build_chat_routing_graph(
-        classifier=CapturingClassifier(IntentDecision(route="direct_rag")),
-        direct_rag_node=direct_rag_node,
-    )
-    runtime_context = _runtime_context()
-
-    result = graph.invoke(
-        build_initial_chat_state(messages=[{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}]),
-        context=runtime_context,
-    )
-
-    assert received_contexts == [runtime_context]
-    assert "u-1" not in json.dumps(result, ensure_ascii=False)
-    assert "secret-value" not in json.dumps(result, ensure_ascii=False)
 
 
 def test_active_docs_do_not_describe_removed_session_facts():

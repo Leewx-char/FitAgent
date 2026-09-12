@@ -114,13 +114,6 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
     assert result["events"] == [{"type": "text", "content": "个性化建议"}]
 
 
-def test_tool_runtime_reads_user_without_contextvar():
-    """身份工具只从本次 ToolRuntime 读取用户。"""
-    runtime = _tool_runtime(user_id=23, history=[], call_id="identity-23")
-
-    assert agent_tools.get_user_id.func(runtime=runtime) == "23"
-
-
 def test_inner_agent_declares_runtime_context_and_short_term_state(monkeypatch):
     """内层 Agent 必须显式声明请求上下文和工具可更新的短期状态。"""
     captured = {}
@@ -143,6 +136,8 @@ def test_inner_agent_declares_runtime_context_and_short_term_state(monkeypatch):
     assert captured["state_schema"] is react_agent.PersonalizedAgentState
     assert react_agent.TOOL_DISPLAY["get_session_summary"] == "读取早期会话摘要"
     assert "get_session_summary" in {tool.name for tool in captured["tools"]}
+    assert "get_user_id" not in react_agent.TOOL_DISPLAY
+    assert "get_user_id" not in {tool.name for tool in captured["tools"]}
     assert "get_user_location" not in react_agent.TOOL_DISPLAY
     assert "get_user_location" not in {tool.name for tool in captured["tools"]}
 
@@ -464,7 +459,7 @@ def test_monitor_tool_preserves_successful_tool_result():
 
     def request(call_id):
         return ToolCallRequest(
-            tool_call={"name": "get_user_id", "args": {}, "id": call_id},
+            tool_call={"name": "example_tool", "args": {}, "id": call_id},
             tool=None,
             state=state,
             runtime=runtime,
