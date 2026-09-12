@@ -3,7 +3,14 @@
     <div class="dashboard-content">
       <div class="content-header">
         <h1>运动数据面板</h1>
-        <n-button size="small" @click="handleSync" :loading="syncing">同步高驰数据</n-button>
+        <template v-if="connection.connected">
+          <span class="connection-state">COROS 已连接</span>
+          <n-button size="small" @click="loadSnapshot" :loading="refreshing">实时刷新</n-button>
+          <n-button size="small" secondary @click="handleDisconnect" :loading="disconnecting">断开</n-button>
+        </template>
+        <n-button v-else size="small" type="primary" @click="handleConnect" :loading="connecting">
+          连接 COROS
+        </n-button>
       </div>
       <div class="stat-cards">
         <div class="stat-card">
@@ -48,22 +55,22 @@
       <div class="activity-section" v-if="activities.length > 0">
         <h3>近期运动记录</h3>
         <ul class="activity-list">
-          <li v-for="act in activities" :key="act.id" class="activity-item">
+          <li v-for="act in activities" :key="act.external_id" class="activity-item">
             <span class="act-date">{{ formatDate(act.date) }}</span>
-            <span class="act-dot" :style="{ background: sportColor(act.data.sport_name || act.data.name) }"></span>
+            <span class="act-dot" :style="{ background: sportColor(act.sport_name || act.name) }"></span>
             <div class="act-info">
-              <span class="act-sport">{{ sportName(act.data.sport_name || act.data.name) }}</span>
-              <span class="act-meta" v-if="act.data.duration_seconds">
-                {{ formatDuration(act.data.duration_seconds) }}
+              <span class="act-sport">{{ sportName(act.sport_name || act.name) }}</span>
+              <span class="act-meta" v-if="act.duration_seconds">
+                {{ formatDuration(act.duration_seconds) }}
               </span>
-              <span class="act-meta" v-if="act.data.distance_meters">
-                {{ (act.data.distance_meters / 1000).toFixed(1) }} 公里
+              <span class="act-meta" v-if="act.distance_meters">
+                {{ (act.distance_meters / 1000).toFixed(1) }} 公里
               </span>
-              <span class="act-meta" v-if="act.data.avg_hr">
-                {{ act.data.avg_hr }} 次/分
+              <span class="act-meta" v-if="act.avg_heart_rate">
+                {{ act.avg_heart_rate }} 次/分
               </span>
-              <span class="act-meta" v-if="act.data.calories">
-                {{ (act.data.calories / 1000).toFixed(0) }} 千卡
+              <span class="act-meta" v-if="act.calories">
+                {{ Number(act.calories).toFixed(0) }} 千卡
               </span>
             </div>
           </li>
@@ -71,7 +78,7 @@
       </div>
 
       <div v-if="!dailyMetrics.length && !activities.length && !loading" class="empty-state">
-        <p>暂无数据，请先同步高驰数据</p>
+        <p>{{ connection.connected ? '近期没有可用运动数据' : '请先连接 COROS 获取实时数据' }}</p>
       </div>
     </div>
   </div>
@@ -85,7 +92,12 @@ import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { getErrorMessage } from '@/api'
-import { syncFitness, getDailyMetrics, getSleepData, getActivities } from '@/api/fitness'
+import {
+  connectCoros,
+  disconnectCoros,
+  getCorosConnection,
+  getFitnessSnapshot,
+} from '@/api/fitness'
 
 echarts.use([GridComponent, TooltipComponent, LegendComponent, LineChart, BarChart, CanvasRenderer])
 
@@ -139,7 +151,10 @@ const dailyMetrics = ref([])
 const sleepRecords = ref([])
 const activities = ref([])
 const loading = ref(true)
-const syncing = ref(false)
+const refreshing = ref(false)
+const connecting = ref(false)
+const disconnecting = ref(false)
+const connection = ref({ connected: false, status: 'not_connected' })
 const message = useMessage()
 
 const tloadChartRef = ref(null)
@@ -148,19 +163,19 @@ let tloadChart = null
 let sleepChart = null
 
 const avgTrainingLoad = computed(() => {
-  const vals = dailyMetrics.value.map(d => d.data.training_load).filter(v => v != null)
+  const vals = dailyMetrics.value.map(d => d.training_load).filter(v => v != null)
   if (!vals.length) return '--'
   return (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(0)
 })
 
 const avgHrv = computed(() => {
-  const vals = dailyMetrics.value.map(d => d.data.avg_sleep_hrv).filter(v => v != null)
+  const vals = dailyMetrics.value.map(d => d.avg_sleep_hrv).filter(v => v != null)
   if (!vals.length) return '--'
   return (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(0) + ' ms'
 })
 
 const avgRhr = computed(() => {
-  const vals = dailyMetrics.value.map(d => d.data.rhr).filter(v => v != null)
+  const vals = dailyMetrics.value.map(d => d.rhr).filter(v => v != null)
   if (!vals.length) return '--'
   return (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(0)
 })
@@ -185,7 +200,7 @@ function buildTloadHrvChart() {
       {
         name: '训练负荷',
         type: 'line',
-        data: sorted.map(d => d.data.training_load ?? null),
+        data: sorted.map(d => d.training_load ?? null),
         smooth: true,
         lineStyle: { color: '#42A5F5', width: 2 },
         itemStyle: { color: '#42A5F5' },
@@ -194,7 +209,7 @@ function buildTloadHrvChart() {
         name: 'HRV',
         type: 'line',
         yAxisIndex: 1,
-        data: sorted.map(d => d.data.avg_sleep_hrv ?? null),
+        data: sorted.map(d => d.avg_sleep_hrv ?? null),
         smooth: true,
         lineStyle: { color: '#66BB6A', width: 2 },
         itemStyle: { color: '#66BB6A' },
@@ -217,10 +232,10 @@ function buildSleepChart() {
     xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 11, margin: 10 } },
     yAxis: { type: 'value', name: '分钟', nameTextStyle: { fontSize: 12 }, nameGap: 20, axisLabel: { fontSize: 11, margin: 10 } },
     series: [
-      { name: '清醒', type: 'bar', stack: 'total', data: sorted.map(d => d.data.phases?.awake_minutes ?? 0), color: '#c6e4fc' },
-      { name: 'REM', type: 'bar', stack: 'total', data: sorted.map(d => d.data.phases?.rem_minutes ?? 0), color: '#90CAF9' },
-      { name: '浅睡', type: 'bar', stack: 'total', data: sorted.map(d => d.data.phases?.light_minutes ?? 0), color: '#64B5F6' },
-      { name: '深睡', type: 'bar', stack: 'total', data: sorted.map(d => d.data.phases?.deep_minutes ?? 0), color: '#42A5F5' },
+      { name: '清醒', type: 'bar', stack: 'total', data: sorted.map(d => d.phases?.awake_minutes ?? 0), color: '#c6e4fc' },
+      { name: 'REM', type: 'bar', stack: 'total', data: sorted.map(d => d.phases?.rem_minutes ?? 0), color: '#90CAF9' },
+      { name: '浅睡', type: 'bar', stack: 'total', data: sorted.map(d => d.phases?.light_minutes ?? 0), color: '#64B5F6' },
+      { name: '深睡', type: 'bar', stack: 'total', data: sorted.map(d => d.phases?.deep_minutes ?? 0), color: '#42A5F5' },
     ],
   })
 }
@@ -244,50 +259,81 @@ function formatDuration(seconds) {
   return h > 0 ? `${h}小时${m}分` : `${m}分`
 }
 
-/** 并行加载近四周指标、睡眠和活动，并在 DOM 更新后绘制图表。 */
-async function loadData() {
+/** 读取一次实时快照，并在 DOM 更新后绘制图表。 */
+async function loadSnapshot() {
   loading.value = true
+  refreshing.value = true
   try {
-    const [dailyRes, sleepRes, actRes] = await Promise.all([
-      getDailyMetrics(4),
-      getSleepData(4),
-      getActivities(),
-    ])
-    dailyMetrics.value = dailyRes.data.data
-    sleepRecords.value = sleepRes.data.data
-    activities.value = actRes.data.data
+    const response = await getFitnessSnapshot(4)
+    const snapshot = response.data.data
+    dailyMetrics.value = snapshot.daily_metrics
+    sleepRecords.value = snapshot.sleep_records
+    activities.value = snapshot.activities
     await nextTick()
     buildTloadHrvChart()
     buildSleepChart()
-  } catch (error) {
-    console.error('加载运动数据失败:', error)
-    message.error(getErrorMessage(error, '加载运动数据失败，请稍后重试'))
-  } finally {
-    loading.value = false
-  }
-}
-
-/** 触发设备数据同步，重新加载面板并提示完整或部分同步结果。 */
-async function handleSync() {
-  syncing.value = true
-  try {
-    const response = await syncFitness()
-    await loadData()
-    if (response.data.data.partial) {
-      message.warning(`部分同步完成：${response.data.data.unavailable_sources.join('、')} 暂不可用`)
-    } else {
-      message.success(`同步完成，写入 ${response.data.data.upserted} 条记录`)
+    if (snapshot.partial) {
+      message.warning(`部分实时数据不可用：${snapshot.unavailable_sources.join('、')}`)
     }
   } catch (error) {
-    console.error('同步失败:', error)
-    message.error(getErrorMessage(error, '同步失败，请稍后重试'))
+    if (error.response?.status !== 409) {
+      console.error('加载实时运动数据失败:', error)
+      message.error(getErrorMessage(error, '加载实时运动数据失败，请稍后重试'))
+    }
   } finally {
-    syncing.value = false
+    loading.value = false
+    refreshing.value = false
   }
 }
 
-onMounted(() => {
-  loadData()
+/** 创建服务端授权请求，再由浏览器前往 COROS 官方授权页。 */
+async function handleConnect() {
+  connecting.value = true
+  try {
+    const response = await connectCoros()
+    window.location.assign(response.data.data.authorization_url)
+  } catch (error) {
+    console.error('发起 COROS 授权失败:', error)
+    message.error(getErrorMessage(error, '暂时无法发起 COROS 授权'))
+  } finally {
+    connecting.value = false
+  }
+}
+
+/** 清除本地令牌；断开不会假定官方存在可用的远端撤销接口。 */
+async function handleDisconnect() {
+  disconnecting.value = true
+  try {
+    await disconnectCoros()
+    connection.value = { connected: false, status: 'not_connected' }
+    dailyMetrics.value = []
+    sleepRecords.value = []
+    activities.value = []
+    await nextTick()
+    buildTloadHrvChart()
+    buildSleepChart()
+    message.success('已断开 COROS')
+  } catch (error) {
+    console.error('断开 COROS 失败:', error)
+    message.error(getErrorMessage(error, '断开 COROS 失败，请稍后重试'))
+  } finally {
+    disconnecting.value = false
+  }
+}
+
+onMounted(async () => {
+  try {
+    const response = await getCorosConnection()
+    connection.value = response.data.data
+    if (connection.value.connected) {
+      await loadSnapshot()
+    } else {
+      loading.value = false
+    }
+  } catch (error) {
+    loading.value = false
+    console.error('读取 COROS 连接状态失败:', error)
+  }
   window.addEventListener('resize', handleResize)
 })
 
@@ -316,6 +362,12 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 20px;
   color: var(--text-primary);
+}
+
+.connection-state {
+  color: #2f855a;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .dashboard-content {

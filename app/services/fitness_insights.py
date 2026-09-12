@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
-
-from sqlalchemy.orm import Session as DBSession
-
-from app.models import FitnessData
 
 
 def _mean(values: list[float]) -> float | None:
@@ -25,16 +20,6 @@ def _numeric(records: list[dict[str, Any]], key: str) -> list[float]:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             values.append(float(value))
     return values
-
-
-def _record_payload(record: FitnessData) -> dict[str, Any] | None:
-    """安全解析单条设备记录；坏 JSON 不能中断整段数据的分析。"""
-
-    try:
-        value = json.loads(record.data) if isinstance(record.data, str) else record.data
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, dict) else None
 
 
 def _activity_name(payload: dict[str, Any]) -> str:
@@ -87,8 +72,8 @@ class FitnessSnapshot:
         """将周期运动快照格式化为供模型使用的中文摘要。"""
         if not self.has_data:
             return (
-                f"用户{self.period_label}暂无运动数据。请引导用户去 Dashboard 点击「同步」按钮获取"
-                "高驰设备数据，同步后即可基于真实运动数据提供个性化建议。"
+                f"用户{self.period_label}暂无运动数据。请引导用户在 Dashboard 连接 COROS，"
+                "连接后可基于实时数据提供个性化建议。"
             )
         lines = [f"用户{self.period_label}运动数据摘要："]
         if self.days_observed:
@@ -189,7 +174,7 @@ class ActivitySnapshot:
         return "\n".join(lines)
 
 
-def _resolve_period(
+def resolve_fitness_period(
     *,
     start_date: date | None,
     end_date: date | None,
@@ -209,47 +194,24 @@ def _resolve_period(
     return resolved_end - timedelta(weeks=weeks), resolved_end, f"近{weeks}周"
 
 
-def load_fitness_snapshot(
-    db: DBSession,
+def build_fitness_snapshot(
     *,
-    user_id: int,
+    daily_records: list[dict[str, Any]],
+    sleep_records: list[dict[str, Any]],
+    activities: list[dict[str, Any]],
     start_date: date | None = None,
     end_date: date | None = None,
     weeks: int = 4,
     today: date | None = None,
 ) -> FitnessSnapshot:
-    """按用户和受限日期区间读取并聚合设备数据。"""
+    """聚合当前请求中的实时 COROS 白名单记录，不读写数据库。"""
 
-    start_date, end_date, period_label = _resolve_period(
+    _start_date, _end_date, period_label = resolve_fitness_period(
         start_date=start_date,
         end_date=end_date,
         weeks=weeks,
         today=today,
     )
-    records = (
-        db.query(FitnessData)
-        .filter(
-            FitnessData.user_id == user_id,
-            FitnessData.date >= start_date,
-            FitnessData.date <= end_date,
-        )
-        .order_by(FitnessData.date.asc(), FitnessData.id.asc())
-        .all()
-    )
-    daily_records: list[dict[str, Any]] = []
-    sleep_records: list[dict[str, Any]] = []
-    activities: list[dict[str, Any]] = []
-    for record in records:
-        value = _record_payload(record)
-        if value is None:
-            continue
-        if record.data_type == "daily_metrics":
-            daily_records.append(value)
-        elif record.data_type == "sleep":
-            sleep_records.append(value)
-        elif record.data_type == "activity":
-            activities.append(value)
-
     durations = _numeric(sleep_records, "total_duration_minutes")
     average_sleep_duration = _mean(durations)
     deep_sleep = [
@@ -289,28 +251,20 @@ def load_fitness_snapshot(
 
 
 def list_activity_candidates(
-    db: DBSession, *, user_id: int, activity_date: date
+    activities: list[dict[str, Any]], *, activity_date: date
 ) -> list[ActivityCandidate]:
-    """列出某一天的活动候选，供 Agent 选择稳定 external_id，而非猜测记录。"""
+    """列出本次实时快照中某一天的活动候选，供 Agent 选择 stable external_id。"""
 
-    records = (
-        db.query(FitnessData)
-        .filter(
-            FitnessData.user_id == user_id,
-            FitnessData.date == activity_date,
-            FitnessData.data_type == "activity",
-        )
-        .order_by(FitnessData.id.asc())
-        .all()
-    )
     candidates = []
-    for record in records:
-        payload = _record_payload(record)
-        if payload is None:
+    for payload in activities:
+        if str(payload.get("date") or "") != activity_date.isoformat():
+            continue
+        external_id = str(payload.get("external_id") or "")
+        if not external_id:
             continue
         candidates.append(
             ActivityCandidate(
-                external_id=record.external_id,
+                external_id=external_id,
                 start_time=str(payload.get("start_time") or ""),
                 name=_activity_name(payload),
                 duration_minutes=_activity_duration_minutes(payload),
@@ -319,28 +273,14 @@ def list_activity_candidates(
     return sorted(candidates, key=lambda item: (item.start_time, item.external_id))
 
 
-def load_activity_snapshot(
-    db: DBSession, *, user_id: int, activity_date: date, external_id: str
-) -> ActivitySnapshot | None:
-    """以用户、日期和稳定 external_id 精确读取一项活动的白名单指标。"""
+def build_activity_snapshot(payload: dict[str, Any]) -> ActivitySnapshot | None:
+    """将网关返回的一条实时活动明细裁剪为 Agent 可用的白名单摘要。"""
 
-    record = (
-        db.query(FitnessData)
-        .filter(
-            FitnessData.user_id == user_id,
-            FitnessData.date == activity_date,
-            FitnessData.data_type == "activity",
-            FitnessData.external_id == external_id,
-        )
-        .one_or_none()
-    )
-    if record is None:
-        return None
-    payload = _record_payload(record)
-    if payload is None:
+    external_id = str(payload.get("external_id") or "")
+    if not external_id:
         return None
     return ActivitySnapshot(
-        external_id=record.external_id,
+        external_id=external_id,
         start_time=str(payload.get("start_time") or ""),
         name=_activity_name(payload),
         duration_minutes=_activity_duration_minutes(payload),

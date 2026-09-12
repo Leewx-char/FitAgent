@@ -2,13 +2,11 @@ from unittest.mock import MagicMock
 import time
 import pytest
 from pathlib import Path
-from datetime import date, timedelta
 from fastapi.testclient import TestClient
-from app.core.database import SessionLocal
-from app.core.deps import get_agent, get_coros
+from app.core.deps import get_agent
 from app.main import app
 from app.core.auth import get_current_user
-from app.models import User, FitnessData
+from app.models import User
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -119,24 +117,6 @@ def auth_client():
 
 
 @pytest.fixture
-def coros_mock(auth_client):
-    """override get_coros，返回 mock 的 CorosClient。
-    依赖 auth_client 保证在其之后执行（auth_client 会 clear overrides）。"""
-    mock = MagicMock()
-    mock.sync_cache.return_value = {
-        "partial": False,
-        "failed_sources": [],
-        "cached_source_counts": {"daily": 0, "sleep": 0, "activities": 0},
-    }
-    mock.get_daily_metrics.return_value = []
-    mock.get_sleep_data.return_value = []
-    mock.list_activities.return_value = {"activities": []}
-    app.dependency_overrides[get_coros] = lambda: mock
-    yield mock
-    app.dependency_overrides.pop(get_coros, None)
-
-
-@pytest.fixture
 def agent_mock(auth_client):
     """override get_agent，返回 mock ReactAgent。
     execute_stream 返回固定 SSE 事件序列，避免真调 LLM。"""
@@ -151,46 +131,3 @@ def agent_mock(auth_client):
     app.dependency_overrides[get_agent] = lambda: mock
     yield mock
     app.dependency_overrides.pop(get_agent, None)
-
-
-@pytest.fixture
-def seed_fitness_data(auth_client):
-    """造 3 天 daily_metrics 数据，用于测试 GET /api/fitness/* 端点。
-    用 today-N 动态日期，保证数据始终在近 4 周内（daily 端点默认查近 4 周）。
-    teardown 时清理，避免垃圾数据累积。"""
-    me = auth_client.get("/api/auth/me").json()
-    user_id = me["data"]["id"]
-    db = SessionLocal()
-    today = date.today()
-    records = [
-        FitnessData(
-            user_id=user_id,
-            date=today - timedelta(days=1),
-            data_type="daily_metrics",
-            external_id=f"test:daily:{(today - timedelta(days=1)).isoformat()}",
-            data='{"training_load": 50, "avg_sleep_hrv": 60, "rhr": 55}',
-        ),
-        FitnessData(
-            user_id=user_id,
-            date=today - timedelta(days=2),
-            data_type="daily_metrics",
-            external_id=f"test:daily:{(today - timedelta(days=2)).isoformat()}",
-            data='{"training_load": 55, "avg_sleep_hrv": 58, "rhr": 56}',
-        ),
-        FitnessData(
-            user_id=user_id,
-            date=today - timedelta(days=3),
-            data_type="daily_metrics",
-            external_id=f"test:daily:{(today - timedelta(days=3)).isoformat()}",
-            data='{"training_load": 60, "avg_sleep_hrv": 62, "rhr": 54}',
-        ),
-    ]
-    try:
-        db.add_all(records)
-        db.commit()
-        yield records
-        for r in records:
-            db.delete(r)
-        db.commit()
-    finally:
-        db.close()

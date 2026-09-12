@@ -32,43 +32,29 @@ def test_settings_reads_agent_execution_budgets_from_env_file(monkeypatch, tmp_p
     assert settings.agent_max_tool_calls == 4
 
 
-def test_settings_parses_coros_command_as_json_argv(monkeypatch, tmp_path):
-    """验证 JSON 格式的 Coros 命令被解析为参数元组。"""
-    monkeypatch.delenv("COROS_MCP_COMMAND", raising=False)
+def test_settings_reads_official_coros_oauth_fields(monkeypatch, tmp_path):
+    """验证官方远程 MCP 与 OAuth 配置可由环境文件加载。"""
+    monkeypatch.delenv("COROS_MCP_GATEWAY_URL", raising=False)
+    monkeypatch.delenv("COROS_OAUTH_REDIRECT_URI", raising=False)
     env_file = tmp_path / ".env"
     env_file.write_text(
-        'COROS_MCP_COMMAND=["C:\\\\Program Files\\\\Coros MCP\\\\coros-mcp.exe", "serve"]\n',
+        "COROS_MCP_GATEWAY_URL=https://mcp.coros.com/mcp\n"
+        "COROS_OAUTH_REDIRECT_URI=https://api.example.com/api/coros/callback\n",
         encoding="utf-8",
     )
 
     settings = Settings(_env_file=env_file)
 
-    assert settings.coros_mcp_command_parts == (
-        r"C:\Program Files\Coros MCP\coros-mcp.exe",
-        "serve",
-    )
+    assert settings.coros_mcp_gateway_url == "https://mcp.coros.com/mcp"
+    assert settings.coros_oauth_redirect_uri.endswith("/api/coros/callback")
 
 
-def test_settings_keeps_coros_mcp_readonly(monkeypatch, tmp_path):
-    """验证 Coros MCP 工具集始终保持只读，即使隐藏配置为否。"""
-    monkeypatch.delenv("COROS_MCP_TOOLSET", raising=False)
-    monkeypatch.delenv("COROS_MCP_HIDE_AUTH_TOOLS", raising=False)
+def test_settings_uses_safe_coros_gateway_default(monkeypatch, tmp_path):
+    """未显式指定时仍使用官方 gateway，而不是社区本地命令。"""
+    monkeypatch.delenv("COROS_MCP_GATEWAY_URL", raising=False)
     env_file = tmp_path / ".env"
-    env_file.write_text("COROS_MCP_HIDE_AUTH_TOOLS=false\n", encoding="utf-8")
+    env_file.write_text("", encoding="utf-8")
 
     settings = Settings(_env_file=env_file)
 
-    assert settings.coros_mcp_toolset == "readonly"
-    assert settings.coros_mcp_hide_auth_tools is False
-
-
-def test_settings_resolves_relative_coros_cache_home(monkeypatch, tmp_path):
-    """验证相对 Coros 缓存目录基于当前工作目录解析。"""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("COROS_MCP_CACHE_HOME", raising=False)
-    env_file = tmp_path / ".env"
-    env_file.write_text("COROS_MCP_CACHE_HOME=.tools/coros-cache\n", encoding="utf-8")
-
-    settings = Settings(_env_file=env_file)
-
-    assert settings.coros_mcp_cache_home_path == tmp_path / ".tools" / "coros-cache"
+    assert settings.coros_mcp_gateway_url == "https://mcp.coros.com/mcp"

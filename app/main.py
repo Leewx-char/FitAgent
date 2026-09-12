@@ -20,7 +20,6 @@ from app.api.exception_handlers import register_exception_handlers
 from app.core.database import initialize_schema
 from app.utils.bootstrap import validate_runtime
 from app.services.vector_store import VectorStoreService
-from app.core.deps import close_coros
 from app.api.routers.chat import router as chat_router
 from app.api.routers.auth import router as auth_router
 from app.api.routers.sessions import router as sessions_router
@@ -28,6 +27,7 @@ from app.api.routers.messages import router as messages_router
 from app.api.routers.profile import router as profile_router
 from app.api.routers.upload import router as upload_router
 from app.api.routers.fitness import router as fitness_router
+from app.api.routers.coros import router as coros_router
 from app.api.routers.agent_runs import router as agent_runs_router
 from app.api.routers.memory import router as memory_router
 from app.api.routers.training_plans import router as training_plans_router
@@ -44,17 +44,14 @@ limiter = Limiter(key_func=get_remote_address)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """执行启动校验，并在关闭时释放 Coros 客户端。"""
+    """执行启动校验。远程 COROS MCP 不持有进程级用户连接。"""
     initialize_schema()
     issues = validate_runtime()
     if issues:
         for issue in issues:
             print(f"[启动检查失败] {issue}")
         raise RuntimeError(f"启动检查未通过，共 {len(issues)} 个问题，请修复后重试")
-    try:
-        yield
-    finally:
-        close_coros()
+    yield
 
 
 app = FastAPI(title="FitAgent API", version="2.0.0", lifespan=lifespan)
@@ -66,6 +63,7 @@ app.include_router(messages_router)
 app.include_router(profile_router)
 app.include_router(upload_router)
 app.include_router(fitness_router)
+app.include_router(coros_router)
 app.include_router(agent_runs_router)
 app.include_router(memory_router)
 app.include_router(training_plans_router)

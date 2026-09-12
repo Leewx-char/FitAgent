@@ -13,7 +13,7 @@
 | [frontend/src/main.js](../frontend/src/main.js)、[router/index.js](../frontend/src/router/index.js) | Vue 从哪里启动，哪个页面负责聊天？ |
 | [frontend/src/views/Chat.vue](../frontend/src/views/Chat.vue) | 用户点击发送后，发往哪个 API，如何消费 SSE？ |
 | [frontend/src/components/Sidebar.vue](../frontend/src/components/Sidebar.vue) | 会话列表从哪里加载、如何新建/切换/删除会话？ |
-| [app/main.py](../app/main.py) | FastAPI 如何启动、先初始化新数据库模型表、注册路由、关闭 Coros 子进程？ |
+| [app/main.py](../app/main.py) | FastAPI 如何启动、先初始化新数据库模型表并注册路由？ |
 | [app/api/routers/chat.py](../app/api/routers/chat.py) | `POST /api/chat` 如何接住一次聊天？ |
 | [app/services/react_agent.py](../app/services/react_agent.py) | 请求如何通过 LangGraph 图分为 Direct RAG 与个性化 Agent？ |
 
@@ -153,20 +153,18 @@ flowchart LR
 .\.venv\Scripts\python.exe -m pytest app/tests/test_training_safety.py app/tests/test_training_plans.py app/tests/test_fitness_summary.py -q
 ```
 
-## 6. Coros：把 MCP 当外部适配器，而不是 Agent 工具（45 分钟）
+## 6. COROS：把远程 MCP 收敛到实时读取 Gateway（45 分钟）
 
-从 [fitness.py](../app/api/routers/fitness.py) 开始，依次读 [coros_client.py](../app/services/coros_client.py)、[core/deps.py](../app/core/deps.py)、[integrations/coros_mcp_runner.py](../app/integrations/coros_mcp_runner.py)。最后对照 [test_coros_client.py](../app/tests/test_coros_client.py) 和 [test_fitness.py](../app/tests/test_fitness.py)。
+从 [coros.py](../app/api/routers/coros.py) 和 [fitness.py](../app/api/routers/fitness.py) 开始，依次读 [coros_oauth.py](../app/services/coros_oauth.py)、[coros_live_gateway.py](../app/services/coros_live_gateway.py) 和 [fitness_insights.py](../app/services/fitness_insights.py)。最后对照 `test_coros_oauth.py`、`test_coros_live_gateway.py` 与 `test_fitness.py`。
 
 需要特别掌握的事件流：
 
-1. 用户主动调用 `POST /api/fitness/sync`，默认同步最近 7 天；聊天 Agent 没有同步权限。
-2. `CorosClient.sync_cache` 先关闭读取子进程，让 Provider Runner 独占刷新 SQLite 缓存。
-3. Runner 保留 Windows 安全令牌路径，只重定向社区 MCP 的 SQLite cache 到项目 `.tools` 目录。
-4. 缓存刷新后，stdio MCP 只读本地缓存，依次读取日指标、睡眠、活动并 upsert 到 MySQL。
-5. 未佩戴手表导致睡眠数组为空是完整成功；只有真实上游错误才返回 `partial`，已成功的数据源仍会落库。
-6. 活动按 `(user_id, data_type, external_id)` 幂等，而不是按日期，故同一天晨跑和夜跑不会互相覆盖。
-
-日志出现“子进程不可用，正在重建连接”不一定是故障：显式同步主动关闭旧读取进程后，下一次读缓存会按设计完成握手重建。具体部署与边界可结合 `coros_client.py`、`coros_mcp_runner.py` 与对应测试阅读。
+1. 用户在 Dashboard 发起 `POST /api/coros/connect`；服务端创建短期 `state`、PKCE verifier、动态 client 注册，并只保存 state hash 与加密 verifier。
+2. 官方回调只依据 state 绑定 FitAgent 用户，换取的 access/refresh token 用 Fernet 加密写入 `coros_connections`；state 成功、过期或失败后都不可重放。
+3. `GET /api/fitness/snapshot` 每次只为当前用户创建带其 bearer token 的 HTTP MCP session，固定读取活动、日健康、睡眠三项工具；无本地子进程、SQLite cache 或运动数据落库。
+4. Gateway 先验证工具白名单和日期范围 schema，再把响应裁剪为 `LiveFitnessData`；单源失败返回 `partial`，全源失败才报上游不可用。
+5. 聊天 Agent 仅在用户明确询问运动数据时调用汇总工具；单次活动必须先在同日实时候选中验证 external id 后才读取详情。
+6. 训练计划在已连接时必须取得完整的近四周快照；未连接才走画像/RAG 路径，局部或全量读取失败都拒绝生成。
 
 ## 7. 健康文档：上传后必须由用户确认（30 分钟）
 
@@ -196,7 +194,7 @@ sequenceDiagram
 前端按用户闭环读：
 
 1. [Onboarding.vue](../frontend/src/views/Onboarding.vue) / [Profile.vue](../frontend/src/views/Profile.vue)：画像；
-2. [Dashboard.vue](../frontend/src/views/Dashboard.vue)：Coros 同步与图表；
+2. [Dashboard.vue](../frontend/src/views/Dashboard.vue)：COROS 连接、断开、实时刷新与图表；
 3. [Memory.vue](../frontend/src/views/Memory.vue)：确认/撤销候选；
 4. [TrainingPlan.vue](../frontend/src/views/TrainingPlan.vue)：显式生成计划和提交反馈；
 5. [Chat.vue](../frontend/src/views/Chat.vue)：RAG/Agent/SSE/证据，以及健康文档的确认入口。
@@ -210,7 +208,7 @@ sequenceDiagram
 | Day 3 | 离线/在线 RAG | 解释显式重建、一次 Qdrant Query API、BM25、RRF、DashScope 二阶段重排与证据卡片 |
 | Day 4 | 三层记忆 | 解释候选—确认—撤销与防模型污染 |
 | Day 5 | 训练计划 | 解释“先规则、后生成、再校验” |
-| Day 6 | Coros/MCP 与幂等 | 解释 stdio 串行、缓存隔离、partial、external id |
+| Day 6 | COROS/MCP 与 OAuth | 解释 PKCE、逐用户 token、工具白名单、partial 与无运动数据落库 |
 | Day 7 | 演示与面试 | 参考 [interview/项目简介.md](./interview/项目简介.md) 演练，并回答 [interview/常见面试题.md](./interview/常见面试题.md) |
 
 ## 卡住时的排查顺序

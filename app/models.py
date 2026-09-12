@@ -52,6 +52,12 @@ class User(Base):
     agent_runs: Mapped[list["AgentRun"]] = relationship(
         "AgentRun", back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
+    coros_connection: Mapped["CorosConnection | None"] = relationship(
+        "CorosConnection", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
+    coros_authorization_requests: Mapped[list["CorosAuthorizationRequest"]] = relationship(
+        "CorosAuthorizationRequest", back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class UserProfile(Base):
@@ -182,22 +188,45 @@ class AgentToolCall(Base):
     __table_args__ = (Index("ix_agent_tool_calls_run_sequence", "agent_run_id", "sequence"),)
 
 
-class FitnessData(Base):
-    __tablename__ = "fitness_data"
+class CorosConnection(Base):
+    """每位 FitAgent 用户的一条加密 COROS 授权连接。"""
+
+    __tablename__ = "coros_connections"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
-    date: Mapped[DateValue] = mapped_column(Date, nullable=False)
-    data_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    # 来自 Coros 的稳定记录键。日指标/睡眠按日期幂等，活动按 activity id 幂等，
-    # 因而同一天的多次活动不会再互相覆盖。
-    external_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    data: Mapped[str | None] = mapped_column(Text, default="{}")
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    issuer: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    client_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    access_token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    refresh_token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    access_token_expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="connected")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=True
+    )
+
+    user: Mapped["User"] = relationship(back_populates="coros_connection")
+
+
+class CorosAuthorizationRequest(Base):
+    """浏览器回调前短暂保存的 state 校验与 PKCE 材料。"""
+
+    __tablename__ = "coros_authorization_requests"
+
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    issuer: Mapped[str] = mapped_column(String(255), nullable=False)
+    client_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    verifier_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
 
-    __table_args__ = (
-        Index("ix_fitness_user_type_external", "user_id", "data_type", "external_id", unique=True),
-    )
+    user: Mapped["User"] = relationship(back_populates="coros_authorization_requests")
 
 
 class SessionSummary(Base):

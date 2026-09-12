@@ -49,7 +49,7 @@ def test_resource_endpoints_use_unified_envelope(auth_client):
     assert_envelope(sessions_response.json(), status_code=sessions_response.status_code)
     assert isinstance(sessions_response.json()["data"], list)
 
-    fitness_response = auth_client.get("/api/fitness/activities")
-    assert fitness_response.status_code == 200
-    assert_envelope(fitness_response.json(), status_code=fitness_response.status_code)
-    assert fitness_response.json()["data"] == []
+    coros_response = auth_client.get("/api/coros/connection")
+    assert coros_response.status_code == 200
+    assert_envelope(coros_response.json(), status_code=coros_response.status_code)
+    assert coros_response.json()["data"]["status"] == "not_connected"

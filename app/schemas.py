@@ -259,64 +259,30 @@ class HealthDocumentData(BaseModel):
 ProfileUpdate.model_rebuild()
 
 
-class FitnessSyncRequest(BaseModel):
-    start_day: str = ""
-    end_day: str = ""
+class CorosConnectionResponse(BaseModel):
+    """前端可见的本地 COROS 连接状态，不暴露任何 OAuth 凭据。"""
 
-    @field_validator("start_day", "end_day")
-    @classmethod
-    def validate_compact_date(cls, value: str) -> str:
-        """校验非空同步日期为 YYYYMMDD 格式。"""
-        if not value:
-            return value
-        try:
-            datetime.strptime(value, "%Y%m%d")
-        except ValueError as exc:
-            raise ValueError("日期必须是 YYYYMMDD 格式") from exc
-        return value
-
-    @model_validator(mode="after")
-    def validate_range(self):
-        """确保同步起始日期不晚于结束日期。"""
-        if self.start_day and self.end_day and self.start_day > self.end_day:
-            raise ValueError("start_day 不能晚于 end_day")
-        return self
+    connected: bool
+    status: Literal["connected", "reconnect_required", "not_connected"]
 
 
-class FitnessSyncResponse(BaseModel):
-    """一次显式 Coros 到 MySQL 同步请求的结果。"""
+class CorosAuthorizationStartResponse(BaseModel):
+    """开始 OAuth 授权时返回给浏览器的短期跳转信息。"""
 
-    upserted: int = Field(ge=0)
+    authorization_url: str
+    expires_at: datetime
+
+
+class FitnessSnapshotResponse(BaseModel):
+    """一次实时 MCP 读取的 Dashboard 最小快照。"""
+
+    start_date: str
+    end_date: str
+    daily_metrics: list[dict[str, Any]] = Field(default_factory=list)
+    sleep_records: list[dict[str, Any]] = Field(default_factory=list)
+    activities: list[dict[str, Any]] = Field(default_factory=list)
     partial: bool = False
     unavailable_sources: list[str] = Field(default_factory=list)
-    cached_source_counts: dict[str, int] = Field(default_factory=dict)
-
-
-class FitnessDataResponse(BaseModel):
-    id: int
-    user_id: int
-    date: str
-    data_type: str
-    data: dict
-    created_at: datetime
-    # 把 SQLAlchemy ORM 对象转成 JSON 返回
-    model_config = {"from_attributes": True}
-
-    @field_validator("date", mode="before")
-    @classmethod
-    def format_date(cls, v):
-        """将日期对象或其他日期值格式化为字符串。"""
-        if hasattr(v, "isoformat"):
-            return v.isoformat()
-        return str(v)
-
-    @field_validator("data", mode="before")
-    @classmethod
-    def parse_json(cls, v):
-        """将持久化的数据 JSON 字符串还原为字典。"""
-        if isinstance(v, str):
-            return json.loads(v)
-        return v
 
 
 # ==================== 用户可控记忆 ====================

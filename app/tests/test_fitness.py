@@ -1,92 +1,84 @@
-from datetime import datetime, timedelta
+"""实时 COROS Dashboard 接口契约。"""
+
+from datetime import date, timedelta
+
+from app.services.coros_live_gateway import CorosMcpUnavailableError, LiveFitnessData
+from app.services.coros_oauth import CorosNotConnectedError
 
 
-class TestFitness:
-    def test_sync_succeeds_when_sleep_data_is_empty(self, auth_client, coros_mock):
-        """未佩戴手表导致睡眠为空是正常结果，不能把同步标记为失败或部分失败。"""
-        today = datetime.now().strftime("%Y%m%d")
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
-        coros_mock.get_daily_metrics.return_value = [
-            {"date": yesterday, "training_load": 50, "rhr": 55},
-            {"date": today, "training_load": 55, "rhr": 56},
-        ]
-        coros_mock.get_sleep_data.return_value = []
-        coros_mock.list_activities.return_value = {"activities": []}
+class FakeGateway:
+    """仅返回内存快照，验证路由没有写入运动数据表。"""
 
-        resp = auth_client.post("/api/fitness/sync", json={})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["messages"] == ["同步完成"]
-        assert data["data"]["upserted"] == 2
-        assert data["data"]["partial"] is False
-        assert data["data"]["unavailable_sources"] == []
-        coros_mock.sync_cache.assert_called_once()
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
 
-    def test_sync_coros_failure(self, auth_client, coros_mock):
-        """coros 抛异常 → sync 应 502 + message 含失败提示"""
-        coros_mock.get_daily_metrics.side_effect = Exception("coros API down")
+    def fetch_snapshot(self, db, *, user_id, start_date, end_date):
+        self.calls.append((user_id, start_date, end_date))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
 
-        resp = auth_client.post("/api/fitness/sync", json={})
-        assert resp.status_code == 502
-        assert "未返回可写入" in resp.json()["messages"][0]
 
-    def test_sync_cache_failure_returns_502(self, auth_client, coros_mock):
-        """验证 Coros 缓存同步失败会返回可识别的 502 错误。"""
-        coros_mock.sync_cache.side_effect = RuntimeError("provider unavailable")
+def test_snapshot_returns_realtime_data_without_fitness_table(auth_client, monkeypatch):
+    """Dashboard 仅消费 Gateway 返回的内存记录，模型元数据中不再有 fitness_data。"""
 
-        resp = auth_client.post("/api/fitness/sync", json={})
+    from app.api.routers import fitness
+    from app.core.database import Base
 
-        assert resp.status_code == 502
-        assert "同步 Coros 缓存失败" in resp.json()["messages"][0]
+    today = date.today()
+    gateway = FakeGateway(
+        LiveFitnessData(
+            start_date=today - timedelta(weeks=4),
+            end_date=today,
+            daily_metrics=[{"date": today.isoformat(), "rhr": 55, "training_load": 42}],
+            sleep_records=[],
+            activities=[{"external_id": "run-1", "date": today.isoformat(), "name": "Run"}],
+            unavailable_sources=["sleep"],
+        )
+    )
+    monkeypatch.setattr(fitness, "get_coros_live_gateway", lambda: gateway)
 
-    def test_sync_persists_available_sources_when_sleep_is_unavailable(
-        self, auth_client, coros_mock
-    ):
-        """验证睡眠源不可用时仍持久化其他可用运动数据。"""
-        today = datetime.now().strftime("%Y%m%d")
-        coros_mock.sync_cache.return_value = {
-            "partial": True,
-            "failed_sources": ["sleep"],
-            "cached_source_counts": {"daily": 1, "sleep": 0, "activities": 0},
-        }
-        coros_mock.get_daily_metrics.return_value = [{"date": today, "training_load": 42}]
-        coros_mock.list_activities.return_value = {"activities": []}
+    response = auth_client.get("/api/fitness/snapshot?weeks=4")
 
-        response = auth_client.post("/api/fitness/sync", json={})
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["partial"] is True
+    assert payload["unavailable_sources"] == ["sleep"]
+    assert payload["activities"][0]["external_id"] == "run-1"
+    assert len(gateway.calls) == 1
+    assert "fitness_data" not in Base.metadata.tables
 
-        assert response.status_code == 200
-        assert response.json()["data"]["partial"] is True
-        assert response.json()["data"]["unavailable_sources"] == ["sleep"]
-        assert len(auth_client.get("/api/fitness/daily").json()["data"]) == 1
 
-    def test_get_daily_data(self, auth_client, seed_fitness_data):
-        """seed 3 条 daily_metrics → GET /daily 应返回 3 条"""
-        resp = auth_client.get("/api/fitness/daily")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data["data"]) == 3
-        assert data["data"][0]["data_type"] == "daily_metrics"
+def test_snapshot_requires_connection(auth_client, monkeypatch):
+    """未连接用户不会误报为上游故障。"""
 
-    def test_get_activities_empty(self, auth_client):
-        """当前用户无 activity 数据 → GET /activities 应返回空列表"""
-        resp = auth_client.get("/api/fitness/activities")
-        assert resp.status_code == 200
-        assert resp.json()["data"] == []
+    from app.api.routers import fitness
 
-    def test_sync_keeps_multiple_activities_on_the_same_day(self, auth_client, coros_mock):
-        """活动的幂等键应来自上游 activity id，而不是日期。"""
-        today = datetime.now().strftime("%Y%m%d")
-        coros_mock.get_daily_metrics.return_value = []
-        coros_mock.get_sleep_data.return_value = []
-        coros_mock.list_activities.return_value = {
-            "activities": [
-                {"id": "morning-run", "start_time": f"{today}T070000", "name": "Run"},
-                {"id": "evening-run", "start_time": f"{today}T190000", "name": "Run"},
-            ]
-        }
+    monkeypatch.setattr(
+        fitness,
+        "get_coros_live_gateway",
+        lambda: FakeGateway(CorosNotConnectedError("not connected")),
+    )
 
-        response = auth_client.post("/api/fitness/sync", json={})
+    response = auth_client.get("/api/fitness/snapshot")
 
-        assert response.status_code == 200
-        activities = auth_client.get("/api/fitness/activities").json()["data"]
-        assert len(activities) == 2
+    assert response.status_code == 409
+    assert "尚未连接" in response.json()["messages"][0]
+
+
+def test_snapshot_maps_all_source_failure_to_502(auth_client, monkeypatch):
+    """三源都失败时不返回伪造的空成功快照。"""
+
+    from app.api.routers import fitness
+
+    monkeypatch.setattr(
+        fitness,
+        "get_coros_live_gateway",
+        lambda: FakeGateway(CorosMcpUnavailableError("unavailable")),
+    )
+
+    response = auth_client.get("/api/fitness/snapshot")
+
+    assert response.status_code == 502
+    assert "实时数据暂不可用" in response.json()["messages"][0]

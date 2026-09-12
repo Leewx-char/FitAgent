@@ -7,16 +7,14 @@ from app import main
 
 @pytest.mark.anyio
 async def test_lifespan_initializes_schema_before_runtime_work(monkeypatch):
-    """schema 初始化先于运行检查，启动时不构建本地检索器。"""
+    """schema 初始化先于运行检查，启动时不构建本地 COROS 进程。"""
     events: list[str] = []
     monkeypatch.setattr(main, "initialize_schema", lambda: events.append("schema"))
     monkeypatch.setattr(main, "validate_runtime", lambda: events.append("runtime") or [])
-    monkeypatch.setattr(main, "close_coros", lambda: events.append("close"))
-
     async with main.lifespan(main.app):
         assert events == ["schema", "runtime"]
 
-    assert events == ["schema", "runtime", "close"]
+    assert events == ["schema", "runtime"]
 
 
 @pytest.mark.anyio

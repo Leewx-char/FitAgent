@@ -2,7 +2,7 @@
 
 面向私人健身场景的 LLM 应用：通用问题走带证据的快速 RAG，个性化问题才进入 Agent 工具编排；用户明确确认后才会形成跨会话记忆；周训练计划则同时受 RAG 证据、Coros 运动摘要、执行反馈与确定性安全策略约束。
 
-> 第一次阅读代码建议从 [项目学习路线](./docs/learning-guide.md) 开始：它以一次聊天请求为主线串起前端、SSE、RAG、Agent、记忆、计划和 Coros 同步。
+> 第一次阅读代码建议从 [项目学习路线](./docs/learning-guide.md) 开始：它以一次聊天请求为主线串起前端、SSE、RAG、Agent、记忆、计划和 COROS 实时读取。
 
 ## 文档导航与时效性
 
@@ -16,7 +16,7 @@
 - **可解释 RAG**：一次 Qdrant Query API 请求完成 Dense + BM25 prefetch 与 RRF 融合，DashScope 重排候选后返回最终证据；回答带 `[证据:N]` 和来源卡片。
 - **受控 Agent**：LangGraph ReAct 只在个性化问题中调用画像、已确认记忆、运动摘要、天气等工具；有递归步数、工具预算，以及基于官方 Collector 的本地执行记录。
 - **用户可控记忆**：mem0 调用 LLM 从用户消息提取 `proposed` 候选；用户在“我的记忆”页确认后，由模型自主选择调用工具进行语义检索。状态和有效期随记忆保存在向量库，助手回答不进入提取输入。
-- **自适应周计划**：Coros 近四周聚合快照 + 用户画像 + RPE/疼痛反馈 → 固定安全策略 → RAG 证据 → Pydantic JSON 契约和业务校验。
+- **自适应周计划**：已连接时读取 COROS 近四周实时聚合快照；未连接时使用画像/RAG 路径；已连接但上游失败则拒绝生成，避免静默降级。
 - **多模态健康信息**：体检 PDF/图片提取十项指标，用户核对后才写入画像；不做医学诊断。
 
 ## 环境要求
@@ -53,7 +53,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 # 1. 克隆并配置环境变量
 cp .env.example .env
 # 编辑 .env，填入 DEEPSEEK_API_KEY、DASHSCOPE_API_KEY、MySQL 配置、JWT_SECRET_KEY
-# Coros 同步是可选能力：另见“Coros 本地 MCP 配置”
+# COROS 是可选能力：另见“官方 COROS 实时 MCP 配置”
 
 # 2. Python 环境与开发依赖（pyproject.toml 是唯一依赖入口）
 python -m venv .venv
@@ -108,37 +108,28 @@ cd frontend && npm install && npm run dev
 
 应用启动时会根据 `app/models.py` 执行 `create_all()`，仅创建空 MySQL 数据库中缺失的模型表；它不会变更、删除或升级已存在的表。升级到包含新模型字段的版本前，必须先备份现有数据库，并由操作者删除或新建一个开发数据库后再启动应用。`create_all()` 不是数据库升级工具。
 
-## Coros 本地 MCP 配置
+## 官方 COROS 实时 MCP 配置
 
-项目当前接入社区维护的 [`cygnusb/coros-mcp`](https://github.com/cygnusb/coros-mcp) **本地 stdio MCP**（固定到 `71d594c`），而非浏览器中的远程 OAuth connector。它是一个外部进程，刻意安装到 `.tools/coros-mcp-venv`，不写入后端 `.venv`：该 MCP 的 FastMCP 依赖可能升级 Starlette，从而破坏 FastAPI 服务的锁定依赖。
+FitAgent 通过官方 HTTP MCP 和浏览器 OAuth 按请求读取数据，不启动社区 stdio 子进程、不创建本地缓存，也不把日健康、睡眠或活动写入 MySQL。每个 FitAgent 用户独立保存加密的 access/refresh token；浏览器授权使用短时 `state` 与 PKCE。服务仅调用 `querySportRecords`、`queryDailyHealthData`、`querySleepData`；用户明确选择单次活动时才调用 `getActivityDetail`。
 
-首次安装、认证与确认：
-
-```powershell
-# 1. 创建隔离的本地 MCP 虚拟环境并安装固定版本
-.\scripts\install_coros_mcp.ps1
-
-# 2. 完成 Coros 认证（交互式，不要把凭据写进 .env）
-# 本项目要同步活动、日指标和睡眠；因此使用 auth，而非只覆盖 Web 数据的 auth-web。
-$env:PYTHONUTF8=1  # PowerShell 默认 GBK 时避免 CLI 输出 Unicode 状态符失败
-& .\.tools\coros-mcp-venv\Scripts\coros-mcp.exe auth
-& .\.tools\coros-mcp-venv\Scripts\coros-mcp.exe auth-status
-
-# 3. 可选：先检查本地缓存；FitAgent 仍以用户点击同步为准写入 MySQL
-& .\.tools\coros-mcp-venv\Scripts\coros-mcp.exe cache-status
-```
-
-`.env` 使用示例已写入 `.env.example`：
+预发必须先验证官方动态客户端注册与 HTTPS 回调。配置 `.env`：
 
 ```dotenv
-COROS_MCP_COMMAND=[".\\.tools\\coros-mcp-venv\\Scripts\\python.exe", "-m", "app.integrations.coros_mcp_runner", "serve"]
-COROS_MCP_SYNC_COMMAND=[".\\.tools\\coros-mcp-venv\\Scripts\\python.exe", "-m", "app.integrations.coros_mcp_runner", "sync"]
-COROS_MCP_CACHE_HOME=.tools/coros-mcp-home
-COROS_MCP_TOOLSET=readonly
-COROS_MCP_HIDE_AUTH_TOOLS=true
+COROS_MCP_GATEWAY_URL=https://mcp.coros.com/mcp
+COROS_OAUTH_REDIRECT_URI=https://api.example.com/api/coros/callback
+COROS_OAUTH_POST_CONNECT_REDIRECT_URI=https://app.example.com/dashboard
+COROS_TOKEN_ENCRYPTION_KEY=<Fernet 生成的随机密钥>
 ```
 
-然后在数据面板点击“同步高驰数据”，或调用 `POST /api/fitness/sync`；未传日期默认只同步最近 7 天。该接口会先用隔离解释器执行显式缓存同步，再由 stdio MCP **只读本地缓存**；不会由聊天 Agent 自动触发或在读取时重复请求上游。某类记录为空（例如未佩戴手表睡眠而没有睡眠记录）是正常成功，返回空列表且不会标为 `partial`。只有单一源明确请求失败时，日指标和活动仍会写入 MySQL，响应以 `partial` / `unavailable_sources` 明示。FitAgent 只向 MCP 调用 `list_activities`、`get_daily_metrics`、`get_sleep_data`，并强制 MCP 使用 `readonly` 工具集、隐藏认证工具；认证令牌由 MCP 的操作系统安全存储管理。社区 MCP 的 SQLite 缓存固定写入 `COROS_MCP_CACHE_HOME`，不会触碰用户目录中的 `.config/coros-mcp`。完整 `auth` 可能影响 Coros App 登录状态，认证前请确认可接受重新登录。若使用 COROS 官方远程 OAuth MCP，需要另建 HTTP/OAuth adapter，不能直接替换本项目的 stdio 命令。
+用户在 Dashboard 点击“连接 COROS”后，服务端创建 `state`、PKCE verifier 和区域 issuer；回调后只保存加密令牌。`GET /api/fitness/snapshot?weeks=4` 返回当次的实时白名单快照和 `partial` 状态；没有持久化运动数据接口。断开连接只删除本地凭据，不承诺官方侧远端撤销。
+
+发布此版本会删除全部 MySQL 数据。停止后端后，先确认已完成运维备份，再执行（命令会校验确认值精确匹配当前 `MYSQL_DATABASE`）：
+
+```bash
+python scripts/rebuild_database.py --confirm-database zhitong
+```
+
+脚本重建所有当前 ORM 表；新 schema 包含 `coros_connections` 与 `coros_authorization_requests`，不包含 `fitness_data`。随后部署代码和配置、启动后端，并使用测试账号完成 OAuth PoC；不保留旧表或回退查询路径。
 
 ## 开发门禁
 
@@ -148,7 +139,7 @@ ruff check app
 pytest app/tests
 ```
 
-当前测试还覆盖：assistant/tool 输出不能进入 mem0 候选、记忆确认/撤销、训练计划的强度与证据校验、Coros stdio 超时重置，以及同日多次活动不被覆盖。
+当前测试还覆盖：assistant/tool 输出不能进入 mem0 候选、记忆确认/撤销、训练计划的强度与证据校验，以及 COROS OAuth 加密存储、一次性 state、工具白名单、局部失败和无运动数据落库。
 
 检索质量基线（需要 Qdrant 与 DashScope embedding、重排服务可访问）：
 

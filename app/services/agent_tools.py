@@ -16,9 +16,16 @@ from app.utils.logger_handler import logger
 from app.core.database import get_db_session
 from app.models import UserProfile
 from app.services.fitness_insights import (
+    build_activity_snapshot,
+    build_fitness_snapshot,
     list_activity_candidates,
-    load_activity_snapshot,
-    load_fitness_snapshot,
+    resolve_fitness_period,
+)
+from app.services.coros_live_gateway import CorosMcpError, get_coros_live_gateway
+from app.services.coros_oauth import (
+    CorosNotConnectedError,
+    CorosOAuthError,
+    CorosReconnectionRequiredError,
 )
 from app.services.memory_service import MemoryService
 from app.services.factory import get_chat_model
@@ -434,29 +441,63 @@ def get_fitness_summary(
         if activity_id and start_date != end_date:
             return "activity_id 只能用于 start_day 与 end_day 相同的一天。"
 
+    resolved_start, resolved_end, _label = resolve_fitness_period(
+        start_date=start_date,
+        end_date=end_date,
+        weeks=4,
+        today=None,
+    )
     with get_db_session() as db:
-        if activity_id:
-            activity = load_activity_snapshot(
+        gateway = get_coros_live_gateway()
+        try:
+            if activity_id:
+                live_data = gateway.fetch_snapshot(
+                    db,
+                    user_id=user_id,
+                    start_date=resolved_start,
+                    end_date=resolved_end,
+                )
+                if not any(
+                    candidate.external_id == activity_id
+                    for candidate in list_activity_candidates(
+                        live_data.activities,
+                        activity_date=resolved_start,
+                    )
+                ):
+                    return "未找到该 activity_id 对应的活动，请先获取当天候选活动后再选择。"
+                detail = gateway.fetch_activity_detail(db, user_id=user_id, activity_id=activity_id)
+                activity = build_activity_snapshot(detail) if detail is not None else None
+                if activity is None:
+                    return "未找到该 activity_id 对应的活动，请先获取当天候选活动后再选择。"
+                return activity.to_prompt()
+
+            live_data = gateway.fetch_snapshot(
                 db,
                 user_id=user_id,
-                activity_date=start_date,
-                external_id=activity_id,
+                start_date=resolved_start,
+                end_date=resolved_end,
             )
-            if activity is None:
-                return "未找到该日期下对应 activity_id 的活动，请先获取当天候选活动后再选择。"
-            return activity.to_prompt()
+        except CorosNotConnectedError:
+            return "尚未连接 COROS。请先在 Dashboard 完成授权后，再查询实时运动数据。"
+        except CorosReconnectionRequiredError:
+            return "COROS 授权已失效，请在 Dashboard 重新连接后再试。"
+        except (CorosMcpError, CorosOAuthError):
+            return "COROS 运动数据暂时不可用，请稍后重试。"
 
-        snapshot = load_fitness_snapshot(
-            db,
-            user_id=user_id,
-            start_date=start_date,
-            end_date=end_date,
+        snapshot = build_fitness_snapshot(
+            daily_records=live_data.daily_metrics,
+            sleep_records=live_data.sleep_records,
+            activities=live_data.activities,
+            start_date=resolved_start,
+            end_date=resolved_end,
         )
         summary = snapshot.to_prompt()
+        if live_data.partial:
+            summary += f"\n- 部分实时来源暂不可用：{'、'.join(live_data.unavailable_sources)}"
         if start_date is None or start_date != end_date:
             return summary
 
-        candidates = list_activity_candidates(db, user_id=user_id, activity_date=start_date)
+        candidates = list_activity_candidates(live_data.activities, activity_date=start_date)
         if not candidates:
             return summary
         candidate_text = "\n".join(candidate.to_prompt() for candidate in candidates)

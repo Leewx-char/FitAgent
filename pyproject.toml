@@ -39,6 +39,9 @@ dependencies = [
     "Pillow==11.3.0",
     "slowapi==0.1.9",
     "mem0ai==2.0.20",
+    "cryptography==50.0.1",
+    "langchain-mcp-adapters==0.3.2",
+    "mcp==1.30.0",
 ]
 
 [project.optional-dependencies]

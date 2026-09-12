@@ -15,7 +15,10 @@ from app.models import TrainingFeedback, TrainingPlan, UserProfile
 from app.schemas import TrainingFeedbackCreate, WeeklyTrainingPlan
 from app.services.factory import get_chat_model
 from app.services.coros_live_gateway import CorosLiveGateway, CorosMcpError, get_coros_live_gateway
-from app.services.coros_oauth import CorosNotConnectedError, CorosReconnectionRequiredError
+from app.services.coros_oauth import (
+    CorosNotConnectedError,
+    CorosOAuthError,
+)
 from app.services.fitness_insights import FitnessSnapshot, build_fitness_snapshot
 from app.services.rag_service import RagSummarizeService
 from app.utils.prompt_loader import load_training_plan_prompt
@@ -146,10 +149,12 @@ class TrainingPlanService:
             )
         except CorosNotConnectedError:
             return FitnessSnapshot()
-        except (CorosMcpError, CorosReconnectionRequiredError) as error:
+        except (CorosMcpError, CorosOAuthError) as error:
             raise PlanGenerationError(
                 "COROS 已连接但实时运动数据暂不可用，无法安全生成训练计划，请稍后重试"
             ) from error
+        if live_data.partial:
+            raise PlanGenerationError("COROS 实时运动数据不完整，无法安全生成训练计划，请稍后重试")
         return build_fitness_snapshot(
             daily_records=live_data.daily_metrics,
             sleep_records=live_data.sleep_records,

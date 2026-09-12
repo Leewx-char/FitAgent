@@ -1,4 +1,7 @@
 import os
+from urllib.parse import urlsplit
+
+from cryptography.fernet import Fernet
 from app.core.settings import get_settings
 from app.utils.config_handler import get_models_config, get_prompts_config, get_vector_store_config
 from app.utils.path_tool import get_abs_path
@@ -14,6 +17,22 @@ def validate_runtime() -> list[str]:
         issues.append("缺少 .env 配置 DEEPSEEK_API_KEY，请配置后再启动应用。")
     if not settings.dashscope_api_key.strip():
         issues.append("缺少 .env 配置 DASHSCOPE_API_KEY，请配置后再启动应用。")
+
+    # COROS 是可选能力；一旦配置任一私有 OAuth 字段，必须形成完整安全闭环。
+    coros_callback = str(getattr(settings, "coros_oauth_redirect_uri", "")).strip()
+    coros_key = str(getattr(settings, "coros_token_encryption_key", "")).strip()
+    coros_configured = bool(coros_callback or coros_key)
+    if coros_configured:
+        callback = urlsplit(coros_callback)
+        if callback.scheme != "https" or not callback.netloc:
+            issues.append("COROS_OAUTH_REDIRECT_URI 必须是 HTTPS 回调地址。")
+        if not coros_key:
+            issues.append("已启用 COROS OAuth 但缺少 COROS_TOKEN_ENCRYPTION_KEY。")
+        else:
+            try:
+                Fernet(coros_key.encode("utf-8"))
+            except (TypeError, ValueError):
+                issues.append("COROS_TOKEN_ENCRYPTION_KEY 不是有效 Fernet 密钥。")
 
     # 检查 2：关键文件路径
     required_paths = [

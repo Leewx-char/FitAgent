@@ -1,21 +1,21 @@
 import api from './index'
 
-/** 请求同步可选日期范围内的运动设备数据。 */
-export function syncFitness(startDay = '', endDay = '') {
-  return api.post('/fitness/sync', { start_day: startDay, end_day: endDay })
+/** 读取一次不落库的实时 COROS 数据快照。 */
+export function getFitnessSnapshot(weeks = 4) {
+  return api.get('/fitness/snapshot', { params: { weeks } })
 }
 
-/** 获取指定周数的每日训练和恢复指标。 */
-export function getDailyMetrics(weeks = 4) {
-  return api.get('/fitness/daily', { params: { weeks } })
+/** 发起当前登录用户的浏览器 OAuth 连接。 */
+export function connectCoros() {
+  return api.post('/coros/connect')
 }
 
-/** 获取指定周数的睡眠阶段记录。 */
-export function getSleepData(weeks = 4) {
-  return api.get('/fitness/sleep', { params: { weeks } })
+/** 查询当前用户是否存在有效的本地 COROS 连接。 */
+export function getCorosConnection() {
+  return api.get('/coros/connection')
 }
 
-/** 按可选起止日期获取运动活动明细。 */
-export function getActivities(startDay = '', endDay = '') {
-  return api.get('/fitness/activities', { params: { start_day: startDay, end_day: endDay } })
+/** 删除当前用户本地的加密 COROS 凭据。 */
+export function disconnectCoros() {
+  return api.delete('/coros/connection')
 }

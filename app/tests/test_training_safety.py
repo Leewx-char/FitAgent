@@ -1,10 +1,12 @@
 """LLM 训练计划生成前确定性安全门的单元测试。"""
 
 import pytest
+from datetime import date
 
 from app.models import UserProfile
 from app.schemas import PlanDay, PlanExercise, WeeklyTrainingPlan
 from app.services.fitness_insights import FitnessSnapshot
+from app.services.coros_live_gateway import LiveFitnessData
 from app.services.training_plan_service import (
     PlanGenerationError,
     TrainingPlanService,
@@ -110,3 +112,21 @@ def test_plan_validator_rejects_hallucinated_evidence_id():
             safety=safety,
             available_evidence_ids=["known-source#1"],
         )
+
+
+def test_plan_generation_rejects_partial_realtime_snapshot_for_connected_user():
+    """已连接但只读到部分数据时，计划不能静默按不完整恢复指标生成。"""
+
+    class PartialGateway:
+        def fetch_snapshot(self, _db, **_kwargs):
+            return LiveFitnessData(
+                start_date=date.today(),
+                end_date=date.today(),
+                daily_metrics=[{"date": date.today().isoformat(), "rhr": 55}],
+                unavailable_sources=["sleep"],
+            )
+
+    service = TrainingPlanService(coros_gateway=PartialGateway())
+
+    with pytest.raises(PlanGenerationError, match="不完整"):
+        service._fitness_snapshot(object(), user_id=1)
