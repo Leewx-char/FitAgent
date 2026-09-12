@@ -51,7 +51,6 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
-coros-mcp/
 .tools/
 .impeccable/
 .worktrees/

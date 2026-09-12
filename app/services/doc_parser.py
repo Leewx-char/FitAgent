@@ -18,7 +18,7 @@ except ImportError as exc:  # pragma: no cover - 取决于运行所在操作系�
 
 from langchain_core.messages import HumanMessage
 from pdf2image import convert_from_path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from pypdf import PdfReader
 
 from app.core.settings import get_settings
@@ -132,10 +132,33 @@ def _extract_with_vl(image_path: str, tier: str) -> HealthExtractionOutput:
             ]
         )
     ]
-    result = get_vl_model(tier).with_structured_output(HealthExtractionOutput).invoke(messages)
-    if not isinstance(result, HealthExtractionOutput):
-        raise TypeError("视觉模型未返回 HealthExtractionOutput")
-    return result
+    result = (
+        get_vl_model(tier)
+        .with_structured_output(HealthExtractionOutput, include_raw=True)
+        .invoke(messages)
+    )
+    return _parse_visual_structured_output(result)
+
+
+def _parse_visual_structured_output(result: Any) -> HealthExtractionOutput:
+    """使用结构化 tool-call 参数兼容 Tongyi 的空首调用缺陷。"""
+
+    if not isinstance(result, dict):
+        raise TypeError("视觉模型未返回结构化调用结果")
+    parsed = result.get("parsed")
+    if isinstance(parsed, HealthExtractionOutput):
+        return parsed
+
+    raw = result.get("raw")
+    for tool_call in getattr(raw, "tool_calls", []):
+        arguments = tool_call.get("args") if isinstance(tool_call, dict) else None
+        if not isinstance(arguments, dict):
+            continue
+        try:
+            return HealthExtractionOutput.model_validate(arguments)
+        except ValidationError:
+            continue
+    raise TypeError("视觉模型未返回有效的 HealthExtractionOutput")
 
 
 def _normalise_messages(value: Any) -> list[str]:

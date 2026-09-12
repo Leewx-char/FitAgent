@@ -1,12 +1,14 @@
 # COROS 官方 MCP 替换社区 stdio 接入的可行性
 
 > 调研日期：2026-09-11。范围仅含 COROS 官方仓库、其公开的 MCP/OAuth 元数据和 LangChain 官方文档；未使用真实 COROS 账号登录，也没有读取任何用户数据。
+>
+> 实现状态（2026-09-12）：本文保留为改造前的可行性证据，其中“落 MySQL、保留社区组件、双跑”是当时的备选建议，不是当前架构。当前代码改为 OAuth 后按请求读取并在内存中聚合，已删除社区 stdio、缓存与 `fitness_data`；真实 HTTPS callback、tools/list schema、分页和无状态协议仍须通过预发测试账号 PoC 验证。
 
 ## 结论
 
 **有条件可行，但不是直接替换。**
 
-COROS 官方远程 MCP 已覆盖 FitAgent 当前同步所需的活动、每日健康和睡眠读取能力，并且 HTTP + OAuth 能移除社区 `cygnusb/coros-mcp` 的本地子进程、SQLite 缓存和手写 stdio JSON-RPC 生命周期。可是它没有公开的「同步本地缓存」接口；项目仍必须保留一层很薄的、非 Agent 的数据导入边界，用来完成每个 FitAgent 用户的 OAuth、只读工具白名单、官方载荷到 `fitness_data` 的映射、幂等写库与错误契约。
+COROS 官方远程 MCP 已覆盖 FitAgent 所需的活动、每日健康和睡眠读取能力，并且 HTTP + OAuth 能移除社区 `cygnusb/coros-mcp` 的本地子进程、SQLite 缓存和手写 stdio JSON-RPC 生命周期。它没有公开的「同步本地缓存」接口，因此当前实现保留一层很薄的、非 Agent 的实时读取边界：每位用户 OAuth、只读工具白名单、白名单载荷映射和明确的局部失败契约；不保存运动数据。
 
 在这几个前置条件未实现前，**不能**删除社区组件：
 

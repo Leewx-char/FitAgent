@@ -212,8 +212,10 @@ def test_refresh_rejection_marks_only_that_users_connection_for_reconnect():
         status="connected",
     )
     service = CorosOAuthService(settings=_settings(key), http_client=RejectedRefreshHttp())
+    database = FakeDatabase(connection=connection)
 
     with pytest.raises(CorosReconnectionRequiredError):
-        service.get_access_credential(FakeDatabase(connection=connection), user_id=9)
+        service.get_access_credential(database, user_id=9)
 
     assert connection.status == "reconnect_required"
+    assert database.commit_count == 1

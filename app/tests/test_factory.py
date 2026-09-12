@@ -45,6 +45,8 @@ def test_factory_builds_cached_deepseek_flash_chat_model(monkeypatch):
     assert model.model_name == "deepseek-flash"
     assert model.streaming is True
     assert model.max_tokens == 4096
+    assert model.extra_body == {"thinking": {"type": "disabled"}}
+    assert model.use_responses_api is False
 
 
 def test_factory_keeps_embedding_and_vision_on_dashscope(monkeypatch):

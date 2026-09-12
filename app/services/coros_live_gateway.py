@@ -66,6 +66,12 @@ class CorosLiveGateway:
     _DATE_START_KEYS = ("startDate", "start_date", "startDay", "start_day", "fromDate")
     _DATE_END_KEYS = ("endDate", "end_date", "endDay", "end_day", "toDate")
     _ACTIVITY_ID_KEYS = ("activityId", "activity_id", "sportRecordId", "recordId", "id")
+    _PAGE_SIZE_KEYS = ("pageSize", "page_size", "limit")
+    _PAGE_NUMBER_KEYS = ("page", "pageNumber", "page_number", "pageNum", "page_num")
+    _CURSOR_KEYS = ("cursor", "pageCursor", "page_cursor")
+    _NEXT_CURSOR_KEYS = ("nextCursor", "next_cursor", "nextPageCursor", "next_page_cursor")
+    _HAS_MORE_KEYS = ("hasMore", "has_more", "more")
+    _MAX_PAGES = 20
 
     def __init__(
         self,
@@ -162,6 +168,33 @@ class CorosLiveGateway:
         if isinstance(nested, dict):
             return CorosLiveGateway._records(nested, keys)
         return []
+
+    @staticmethod
+    def _pagination_metadata(payload: Any) -> tuple[bool, Any | None]:
+        """读取常见分页信号；未知但明确未结束的结果不能被当成完整快照。"""
+
+        mappings: list[dict[str, Any]] = []
+        if isinstance(payload, dict):
+            mappings.append(payload)
+            nested = payload.get("data")
+            if isinstance(nested, dict):
+                mappings.append(nested)
+        for mapping in mappings:
+            has_more = next(
+                (mapping[key] for key in CorosLiveGateway._HAS_MORE_KEYS if key in mapping),
+                None,
+            )
+            next_cursor = next(
+                (mapping[key] for key in CorosLiveGateway._NEXT_CURSOR_KEYS if key in mapping),
+                None,
+            )
+            if has_more is not None:
+                if isinstance(has_more, str):
+                    return has_more.lower() in {"true", "1", "yes"}, next_cursor
+                return bool(has_more), next_cursor
+            if next_cursor not in (None, ""):
+                return True, next_cursor
+        return False, None
 
     @staticmethod
     def _value(record: dict[str, Any], *keys: str) -> Any:
@@ -287,6 +320,43 @@ class CorosLiveGateway:
             raise CorosMcpError("COROS MCP 数据读取失败，请稍后重试")
         return result
 
+    async def _read_all_pages(
+        self, tool: Any, start_date: date, end_date: date
+    ) -> list[dict[str, Any]]:
+        """在已验证的日期范围内读取有限分页；无法证明完整性则拒绝该数据源。"""
+
+        fields = self._tool_fields(tool)
+        arguments: dict[str, Any] = self._date_arguments(tool, start_date, end_date)
+        page_size_key = self._find_field(fields, self._PAGE_SIZE_KEYS)
+        page_number_key = self._find_field(fields, self._PAGE_NUMBER_KEYS)
+        cursor_key = self._find_field(fields, self._CURSOR_KEYS)
+        if page_size_key is not None:
+            arguments[page_size_key] = 100
+        if page_number_key is not None:
+            arguments[page_number_key] = 1
+
+        records: list[dict[str, Any]] = []
+        for page_index in range(self._MAX_PAGES):
+            result = await self._call_tool(tool, arguments)
+            payload = self._decode_result(result)
+            records.extend(
+                self._records(
+                    payload,
+                    ("records", "activities", "dailyData", "sleepData", "items", "data", "list"),
+                )
+            )
+            has_more, next_cursor = self._pagination_metadata(payload)
+            if not has_more:
+                return records
+            if cursor_key is not None and next_cursor not in (None, ""):
+                arguments[cursor_key] = next_cursor
+                continue
+            if page_number_key is not None:
+                arguments[page_number_key] = page_index + 2
+                continue
+            raise CorosMcpSchemaError("COROS 返回了未完成分页，但工具参数无法安全翻页")
+        raise CorosMcpSchemaError("COROS 分页超过安全上限，拒绝使用不完整运动数据")
+
     def _required_tool(self, tools: dict[str, Any], source: str) -> Any:
         name = self._TOOL_NAMES[source]
         tool = tools.get(name)
@@ -304,21 +374,7 @@ class CorosLiveGateway:
             for source in sources:
                 try:
                     tool = self._required_tool(tools, source)
-                    result = await self._call_tool(
-                        tool, self._date_arguments(tool, start_date, end_date)
-                    )
-                    raw[source] = self._records(
-                        self._decode_result(result),
-                        (
-                            "records",
-                            "activities",
-                            "dailyData",
-                            "sleepData",
-                            "items",
-                            "data",
-                            "list",
-                        ),
-                    )
+                    raw[source] = await self._read_all_pages(tool, start_date, end_date)
                 except CorosMcpUnauthorizedError:
                     raise
                 except CorosMcpError:
@@ -365,15 +421,28 @@ class CorosLiveGateway:
             except CorosMcpUnauthorizedError:
                 if attempt == 0:
                     continue
+                self._oauth.mark_reconnection_required(db, user_id=user_id)
                 raise CorosReconnectionRequiredError("COROS 授权已失效，请重新连接")
         raise CorosMcpUnavailableError("COROS 未返回可用运动数据")
 
     def fetch_activity_detail(
-        self, db: DBSession, *, user_id: int, activity_id: str
+        self, db: DBSession, *, user_id: int, activity_id: str, activity_date: date
     ) -> dict[str, Any] | None:
-        """读取用户已选择的一次活动详情，结果只在当前请求中返回。"""
+        """先在同日实时活动中验证选择，再读取一项活动详情。"""
 
         if not activity_id:
+            return None
+        candidates = self.fetch_snapshot(
+            db,
+            user_id=user_id,
+            start_date=activity_date,
+            end_date=activity_date,
+        )
+        if not any(
+            record.get("external_id") == activity_id
+            and record.get("date") == activity_date.isoformat()
+            for record in candidates.activities
+        ):
             return None
         for attempt in range(2):
             credential = self._oauth.get_access_credential(
@@ -384,6 +453,7 @@ class CorosLiveGateway:
             except CorosMcpUnauthorizedError:
                 if attempt == 0:
                     continue
+                self._oauth.mark_reconnection_required(db, user_id=user_id)
                 raise CorosReconnectionRequiredError("COROS 授权已失效，请重新连接")
         return None
 

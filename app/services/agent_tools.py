@@ -451,21 +451,12 @@ def get_fitness_summary(
         gateway = get_coros_live_gateway()
         try:
             if activity_id:
-                live_data = gateway.fetch_snapshot(
+                detail = gateway.fetch_activity_detail(
                     db,
                     user_id=user_id,
-                    start_date=resolved_start,
-                    end_date=resolved_end,
+                    activity_id=activity_id,
+                    activity_date=resolved_start,
                 )
-                if not any(
-                    candidate.external_id == activity_id
-                    for candidate in list_activity_candidates(
-                        live_data.activities,
-                        activity_date=resolved_start,
-                    )
-                ):
-                    return "未找到该 activity_id 对应的活动，请先获取当天候选活动后再选择。"
-                detail = gateway.fetch_activity_detail(db, user_id=user_id, activity_id=activity_id)
                 activity = build_activity_snapshot(detail) if detail is not None else None
                 if activity is None:
                     return "未找到该 activity_id 对应的活动，请先获取当天候选活动后再选择。"

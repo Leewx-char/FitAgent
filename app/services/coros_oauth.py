@@ -344,7 +344,6 @@ class CorosOAuthService:
             # 临时网络或服务端故障不能被误判为用户授权失效。
             raise
         except (CorosOAuthError, TypeError, ValueError) as error:
-            connection.status = "reconnect_required"
             raise CorosReconnectionRequiredError("COROS 授权已失效，请重新连接") from error
         connection.access_token_ciphertext = cipher.encrypt(access_token)
         connection.refresh_token_ciphertext = cipher.encrypt(next_refresh_token)
@@ -367,9 +366,18 @@ class CorosOAuthService:
             else:
                 token = self._refresh_connection(connection, cipher)
         except CorosReconnectionRequiredError:
-            connection.status = "reconnect_required"
+            self.mark_reconnection_required(db, user_id=user_id)
             raise
         return CorosAccessCredential(access_token=token, issuer=connection.issuer)
+
+    def mark_reconnection_required(self, db: DBSession, *, user_id: int) -> None:
+        """在独立提交中持久化失效状态，避免外层错误事务回滚这一安全信号。"""
+
+        connection = self.get_connection_status(db, user_id=user_id)
+        if connection is None or connection.status == "reconnect_required":
+            return
+        connection.status = "reconnect_required"
+        db.commit()
 
     def get_connection_status(self, db: DBSession, *, user_id: int) -> CorosConnection | None:
         """返回无敏感字段的连接状态所对应的 ORM 对象。"""

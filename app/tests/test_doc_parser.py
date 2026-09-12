@@ -147,12 +147,13 @@ def test_visual_extractor_uses_structured_output(monkeypatch, tmp_path):
         @staticmethod
         def invoke(messages):
             captured["messages"] = messages
-            return _health_output(175)
+            return {"parsed": _health_output(175), "raw": SimpleNamespace(tool_calls=[])}
 
     class FakeModel:
         @staticmethod
-        def with_structured_output(schema):
+        def with_structured_output(schema, **kwargs):
             captured["schema"] = schema
+            captured["kwargs"] = kwargs
             return FakeStructuredModel()
 
     def fake_vl_model(tier):
@@ -165,7 +166,39 @@ def test_visual_extractor_uses_structured_output(monkeypatch, tmp_path):
     assert doc_parser._extract_with_vl(str(image_path), "fallback") == _health_output(175)
     assert captured["tier"] == "fallback"
     assert captured["schema"] is doc_parser.HealthExtractionOutput
+    assert captured["kwargs"] == {"include_raw": True}
     assert captured["messages"][0].content[1]["type"] == "image"
+
+
+def test_visual_extractor_uses_valid_later_tool_call_when_tongyi_first_call_is_empty(
+    monkeypatch,
+    tmp_path,
+):
+    """Tongyi 空首 tool-call 后的有效 schema 参数仍须被 Pydantic 校验后使用。"""
+    image_path = tmp_path / "health.png"
+    image_path.write_bytes(b"image data")
+    raw = SimpleNamespace(
+        tool_calls=[
+            {"name": "HealthExtractionOutput", "args": {}},
+            {"name": "", "args": _health_data(175)},
+        ]
+    )
+
+    class FakeStructuredModel:
+        @staticmethod
+        def invoke(_messages):
+            return {"parsed": None, "raw": raw}
+
+    class FakeModel:
+        @staticmethod
+        def with_structured_output(schema, **kwargs):
+            assert schema is doc_parser.HealthExtractionOutput
+            assert kwargs == {"include_raw": True}
+            return FakeStructuredModel()
+
+    monkeypatch.setattr(doc_parser, "get_vl_model", lambda _tier: FakeModel())
+
+    assert doc_parser._extract_with_vl(str(image_path), "primary") == _health_output(175)
 
 
 def test_result_always_uses_the_unified_envelope():

@@ -10,6 +10,8 @@ from langchain_deepseek import ChatDeepSeek
 from app.utils.config_handler import get_models_config
 from app.core.settings import get_settings
 
+_DEEPSEEK_NON_THINKING_BODY = {"thinking": {"type": "disabled"}}
+
 
 def _get_dashscope_api_key() -> str:
     """从 Settings 获取 .env 中的 DashScope 密钥，并在缺失时给出明确错误。"""
@@ -36,7 +38,7 @@ def create_deepseek_chat_model(
     max_retries: int = 2,
     api_key: str | None = None,
 ) -> BaseChatModel:
-    """创建 DeepSeek 官方聊天模型，供主对话和 mem0 提取共用。"""
+    """创建非思考模式的 DeepSeek 聊天模型，供主对话和 mem0 提取共用。"""
     resolved_api_key = api_key.strip() if api_key is not None else _get_deepseek_api_key()
     if not resolved_api_key:
         raise EnvironmentError("缺少 .env 配置 DEEPSEEK_API_KEY，无法初始化聊天模型。")
@@ -47,6 +49,9 @@ def create_deepseek_chat_model(
         max_tokens=max_tokens,
         timeout=timeout,
         max_retries=max_retries,
+        # thinking mode 不支持 tool_choice，而结构化输出与 Agent 工具都依赖它。
+        extra_body=_DEEPSEEK_NON_THINKING_BODY,
+        use_responses_api=False,
     )
 
 
