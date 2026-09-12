@@ -1,10 +1,17 @@
 """结构化训练计划持久化的 API 测试，不依赖真实 LLM 或 Qdrant。"""
 
+from datetime import date
 from types import SimpleNamespace
+
+import pytest
 
 from app.api.routers import training_plans
 from app.schemas import WeeklyTrainingPlan
-from app.services.training_plan_service import TrainingPlanService
+from app.services.training_plan_service import (
+    PlanGenerationError,
+    TrainingPlanService,
+)
+from app.services.fitness_insights import FitnessSnapshot
 
 
 def _model_plan() -> dict:
@@ -107,3 +114,47 @@ def test_generate_plan_and_upsert_feedback(auth_client, monkeypatch):
     assert first.status_code == second.status_code == 200
     assert first.json()["data"]["id"] == second.json()["data"]["id"]
     assert second.json()["data"]["rpe"] == 7
+
+
+def test_structured_plan_failure_does_not_persist(monkeypatch):
+    """结构化输出调用失败时应转为生成异常，且不写入计划。"""
+
+    class FailingStructuredModel:
+        def with_structured_output(self, schema):
+            """模拟 schema 包装成功但模型调用失败。"""
+            assert schema is WeeklyTrainingPlan
+            return self
+
+        @staticmethod
+        def invoke(_messages):
+            """模拟模型不能产生合法契约。"""
+            raise ValueError("invalid structured output")
+
+    class RecordingDb:
+        def __init__(self):
+            self.added = []
+
+        def add(self, value):
+            """记录任何意外持久化操作。"""
+            self.added.append(value)
+
+    profile = SimpleNamespace(
+        age=28,
+        weight=70,
+        goal="健康管理",
+        weekly_days=3,
+        experience="初级",
+        injuries="[]",
+        preferences="[]",
+    )
+    service = TrainingPlanService(model=FailingStructuredModel())
+    monkeypatch.setattr(service, "_load_profile", lambda _db, _user_id: profile)
+    monkeypatch.setattr(service, "_fitness_snapshot", lambda _db, **_kwargs: FitnessSnapshot())
+    monkeypatch.setattr(service, "_recent_feedback", lambda _db, _user_id: [])
+    monkeypatch.setattr(service, "_retrieve_evidence", lambda *_args: ("证据", []))
+    db = RecordingDb()
+
+    with pytest.raises(PlanGenerationError, match="结构化训练计划"):
+        service.generate(db, user_id=1, week_start=date(2026, 9, 7))
+
+    assert db.added == []

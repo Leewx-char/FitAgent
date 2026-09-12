@@ -74,6 +74,46 @@ def test_rejects_success_output_without_health_data():
     assert messages == ["模型返回数据不符合健康数据契约"]
 
 
+def test_pdf_schema_failure_uses_existing_parse_failure_result(monkeypatch):
+    """文本 PDF 的结构化输出缺失指标时必须走既有失败路径。"""
+    monkeypatch.setattr(
+        doc_parser, "get_settings", lambda: SimpleNamespace(health_document_max_pages=20)
+    )
+    monkeypatch.setattr(
+        doc_parser,
+        "_extract_pdf_text_and_page_count",
+        lambda _path: ("身高检查结果" * 40, 1),
+    )
+    monkeypatch.setattr(
+        doc_parser,
+        "_extract_with_llm",
+        lambda _text: doc_parser.HealthExtractionOutput(code=0),
+    )
+
+    result = doc_parser.parse_pdf("report.pdf")
+
+    assert result == {
+        "code": doc_parser.HEALTH_CODE_PARSE_FAILED,
+        "messages": ["模型返回数据不符合健康数据契约"],
+        "data": None,
+    }
+
+
+def test_image_schema_failure_retries_fallback_then_returns_parse_failure(monkeypatch):
+    """主视觉和兜底视觉都失配时应维持统一解析失败结果。"""
+    monkeypatch.setattr(
+        doc_parser,
+        "_extract_with_vl",
+        lambda *_args: doc_parser.HealthExtractionOutput(code=0),
+    )
+
+    result = doc_parser.parse_image("health.png")
+
+    assert result["code"] == doc_parser.HEALTH_CODE_PARSE_FAILED
+    assert result["data"] is None
+    assert any("主模型识别失败" in message for message in result["messages"])
+
+
 def test_text_extractor_uses_structured_output(monkeypatch):
     """文本提取必须请求并消费 HealthExtractionOutput，而非解析模型文本。"""
     captured = {}
