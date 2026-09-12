@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Sequence
 
 from langchain_core.documents import Document
 from qdrant_client import QdrantClient, models
@@ -26,30 +26,6 @@ class ScoredChunk:
 
     document: Document
     score: float
-
-
-class VectorRepository(Protocol):
-    """RAG 服务使用的存储边界；第三方 SDK 类型不得越过此处。"""
-
-    def health(self) -> dict[str, int | str]:
-        """返回向量仓储的只读就绪状态摘要。"""
-        ...
-
-    def rebuild(self, chunks: list[IndexedChunk], dense_vectors: list[list[float]]) -> None:
-        """破坏性地重建 native hybrid collection。"""
-        ...
-
-    def hybrid_search(
-        self,
-        query: str,
-        dense_vector: list[float],
-        *,
-        limit: int,
-        candidate_limit: int,
-        source_filter: Sequence[str] | None = None,
-    ) -> list[ScoredChunk]:
-        """以 Qdrant 原生 RRF 执行 dense 与 BM25 混合检索。"""
-        ...
 
 
 def _source_filter(source_filter: Sequence[str] | None) -> models.Filter | None:

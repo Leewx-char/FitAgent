@@ -186,14 +186,6 @@ def _classify_intent_node(
     return {"route": route}
 
 
-def _empty_execution_node(
-    _state: ChatGraphState, runtime: Runtime[ChatRuntimeContext]
-) -> dict[str, JsonValue]:
-    """为后续真实执行器保留不产生状态更新的可注入桩。"""
-    del runtime
-    return {}
-
-
 async def _personalized_agent_node(
     state: ChatGraphState, runtime: Runtime[ChatRuntimeContext], config: RunnableConfig
 ) -> dict[str, JsonValue]:
