@@ -3,6 +3,7 @@ from operator import add, or_
 from types import SimpleNamespace
 from typing import Annotated, Any, Callable, Iterable, Iterator, cast
 from langchain.agents import AgentState, create_agent
+from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
@@ -49,18 +50,11 @@ TOOL_DISPLAY = {
 }
 
 
-def _merge_tool_call_count(current: int, update: int) -> int:
-    """合并同批工具的绝对预算序号，保留最大的已尝试次数。"""
-    return max(current, update)
-
-
 class PersonalizedAgentState(AgentState, total=False):
     """声明内层 Agent 在单次个性化执行中可读写的短期字段。"""
 
     retrieval_history: list[dict[str, object]]
     rag_evidence: Annotated[list[dict[str, object]], add]
-    tool_call_limit: int
-    tool_call_count: Annotated[int, _merge_tool_call_count]
     report: Annotated[bool, or_]
 
 
@@ -184,7 +178,18 @@ class ReactAgent:
                 get_fitness_summary,
                 trigger_report,
             ],
-            middleware=cast(Any, [monitor_tool, log_before_model, report_prompt_switch]),
+            middleware=cast(
+                Any,
+                [
+                    ToolCallLimitMiddleware(
+                        run_limit=self.max_tool_calls,
+                        exit_behavior="continue",
+                    ),
+                    monitor_tool,
+                    log_before_model,
+                    report_prompt_switch,
+                ],
+            ),
             state_schema=PersonalizedAgentState,
             context_schema=ChatRuntimeContext,
         )
@@ -211,8 +216,6 @@ class ReactAgent:
             "messages": state["messages"],
             "retrieval_history": retrieval_history,
             "rag_evidence": state["rag_evidence"],
-            "tool_call_limit": self.max_tool_calls,
-            "tool_call_count": state["tool_call_count"],
             "report": False,
         }
         events = []
@@ -295,7 +298,6 @@ class ReactAgent:
         output = {
             "retrieval_history": latest_state.get("retrieval_history", state["retrieval_history"]),
             "rag_evidence": latest_state.get("rag_evidence", state["rag_evidence"]),
-            "tool_call_count": latest_state.get("tool_call_count", state["tool_call_count"]),
             "events": events,
         }
         if not is_json_value(output):

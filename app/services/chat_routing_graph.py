@@ -44,7 +44,6 @@ class ChatGraphState(TypedDict):
     retrieval_history: list[dict[str, JsonValue]]
     route: Route | None
     rag_evidence: list[dict[str, JsonValue]]
-    tool_call_count: int
     events: list[dict[str, JsonValue]]
 
 
@@ -158,7 +157,6 @@ def build_initial_chat_state(messages: Iterable[Mapping[str, object]]) -> ChatGr
         "retrieval_history": [],
         "route": None,
         "rag_evidence": [],
-        "tool_call_count": 0,
         "events": [],
     }
 

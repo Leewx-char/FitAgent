@@ -16,6 +16,11 @@ def _health_data(height_cm: float) -> dict:
     }
 
 
+def _health_output(height_cm: float) -> doc_parser.HealthExtractionOutput:
+    """构造模型结构化输出使用的健康指标结果。"""
+    return doc_parser.HealthExtractionOutput.model_validate(_health_data(height_cm))
+
+
 def test_scanned_pdf_processes_every_page_and_retries_only_failed_page(monkeypatch):
     """验证扫描 PDF 逐页识别，且仅对失败页使用备用 DPI 重试。"""
     settings = SimpleNamespace(
@@ -32,9 +37,9 @@ def test_scanned_pdf_processes_every_page_and_retries_only_failed_page(monkeypat
         doc_parser,
         "_extract_with_vl",
         side_effect=[
-            _health_data(175),
-            {"code": 1002, "messages": ["识别失败"], "data": None},
-            _health_data(175),
+            _health_output(175),
+            doc_parser.HealthExtractionOutput(code=1002, messages=["识别失败"]),
+            _health_output(175),
         ],
     ) as extractor:
         result = doc_parser.parse_pdf("report.pdf")
@@ -60,15 +65,67 @@ def test_merge_conflicts_requires_user_choice():
     assert [candidate["page"] for candidate in conflicts["height_cm"]] == [1, 2]
 
 
-def test_rejects_model_result_without_unified_envelope():
-    """验证缺少统一响应信封的模型结果会被判定为解析失败。"""
-    code, data, messages = doc_parser._parse_model_result(
-        {"height_cm": {"value": 175, "unit": "cm"}}
-    )
+def test_rejects_success_output_without_health_data():
+    """成功状态但缺少 data 时应被判定为结构化契约失败。"""
+    code, data, messages = doc_parser._parse_model_result(doc_parser.HealthExtractionOutput(code=0))
 
     assert code == doc_parser.HEALTH_CODE_PARSE_FAILED
     assert data is None
-    assert messages == ["模型未返回可用结果"]
+    assert messages == ["模型返回数据不符合健康数据契约"]
+
+
+def test_text_extractor_uses_structured_output(monkeypatch):
+    """文本提取必须请求并消费 HealthExtractionOutput，而非解析模型文本。"""
+    captured = {}
+
+    class FakeStructuredModel:
+        @staticmethod
+        def invoke(messages):
+            captured["messages"] = messages
+            return _health_output(175)
+
+    class FakeModel:
+        @staticmethod
+        def with_structured_output(schema):
+            captured["schema"] = schema
+            return FakeStructuredModel()
+
+    monkeypatch.setattr(doc_parser, "get_chat_model", lambda: FakeModel())
+
+    assert doc_parser._extract_with_llm("身高 175 cm") == _health_output(175)
+    assert captured["schema"] is doc_parser.HealthExtractionOutput
+    assert captured["messages"][1]["content"].endswith("身高 175 cm")
+
+
+def test_visual_extractor_uses_structured_output(monkeypatch, tmp_path):
+    """主视觉与兜底视觉模型都必须使用同一输出契约。"""
+    captured = {}
+    image_path = tmp_path / "health.png"
+    image_path.write_bytes(b"image data")
+
+    class FakeStructuredModel:
+        @staticmethod
+        def invoke(messages):
+            captured["messages"] = messages
+            return _health_output(175)
+
+    class FakeModel:
+        @staticmethod
+        def with_structured_output(schema):
+            captured["schema"] = schema
+            return FakeStructuredModel()
+
+    def fake_vl_model(tier):
+        """记录模型层级并返回支持结构化输出的测试模型。"""
+        captured["tier"] = tier
+        return FakeModel()
+
+    monkeypatch.setattr(doc_parser, "get_vl_model", fake_vl_model)
+
+    assert doc_parser._extract_with_vl(str(image_path), "fallback") == _health_output(175)
+    assert captured["tier"] == "fallback"
+    assert captured["schema"] is doc_parser.HealthExtractionOutput
+    assert captured["messages"][0].content[1]["type"] == "image"
 
 
 def test_result_always_uses_the_unified_envelope():

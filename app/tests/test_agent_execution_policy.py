@@ -3,11 +3,12 @@
 from types import SimpleNamespace
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain.tools import tool
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 
-from app.services.middleware import _consume_tool_budget, _tool_argument_shape
+from app.services.middleware import _tool_argument_shape
 from app.services.chat_routing_graph import ChatRuntimeContext
 from app.services.react_agent import PersonalizedAgentState, ReactAgent
 from app.services.middleware import monitor_tool
@@ -53,7 +54,10 @@ def _invoke_parallel_tool_calls(tool_names: list[str], tool_limit: int):
             responses=[AIMessage(content="", tool_calls=tool_calls), AIMessage(content="完成")]
         ),
         tools=[tools[name] for name in tool_names],
-        middleware=[monitor_tool],
+        middleware=[
+            ToolCallLimitMiddleware(run_limit=tool_limit, exit_behavior="continue"),
+            monitor_tool,
+        ],
         state_schema=PersonalizedAgentState,
         context_schema=ChatRuntimeContext,
     )
@@ -62,8 +66,6 @@ def _invoke_parallel_tool_calls(tool_names: list[str], tool_limit: int):
             "messages": [{"role": "user", "content": "执行工具"}],
             "retrieval_history": [],
             "rag_evidence": [],
-            "tool_call_limit": tool_limit,
-            "tool_call_count": 0,
             "report": False,
         },
         context=ChatRuntimeContext(
@@ -99,28 +101,17 @@ def test_tool_audit_keeps_argument_shape_without_raw_user_value():
     assert "广州" not in str(shape)
 
 
-def test_tool_budget_blocks_only_calls_after_limit():
-    """验证调用预算在达到上限前放行，超限后的调用被拒绝。"""
-    state = {"tool_call_count": 0}
-
-    assert _consume_tool_budget(state, limit=2) == (True, 1, 2)
-    assert _consume_tool_budget(state, limit=2) == (True, 2, 2)
-    assert _consume_tool_budget(state, limit=2) == (False, 3, 2)
-
-
-def test_tool_budget_treats_invalid_counter_as_zero():
-    """损坏的图状态不能让工具中间件在预算检查时崩溃。"""
-    state = {"tool_call_count": object()}
-
-    assert _consume_tool_budget(state, limit=2) == (True, 1, 2)
-
-
 def test_create_agent_allows_two_parallel_tool_calls_without_count_conflict():
     """同一 AIMessage 的两个工具调用应分别计数且不会触发并发状态冲突。"""
     result, calls = _invoke_parallel_tool_calls(["first", "second"], tool_limit=2)
 
     assert set(calls) == {"first", "second"}
-    assert result["tool_call_count"] == 2
+    assert "tool_call_count" not in result
+    assert all(
+        message.status != "error"
+        for message in result["messages"]
+        if isinstance(message, ToolMessage)
+    )
 
 
 def test_create_agent_rejects_parallel_tool_calls_after_configured_limit():
@@ -128,9 +119,12 @@ def test_create_agent_rejects_parallel_tool_calls_after_configured_limit():
     result, calls = _invoke_parallel_tool_calls(["first", "second", "third"], tool_limit=2)
 
     assert set(calls) == {"first", "second"}
-    assert result["tool_call_count"] == 3
+    assert "tool_call_count" not in result
     tool_messages = [message for message in result["messages"] if isinstance(message, ToolMessage)]
-    assert any("达到上限" in message.content for message in tool_messages)
+    limit_messages = [message for message in tool_messages if message.status == "error"]
+    assert len(limit_messages) == 1
+    assert limit_messages[0].tool_call_id == "call-3"
+    assert "Tool call limit exceeded" in str(limit_messages[0].content)
 
 
 def test_execute_stream_passes_request_context_to_routing_graph():

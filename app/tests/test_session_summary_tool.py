@@ -20,7 +20,7 @@ def _tool_runtime(*, user_id=None, session_id=None, call_id="summary"):
     if session_id is not None:
         context.session_id = session_id
     return ToolRuntime(
-        state={"retrieval_history": [], "rag_evidence": [], "tool_call_count": 0},
+        state={"retrieval_history": [], "rag_evidence": []},
         context=context,
         config={},
         stream_writer=lambda _event: None,
@@ -82,7 +82,7 @@ def test_summary_tool_with_explicit_null_session_id_does_not_build_dependencies(
     monkeypatch.setattr(agent_tools, "get_chat_model", unexpected_call)
     monkeypatch.setattr(agent_tools, "SessionSummaryService", unexpected_call)
     runtime = ToolRuntime(
-        state={"retrieval_history": [], "rag_evidence": [], "tool_call_count": 0},
+        state={"retrieval_history": [], "rag_evidence": []},
         context=SimpleNamespace(user_id=23, session_id=None),
         config={},
         stream_writer=lambda _event: None,

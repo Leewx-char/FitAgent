@@ -39,7 +39,7 @@ def _tool_runtime(*, user_id, history, call_id):
         dependencies=SimpleNamespace(max_tool_calls=4),
     )
     return ToolRuntime(
-        state={"retrieval_history": history, "rag_evidence": [], "tool_call_count": 0},
+        state={"retrieval_history": history, "rag_evidence": []},
         context=context,
         config={},
         stream_writer=lambda _event: None,
@@ -68,7 +68,6 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
                 {
                     **input_state,
                     "rag_evidence": [],
-                    "tool_call_count": 0,
                 },
             )
 
@@ -105,7 +104,7 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
         {"role": "user", "content": "我之前练过深蹲。"},
         {"role": "assistant", "content": "注意膝盖方向。"},
     ]
-    assert captured["input"]["tool_call_limit"] == 4
+    assert "tool_call_limit" not in captured["input"]
     assert "user_id" not in captured["input"]
     assert "city" not in captured["input"]
     assert not hasattr(runtime_context, "trace")
@@ -296,7 +295,6 @@ def test_personalized_agent_keeps_tool_and_evidence_events():
                 {
                     **input_state,
                     "rag_evidence": [{"rank": 1, "evidence_id": "guide.md#1"}],
-                    "tool_call_count": 1,
                 },
             )
             yield (
@@ -325,7 +323,6 @@ def test_personalized_agent_keeps_tool_and_evidence_events():
         {"type": "evidence", "items": [{"rank": 1, "evidence_id": "guide.md#1"}]},
         {"type": "text", "content": "膝盖跟随脚尖。"},
     ]
-    assert result["tool_call_count"] == 1
 
 
 def test_personalized_agent_emits_evidence_for_each_rag_call():
@@ -356,7 +353,6 @@ def test_personalized_agent_emits_evidence_for_each_rag_call():
                 {
                     **input_state,
                     "rag_evidence": [{"rank": 1, "evidence_id": "first.md#1"}],
-                    "tool_call_count": 1,
                 },
             )
             yield (
@@ -384,7 +380,6 @@ def test_personalized_agent_emits_evidence_for_each_rag_call():
                         {"rank": 1, "evidence_id": "first.md#1"},
                         {"rank": 1, "evidence_id": "second.md#1"},
                     ],
-                    "tool_call_count": 2,
                 },
             )
 
@@ -437,16 +432,15 @@ def test_personalized_graph_rejects_non_json_inner_state():
         )
 
 
-def test_monitor_tool_uses_personalized_executor_limit_when_dependencies_only_hold_executor():
-    """中间件应从请求执行器读取非默认工具上限，而非退回到六次。"""
-    executor = SimpleNamespace(max_tool_calls=2)
-    state = {"tool_call_count": 0}
+def test_monitor_tool_preserves_successful_tool_result():
+    """自定义中间件只负责审计与异常隔离，不再承担额度计数。"""
+    state = {}
     runtime = ToolRuntime(
         state=state,
         context=ChatRuntimeContext(
             user_id=5,
             session_id="session-5",
-            dependencies=SimpleNamespace(personalized_agent_executor=executor),
+            dependencies=SimpleNamespace(),
         ),
         config={},
         stream_writer=lambda _event: None,
@@ -467,11 +461,7 @@ def test_monitor_tool_uses_personalized_executor_limit_when_dependencies_only_ho
         calls.append(tool_request.tool_call["id"])
         return ToolMessage(content="ok", tool_call_id=tool_request.tool_call["id"])
 
-    first = monitor_tool.wrap_tool_call(request("call-1"), handler)
-    second = monitor_tool.wrap_tool_call(request("call-2"), handler)
-    rejected = monitor_tool.wrap_tool_call(request("call-3"), handler)
+    result = monitor_tool.wrap_tool_call(request("call-1"), handler)
 
-    assert first.update["tool_call_count"] == 1
-    assert second.update["tool_call_count"] == 2
-    assert rejected.update["tool_call_count"] == 3
-    assert calls == ["call-1", "call-2"]
+    assert result.content == "ok"
+    assert calls == ["call-1"]

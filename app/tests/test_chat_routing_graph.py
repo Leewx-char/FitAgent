@@ -92,7 +92,6 @@ def test_build_initial_state_and_runtime_have_no_facts_summary_or_city():
         "retrieval_history": [],
         "route": None,
         "rag_evidence": [],
-        "tool_call_count": 0,
         "events": [],
     }
     assert not hasattr(context, "city")

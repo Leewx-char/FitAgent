@@ -7,25 +7,7 @@
 2. 未提及的字段使用 null；
 3. 文档与这些健康指标无关时，返回 code=1001；
 4. 文档无法阅读或无法提取时，返回 code=1002；
-5. 严格输出 JSON，不要附加 Markdown、解释或其他文本。
+5. 通过提供的结构化字段返回 code、messages 与 data；不要在指标之外给出解释文字。
 
-统一输出格式：
-{
-  "code": 0,
-  "messages": [],
-  "data": {
-    "height_cm": {"value": null, "unit": "cm"},
-    "weight_kg": {"value": null, "unit": "kg"},
-    "bmi": {"value": null, "unit": ""},
-    "body_fat": {"value": null, "unit": "%"},
-    "heart_rate": {"value": null, "unit": "bpm"},
-    "blood_pressure": {"value": null, "unit": ""},
-    "blood_sugar": {"value": null, "unit": "mmol/L"},
-    "cholesterol": {"value": null, "unit": "mmol/L"},
-    "alt": {"value": null, "unit": "U/L"},
-    "uric_acid": {"value": null, "unit": "μmol/L"}
-  }
-}
-
-当 code 不是 0 时，data 必须为 null，messages 放置简短原因，例如：
-{"code": 1001, "messages": ["未识别到支持的健康指标"], "data": null}
+字段单位优先保留原始文档；文档未标注单位时可使用常见单位：身高 cm、体重 kg、体脂 %、心率 bpm、血糖/胆固醇 mmol/L、ALT U/L、尿酸 μmol/L。
+当 code 为 0 时 data 填写提取到的指标；当 code 不是 0 时 data 必须为空，messages 填写简短原因。

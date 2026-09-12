@@ -1,9 +1,9 @@
 """结构化训练计划持久化的 API 测试，不依赖真实 LLM 或 Qdrant。"""
 
-import json
 from types import SimpleNamespace
 
 from app.api.routers import training_plans
+from app.schemas import WeeklyTrainingPlan
 from app.services.training_plan_service import TrainingPlanService
 
 
@@ -50,9 +50,17 @@ def _model_plan() -> dict:
 
 
 class FakePlanModel:
+    """提供经过结构化输出包装的受控训练计划。"""
+
+    def with_structured_output(self, schema):
+        """确认服务向模型声明周计划 Pydantic 契约。"""
+        assert schema is WeeklyTrainingPlan
+        return self
+
     def invoke(self, messages):
-        """忽略提示消息并返回序列化的受控周计划。"""
-        return SimpleNamespace(content=json.dumps(_model_plan(), ensure_ascii=False))
+        """忽略提示消息并返回已校验的受控周计划。"""
+        del messages
+        return WeeklyTrainingPlan.model_validate(_model_plan())
 
 
 class FakeRagService:

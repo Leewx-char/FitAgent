@@ -1,9 +1,7 @@
 """解析健康文档；内部状态码只用于控制识别流程，不暴露给 HTTP 接口。"""
 
 import base64
-import json
 import os
-import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -20,7 +18,7 @@ except ImportError as exc:  # pragma: no cover - 取决于运行所在操作系�
 
 from langchain_core.messages import HumanMessage
 from pdf2image import convert_from_path
-from pydantic import ValidationError
+from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 from app.core.settings import get_settings
@@ -43,6 +41,14 @@ MAX_PDF_TEXT_CHARACTERS = 20_000
 ALLOWED_MIMES = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
 PDF_TEXT_THRESHOLD = 200
 METRIC_FIELDS = tuple(HealthDataSchema.model_fields)
+
+
+class HealthExtractionOutput(BaseModel):
+    """约束文本与视觉模型返回的健康指标提取结果。"""
+
+    code: int
+    messages: list[str] = Field(default_factory=list)
+    data: HealthDataSchema | None = None
 
 
 def _result(
@@ -85,50 +91,20 @@ def _save_temp(file_bytes: bytes, safe_name: str) -> Path:
     return path
 
 
-def _parse_llm_json(content: str) -> dict[str, Any]:
-    """从模型响应中提取一个 JSON 对象，绝不执行任意内容。"""
-
-    code_block = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
-    if code_block:
-        content = code_block.group(1).strip()
-    try:
-        parsed = json.loads(content)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    object_match = re.search(r"\{[\s\S]*\}", content)
-    if object_match:
-        try:
-            parsed = json.loads(object_match.group())
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-    return _result(HEALTH_CODE_PARSE_FAILED, ["AI 返回结果无法解析为 JSON"])
-
-
-def _response_content(response: Any) -> str:
-    """将 LangChain 响应内容统一转换为纯文本。"""
-
-    content = response.content
-    if isinstance(content, list):
-        return "".join(item if isinstance(item, str) else item.get("text", "") for item in content)
-    return str(content)
-
-
-def _extract_with_llm(text: str) -> dict[str, Any]:
+def _extract_with_llm(text: str) -> HealthExtractionOutput:
     """使用常规聊天模型从可选中的 PDF 文字中提取结构化字段。"""
 
     messages = [
         {"role": "system", "content": load_health_extract_prompts()},
         {"role": "user", "content": f"请从以下文档内容中提取健康数据：\n\n{text}"},
     ]
-    return _parse_llm_json(_response_content(get_chat_model().invoke(messages)))
+    result = get_chat_model().with_structured_output(HealthExtractionOutput).invoke(messages)
+    if not isinstance(result, HealthExtractionOutput):
+        raise TypeError("文本模型未返回 HealthExtractionOutput")
+    return result
 
 
-def _extract_with_vl(image_path: str, tier: str) -> dict[str, Any]:
+def _extract_with_vl(image_path: str, tier: str) -> HealthExtractionOutput:
     """使用指定层级的视觉模型提取单张页面。"""
 
     with open(image_path, "rb") as image_file:
@@ -156,7 +132,10 @@ def _extract_with_vl(image_path: str, tier: str) -> dict[str, Any]:
             ]
         )
     ]
-    return _parse_llm_json(_response_content(get_vl_model(tier).invoke(messages)))
+    result = get_vl_model(tier).with_structured_output(HealthExtractionOutput).invoke(messages)
+    if not isinstance(result, HealthExtractionOutput):
+        raise TypeError("视觉模型未返回 HealthExtractionOutput")
+    return result
 
 
 def _normalise_messages(value: Any) -> list[str]:
@@ -178,20 +157,18 @@ def _has_measurement(data: HealthDataSchema) -> bool:
     )
 
 
-def _parse_model_result(result: dict[str, Any]) -> tuple[int, HealthDataSchema | None, list[str]]:
+def _parse_model_result(
+    result: HealthExtractionOutput,
+) -> tuple[int, HealthDataSchema | None, list[str]]:
     """校验统一模型结果并返回状态码、指标和消息。"""
 
-    try:
-        code = int(result.get("code", HEALTH_CODE_PARSE_FAILED))
-    except (TypeError, ValueError):
-        code = HEALTH_CODE_PARSE_FAILED
-    messages = _normalise_messages(result.get("messages"))
+    code = result.code
+    messages = _normalise_messages(result.messages)
     if code != HEALTH_CODE_OK:
         return code, None, messages or ["模型未返回可用结果"]
 
-    try:
-        data = HealthDataSchema.model_validate(result.get("data"))
-    except ValidationError:
+    data = result.data
+    if data is None:
         return HEALTH_CODE_PARSE_FAILED, None, ["模型返回数据不符合健康数据契约"]
     if not _has_measurement(data):
         return HEALTH_CODE_PARSE_FAILED, None, ["未识别到可确认的健康指标"]

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -15,7 +14,9 @@ from sqlalchemy.orm import Session as DBSession
 from app.models import TrainingFeedback, TrainingPlan, UserProfile
 from app.schemas import TrainingFeedbackCreate, WeeklyTrainingPlan
 from app.services.factory import get_chat_model
-from app.services.fitness_insights import FitnessSnapshot, load_fitness_snapshot
+from app.services.coros_live_gateway import CorosLiveGateway, CorosMcpError, get_coros_live_gateway
+from app.services.coros_oauth import CorosNotConnectedError, CorosReconnectionRequiredError
+from app.services.fitness_insights import FitnessSnapshot, build_fitness_snapshot
 from app.services.rag_service import RagSummarizeService
 from app.utils.prompt_loader import load_training_plan_prompt
 
@@ -34,21 +35,6 @@ def _parse_json_field(value: str | dict[str, Any] | list[Any] | None, default: o
         return json.loads(value)
     except (TypeError, json.JSONDecodeError):
         return default
-
-
-def _extract_json(content: object) -> dict[str, Any]:
-    """接受普通或代码围栏 JSON，并拒绝非对象形式的模型响应。"""
-
-    raw = str(content or "").strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
-    try:
-        result = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise PlanGenerationError("模型未返回有效的结构化训练计划，请重试") from error
-    if not isinstance(result, dict):
-        raise PlanGenerationError("模型返回的训练计划格式无效，请重试")
-    return result
 
 
 @dataclass(frozen=True)
@@ -118,10 +104,17 @@ class TrainingSafetyPolicy:
 class TrainingPlanService:
     """编排检索、受约束的模型生成与持久化训练反馈状态。"""
 
-    def __init__(self, *, model=None, rag_service: RagSummarizeService | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model=None,
+        rag_service: RagSummarizeService | None = None,
+        coros_gateway: CorosLiveGateway | None = None,
+    ) -> None:
         """接收可注入模型和 RAG 服务，便于测试与替换。"""
         self._model = model
         self._rag_service = rag_service
+        self._coros_gateway = coros_gateway
 
     @property
     def model(self):
@@ -132,6 +125,38 @@ class TrainingPlanService:
     def rag_service(self) -> RagSummarizeService:
         """返回注入的 RAG 服务或创建默认服务。"""
         return self._rag_service or RagSummarizeService()
+
+    @property
+    def coros_gateway(self) -> CorosLiveGateway:
+        """返回可替换的实时运动数据 Gateway。"""
+
+        return self._coros_gateway or get_coros_live_gateway()
+
+    def _fitness_snapshot(self, db: DBSession, *, user_id: int) -> FitnessSnapshot:
+        """连接后必须使用实时数据；未连接时才允许退回画像与知识库路径。"""
+
+        end_date = date.today()
+        start_date = end_date - timedelta(weeks=4)
+        try:
+            live_data = self.coros_gateway.fetch_snapshot(
+                db,
+                user_id=user_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except CorosNotConnectedError:
+            return FitnessSnapshot()
+        except (CorosMcpError, CorosReconnectionRequiredError) as error:
+            raise PlanGenerationError(
+                "COROS 已连接但实时运动数据暂不可用，无法安全生成训练计划，请稍后重试"
+            ) from error
+        return build_fitness_snapshot(
+            daily_records=live_data.daily_metrics,
+            sleep_records=live_data.sleep_records,
+            activities=live_data.activities,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     @staticmethod
     def _load_profile(db: DBSession, user_id: int) -> UserProfile:
@@ -212,7 +237,7 @@ class TrainingPlanService:
     def generate(self, db: DBSession, *, user_id: int, week_start: date) -> TrainingPlan:
         """生成并暂存新周计划，同时归档该周原有效版本。"""
         profile = self._load_profile(db, user_id)
-        snapshot = load_fitness_snapshot(db, user_id=user_id)
+        snapshot = self._fitness_snapshot(db, user_id=user_id)
         feedback = self._recent_feedback(db, user_id)
         safety = TrainingSafetyPolicy.assess(profile, snapshot, feedback)
         evidence_context, evidence_ids = self._retrieve_evidence(profile, safety)
@@ -233,15 +258,16 @@ class TrainingPlanService:
             "available_evidence_ids": evidence_ids,
             "retrieved_evidence": evidence_context,
         }
-        response = self.model.invoke(
-            [
-                SystemMessage(content=load_training_plan_prompt()),
-                HumanMessage(content=json.dumps(user_context, ensure_ascii=False)),
-            ]
-        )
-        plan = WeeklyTrainingPlan.model_validate(
-            _extract_json(getattr(response, "content", response))
-        )
+        messages = [
+            SystemMessage(content=load_training_plan_prompt()),
+            HumanMessage(content=json.dumps(user_context, ensure_ascii=False)),
+        ]
+        try:
+            plan = self.model.with_structured_output(WeeklyTrainingPlan).invoke(messages)
+        except Exception as error:
+            raise PlanGenerationError("模型未返回有效的结构化训练计划，请重试") from error
+        if not isinstance(plan, WeeklyTrainingPlan):
+            raise PlanGenerationError("模型返回的训练计划格式无效，请重试")
         self._validate_plan(
             plan,
             weekly_days=profile.weekly_days,

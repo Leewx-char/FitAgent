@@ -1,5 +1,12 @@
 from unittest.mock import patch
 
+from app.services.doc_parser import HealthExtractionOutput
+
+
+def _structured_health_output(data):
+    """将测试健康数据包装为模型实际返回的结构化契约。"""
+    return HealthExtractionOutput.model_validate(data)
+
 
 class TestUploadHealthDoc:
     def test_upload_without_auth(self, anon_client, image_file):
@@ -26,7 +33,10 @@ class TestUploadHealthDoc:
 
     def test_upload_image_success(self, client, image_file, mock_health_data):
         """验证图片上传调用视觉解析并返回标准健康指标。"""
-        with patch("app.services.doc_parser._extract_with_vl", return_value=mock_health_data):
+        with patch(
+            "app.services.doc_parser._extract_with_vl",
+            return_value=_structured_health_output(mock_health_data),
+        ):
             with open(image_file, "rb") as f:
                 response = client.post(
                     "/api/upload/health-doc",
@@ -43,7 +53,10 @@ class TestUploadHealthDoc:
 
     def test_upload_text_pdf_success(self, client, text_pdf, mock_health_data):
         """验证文本型 PDF 上传调用文本解析并返回健康数据。"""
-        with patch("app.services.doc_parser._extract_with_llm", return_value=mock_health_data):
+        with patch(
+            "app.services.doc_parser._extract_with_llm",
+            return_value=_structured_health_output(mock_health_data),
+        ):
             with open(text_pdf, "rb") as f:
                 response = client.post(
                     "/api/upload/health-doc",
