@@ -140,12 +140,14 @@ def coros_mock(auth_client):
 def agent_mock(auth_client):
     """override get_agent，返回 mock ReactAgent。
     execute_stream 返回固定 SSE 事件序列，避免真调 LLM。"""
+
+    async def stream_events():
+        """生成默认的异步 Agent 事件。"""
+
+        yield '{"type": "text", "content": "你好，我是健身助手"}'
+
     mock = MagicMock()
-    mock.execute_stream.return_value = iter(
-        [
-            '{"type": "text", "content": "你好，我是健身助手"}',
-        ]
-    )
+    mock.execute_stream.side_effect = lambda *_args, **_kwargs: stream_events()
     app.dependency_overrides[get_agent] = lambda: mock
     yield mock
     app.dependency_overrides.pop(get_agent, None)

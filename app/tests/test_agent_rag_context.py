@@ -1,5 +1,6 @@
 """Agent 知识库工具的原始查询与证据传递测试。"""
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -110,10 +111,10 @@ def test_direct_rag_graph_retrieves_latest_user_without_forwarding_history():
         """提供无需真实模型的固定文本流。"""
 
         @staticmethod
-        def stream(_messages, config=None):
+        async def astream(_messages, config=None):
             """返回带证据标记的固定回答。"""
             del config
-            return [SimpleNamespace(content="膝盖跟随脚尖。[证据:1]")]
+            yield SimpleNamespace(content="膝盖跟随脚尖。[证据:1]")
 
     executor = react_agent.DirectRagExecutor(
         model=FakeModel(),
@@ -121,19 +122,21 @@ def test_direct_rag_graph_retrieves_latest_user_without_forwarding_history():
         evidence_builder=lambda _result: [{"rank": 1, "evidence_id": "guide.md#1"}],
     )
     graph = build_chat_routing_graph(classifier=FakeIntentClassifier())
-    result = graph.invoke(
-        build_initial_chat_state(
-            messages=[
-                {"role": "user", "content": "先说深蹲。"},
-                {"role": "assistant", "content": "好的。"},
-                {"role": "user", "content": "那膝盖呢？"},
-                {"role": "assistant", "content": "我先想一下。"},
-            ]
-        ),
-        context=ChatRuntimeContext(
-            user_id=1,
-            session_id="session-1",
-            dependencies=SimpleNamespace(direct_rag_executor=executor),
+    result = asyncio.run(
+        graph.ainvoke(
+            build_initial_chat_state(
+                messages=[
+                    {"role": "user", "content": "先说深蹲。"},
+                    {"role": "assistant", "content": "好的。"},
+                    {"role": "user", "content": "那膝盖呢？"},
+                    {"role": "assistant", "content": "我先想一下。"},
+                ]
+            ),
+            context=ChatRuntimeContext(
+                user_id=1,
+                session_id="session-1",
+                dependencies=SimpleNamespace(direct_rag_executor=executor),
+            ),
         ),
     )
 

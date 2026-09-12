@@ -194,7 +194,7 @@ def _empty_execution_node(
     return {}
 
 
-def _personalized_agent_node(
+async def _personalized_agent_node(
     state: ChatGraphState, runtime: Runtime[ChatRuntimeContext], config: RunnableConfig
 ) -> dict[str, JsonValue]:
     """复用内层 Agent 的工具循环，并保留本次运行生成的短期产物。"""
@@ -202,14 +202,14 @@ def _personalized_agent_node(
     timing = _latency_tracker(runtime)
     if timing is not None:
         timing.mark("agent.personalized_started")
-        return executor.stream_personalized_events(
+        return await executor.astream_personalized_events(
             state,
             runtime.context,
             stream_writer=get_stream_writer(),
             config=config,
             timing=timing,
         )
-    return executor.stream_personalized_events(
+    return await executor.astream_personalized_events(
         state,
         runtime.context,
         stream_writer=get_stream_writer(),
@@ -217,7 +217,7 @@ def _personalized_agent_node(
     )
 
 
-def _direct_rag_node(
+async def _direct_rag_node(
     state: ChatGraphState, runtime: Runtime[ChatRuntimeContext], config: RunnableConfig
 ) -> dict[str, JsonValue]:
     """运行请求上下文中的直接检索执行器并写回短期产物。"""
@@ -232,7 +232,7 @@ def _direct_rag_node(
     if timing is not None:
         timing.mark("agent.direct_rag_started")
         stream_arguments["timing"] = timing
-    for event in executor.stream(**stream_arguments):
+    async for event in executor.astream(**stream_arguments):
         if not is_json_value(event):
             raise ValueError("直接检索事件包含不可序列化值")
         writer(event)

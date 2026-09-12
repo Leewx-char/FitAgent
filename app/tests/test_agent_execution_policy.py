@@ -1,5 +1,6 @@
 """Agent 工具执行防护栏的无外部依赖测试。"""
 
+import asyncio
 from types import SimpleNamespace
 
 from langchain.agents import create_agent
@@ -133,10 +134,11 @@ def test_execute_stream_passes_request_context_to_routing_graph():
 
     class FakeGraph:
         @staticmethod
-        def stream(_input, **kwargs):
+        async def astream(_input, **kwargs):
             """记录 LangGraph 流式调用参数并返回空事件序列。"""
             captured.update(kwargs)
-            return iter(())
+            if False:
+                yield None
 
     agent = object.__new__(ReactAgent)
     agent.direct_rag_executor = object()
@@ -145,9 +147,11 @@ def test_execute_stream_passes_request_context_to_routing_graph():
     agent.max_tool_calls = 4
 
     assert (
-        list(
-            agent.execute_stream(
-                [{"role": "user", "content": "你好"}], user_id=7, session_id="session-7"
+        asyncio.run(
+            _collect(
+                agent.execute_stream(
+                    [{"role": "user", "content": "你好"}], user_id=7, session_id="session-7"
+                )
             )
         )
         == []
@@ -156,3 +160,9 @@ def test_execute_stream_passes_request_context_to_routing_graph():
     assert captured["context"].user_id == 7
     assert captured["context"].session_id == "session-7"
     assert captured["context"].dependencies.max_tool_calls == 4
+
+
+async def _collect(stream):
+    """收集异步公开流中的所有事件。"""
+
+    return [item async for item in stream]

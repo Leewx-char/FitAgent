@@ -11,6 +11,13 @@ from langchain_core.runnables import RunnableLambda
 from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 
 
+async def _stream_events(events):
+    """将测试事件转换为可重复消费的异步生成器。"""
+
+    for event in events:
+        yield event
+
+
 class TestChat:
     def test_sse_saves_collected_question_answer_and_status(self, monkeypatch):
         """成功流结束后应将问题、回答和 Collector 交给仓储。"""
@@ -21,11 +28,11 @@ class TestChat:
             captured_config = None
 
             @classmethod
-            def execute_stream(cls, _messages, **kwargs):
+            async def execute_stream(cls, _messages, **kwargs):
                 """通过本地 Runnable 消费回调配置并输出固定文本事件。"""
                 cls.captured_config = kwargs["config"]
                 RunnableLambda(lambda _input: "已执行").invoke({}, config=cls.captured_config)
-                return iter(['{"type": "text", "content": "膝盖跟随脚尖。"}'])
+                yield '{"type": "text", "content": "膝盖跟随脚尖。"}'
 
         class FakeDb:
             """提供 SSE 收尾所需的最小数据库接口。"""
@@ -92,9 +99,9 @@ class TestChat:
             """提供固定文本事件的最小流式 Agent。"""
 
             @staticmethod
-            def execute_stream(_messages, **_kwargs):
+            async def execute_stream(_messages, **_kwargs):
                 """输出一段成功的文本事件。"""
-                return iter(['{"type": "text", "content": "保持呼吸。"}'])
+                yield '{"type": "text", "content": "保持呼吸。"}'
 
         class FakeDb:
             """提供 SSE 收尾所需的最小数据库接口。"""
@@ -190,7 +197,7 @@ class TestChat:
             """先产生工具事件，再模拟检索阶段失败。"""
 
             @staticmethod
-            def stream(**_kwargs):
+            async def astream(**_kwargs):
                 """生成可消费的首个事件后抛出异常。"""
                 yield {"type": "tool", "name": "检索知识库"}
                 raise RuntimeError("retrieval failed")
@@ -256,7 +263,7 @@ class TestChat:
 
     def test_chat_forwards_rag_evidence_cards(self, auth_client, agent_mock):
         """RAG 证据事件必须穿过聊天路由，前端才能渲染来源卡片。"""
-        agent_mock.execute_stream.return_value = iter(
+        agent_mock.execute_stream.side_effect = lambda *_args, **_kwargs: _stream_events(
             [
                 '{"type": "tool", "name": "检索知识库"}',
                 (
@@ -304,8 +311,8 @@ class TestChat:
     def test_chat_rate_limit(self, auth_client, agent_mock):
         """同一用户超过 20/分钟 → 触发限流返回 429。
         每个 auth_client 是独立新用户（独立限流桶），不影响其他测试。"""
-        # execute_stream 会被多次调用，每次返回新的空迭代器，避免迭代器耗尽
-        agent_mock.execute_stream.side_effect = lambda *a, **k: iter([])
+        # execute_stream 会被多次调用，每次返回新的空异步迭代器，避免迭代器耗尽
+        agent_mock.execute_stream.side_effect = lambda *a, **k: _stream_events([])
         responses = [auth_client.post("/api/chat", json={"message": f"msg{i}"}) for i in range(21)]
         statuses = [response.status_code for response in responses]
         assert statuses[:20] == [200] * 20  # 前 20 次放行
@@ -321,7 +328,7 @@ class TestChat:
     ):
         """第 11 次请求前已有 21 条消息时只把最近 20 条原文交给 Agent。"""
 
-        agent_mock.execute_stream.side_effect = lambda *args, **kwargs: iter(
+        agent_mock.execute_stream.side_effect = lambda *args, **kwargs: _stream_events(
             ['{"type": "text", "content": "ok"}']
         )
         session_id = ""
@@ -344,7 +351,7 @@ class TestChat:
         """长期记忆提取必须在回答流结束后执行，不能阻塞模型首字。"""
         call_order = []
 
-        def stream_response(*_args, **_kwargs):
+        async def stream_response(*_args, **_kwargs):
             call_order.append("model")
             yield '{"type": "text", "content": "已生成回答"}'
             call_order.append("model_completed")

@@ -1,7 +1,8 @@
 import json
+import asyncio
 from operator import add, or_
 from types import SimpleNamespace
-from typing import Annotated, Any, Callable, Iterable, Iterator, cast
+from typing import Annotated, Any, AsyncIterator, Callable, Iterable, cast
 from langchain.agents import AgentState, create_agent
 from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain_core.language_models import BaseChatModel
@@ -95,15 +96,15 @@ class DirectRagExecutor:
             )
         return str(content or "")
 
-    def stream(
+    async def astream(
         self,
         *,
         query: str,
         history: list[dict],
         config: RunnableConfig | None = None,
         timing: ChatLatencyTracker | None = None,
-    ) -> Iterator[dict]:
-        """执行直接检索并让调用配置贯穿检索与模型流。"""
+    ) -> AsyncIterator[dict]:
+        """异步执行直接检索并让调用配置贯穿检索与模型流。"""
         if timing is not None:
             timing.mark("direct_rag.started")
         yield {"type": "tool", "name": TOOL_DISPLAY["rag_summarize"]}
@@ -112,11 +113,15 @@ class DirectRagExecutor:
             payload["timing"] = timing
             with timing.span("direct_rag.rag_context"):
                 rag_context = cast(
-                    RagContext, self._rag_context_runnable.invoke(payload, config=config)
+                    RagContext,
+                    await asyncio.to_thread(
+                        self._rag_context_runnable.invoke, payload, config=config
+                    ),
                 )
         else:
             rag_context = cast(
-                RagContext, self._rag_context_runnable.invoke(payload, config=config)
+                RagContext,
+                await asyncio.to_thread(self._rag_context_runnable.invoke, payload, config=config),
             )
         cards = self._evidence_builder(rag_context.result)
         if cards:
@@ -132,7 +137,7 @@ class DirectRagExecutor:
         if timing is not None:
             timing.mark("direct_rag.model_stream_started")
         try:
-            for chunk in self._model.stream(
+            async for chunk in self._model.astream(
                 [("system", load_system_prompts()), ("human", direct_prompt)], config=config
             ):
                 content = self._content_to_text(getattr(chunk, "content", chunk))
@@ -197,7 +202,7 @@ class ReactAgent:
             classifier=StructuredOutputIntentClassifier(self.model)
         )
 
-    def stream_personalized_events(
+    async def astream_personalized_events(
         self,
         state: ChatGraphState,
         context: ChatRuntimeContext,
@@ -236,7 +241,7 @@ class ReactAgent:
         if timing is not None:
             timing.mark("agent.personalized_model_stream_started")
         try:
-            for stream_mode, payload in self.agent.stream(
+            async for stream_mode, payload in self.agent.astream(
                 input_state,
                 stream_mode=["messages", "values"],
                 context=context,
@@ -316,7 +321,7 @@ class ReactAgent:
             normalized.append({"role": role, "content": content})
         return normalized
 
-    def execute_stream(
+    async def execute_stream(
         self,
         messages: list[dict],
         user_id: int | None = None,
@@ -339,7 +344,7 @@ class ReactAgent:
                 latency_tracker=timing,
             ),
         )
-        for stream_mode, event in self.routing_graph.stream(
+        async for stream_mode, event in self.routing_graph.astream(
             initial_state,
             context=runtime_context,
             stream_mode=["custom", "values"],
@@ -350,7 +355,14 @@ class ReactAgent:
 
 
 if __name__ == "__main__":
-    agent = ReactAgent()
-    res = agent.execute_stream([{"role": "user", "content": "我想减脂，应该怎么练？"}])
-    for chunk in res:
-        print(chunk, end="", flush=True)
+
+    async def _main() -> None:
+        """以异步方式演示聊天事件流。"""
+
+        agent = ReactAgent()
+        async for chunk in agent.execute_stream(
+            [{"role": "user", "content": "我想减脂，应该怎么练？"}]
+        ):
+            print(chunk, end="", flush=True)
+
+    asyncio.run(_main())

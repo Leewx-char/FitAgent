@@ -1,5 +1,6 @@
 """个性化 Agent 请求上下文与短期产物隔离测试。"""
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -54,7 +55,7 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
 
     class FakeInnerAgent:
         @staticmethod
-        def stream(input_state, **kwargs):
+        async def astream(input_state, **kwargs):
             captured.update({"input": input_state, **kwargs})
             yield (
                 "messages",
@@ -83,16 +84,18 @@ def test_personalized_graph_branch_invokes_existing_agent_with_runtime_context()
     graph = build_chat_routing_graph(classifier=PersonalizedClassifier())
     collector = RunCollectorCallbackHandler()
 
-    result = graph.invoke(
-        build_initial_chat_state(
-            messages=[
-                {"role": "user", "content": "我之前练过深蹲。"},
-                {"role": "assistant", "content": "注意膝盖方向。"},
-                {"role": "user", "content": "结合我的情况给建议"},
-            ]
-        ),
-        context=runtime_context,
-        config={"callbacks": [collector]},
+    result = asyncio.run(
+        graph.ainvoke(
+            build_initial_chat_state(
+                messages=[
+                    {"role": "user", "content": "我之前练过深蹲。"},
+                    {"role": "assistant", "content": "注意膝盖方向。"},
+                    {"role": "user", "content": "结合我的情况给建议"},
+                ]
+            ),
+            context=runtime_context,
+            config={"callbacks": [collector]},
+        )
     )
 
     assert captured["context"] is runtime_context
@@ -246,7 +249,7 @@ def test_personalized_branch_uses_context_without_trace_field():
 
     class EmptyInnerAgent:
         @staticmethod
-        def stream(input_state, **_kwargs):
+        async def astream(input_state, **_kwargs):
             yield "values", input_state
 
     executor = object.__new__(ReactAgent)
@@ -259,9 +262,11 @@ def test_personalized_branch_uses_context_without_trace_field():
         dependencies=SimpleNamespace(personalized_agent_executor=executor),
     )
 
-    build_chat_routing_graph(classifier=PersonalizedClassifier()).invoke(
-        build_initial_chat_state(messages=[{"role": "user", "content": "给我一个计划"}]),
-        context=context,
+    asyncio.run(
+        build_chat_routing_graph(classifier=PersonalizedClassifier()).ainvoke(
+            build_initial_chat_state(messages=[{"role": "user", "content": "给我一个计划"}]),
+            context=context,
+        )
     )
 
     assert not hasattr(context, "trace")
@@ -272,7 +277,7 @@ def test_personalized_agent_keeps_tool_and_evidence_events():
 
     class ToolCallingAgent:
         @staticmethod
-        def stream(input_state, **_kwargs):
+        async def astream(input_state, **_kwargs):
             yield (
                 "messages",
                 (
@@ -309,13 +314,15 @@ def test_personalized_agent_keeps_tool_and_evidence_events():
     executor.agent = ToolCallingAgent()
     executor.max_steps = 5
     executor.max_tool_calls = 2
-    result = executor.stream_personalized_events(
-        build_initial_chat_state(messages=[{"role": "user", "content": "深蹲怎么做？"}]),
-        ChatRuntimeContext(
-            user_id=5,
-            session_id="session-5",
-            dependencies=SimpleNamespace(max_tool_calls=2),
-        ),
+    result = asyncio.run(
+        executor.astream_personalized_events(
+            build_initial_chat_state(messages=[{"role": "user", "content": "深蹲怎么做？"}]),
+            ChatRuntimeContext(
+                user_id=5,
+                session_id="session-5",
+                dependencies=SimpleNamespace(max_tool_calls=2),
+            ),
+        )
     )
 
     assert result["events"] == [
@@ -330,7 +337,7 @@ def test_personalized_agent_emits_evidence_for_each_rag_call():
 
     class TwiceRagAgent:
         @staticmethod
-        def stream(input_state, **_kwargs):
+        async def astream(input_state, **_kwargs):
             yield (
                 "messages",
                 (
@@ -387,13 +394,15 @@ def test_personalized_agent_emits_evidence_for_each_rag_call():
     executor.agent = TwiceRagAgent()
     executor.max_steps = 5
     executor.max_tool_calls = 4
-    result = build_chat_routing_graph(classifier=PersonalizedClassifier()).invoke(
-        build_initial_chat_state(messages=[{"role": "user", "content": "查两条深蹲资料"}]),
-        context=ChatRuntimeContext(
-            user_id=5,
-            session_id="session-5",
-            dependencies=SimpleNamespace(personalized_agent_executor=executor),
-        ),
+    result = asyncio.run(
+        build_chat_routing_graph(classifier=PersonalizedClassifier()).ainvoke(
+            build_initial_chat_state(messages=[{"role": "user", "content": "查两条深蹲资料"}]),
+            context=ChatRuntimeContext(
+                user_id=5,
+                session_id="session-5",
+                dependencies=SimpleNamespace(personalized_agent_executor=executor),
+            ),
+        )
     )
 
     assert result["events"] == [
@@ -413,7 +422,7 @@ def test_personalized_graph_rejects_non_json_inner_state():
 
     class InvalidStateInnerAgent:
         @staticmethod
-        def stream(input_state, **_kwargs):
+        async def astream(input_state, **_kwargs):
             yield "values", {**input_state, "rag_evidence": [{"unsafe": object()}]}
 
     executor = object.__new__(ReactAgent)
@@ -422,13 +431,17 @@ def test_personalized_graph_rejects_non_json_inner_state():
     executor.max_tool_calls = 2
 
     with pytest.raises(ValueError, match="个性化 Agent 产物包含不可序列化值"):
-        build_chat_routing_graph(classifier=PersonalizedClassifier()).invoke(
-            build_initial_chat_state(messages=[{"role": "user", "content": "结合我的情况给建议"}]),
-            context=ChatRuntimeContext(
-                user_id=5,
-                session_id="session-5",
-                dependencies=SimpleNamespace(personalized_agent_executor=executor),
-            ),
+        asyncio.run(
+            build_chat_routing_graph(classifier=PersonalizedClassifier()).ainvoke(
+                build_initial_chat_state(
+                    messages=[{"role": "user", "content": "结合我的情况给建议"}]
+                ),
+                context=ChatRuntimeContext(
+                    user_id=5,
+                    session_id="session-5",
+                    dependencies=SimpleNamespace(personalized_agent_executor=executor),
+                ),
+            )
         )
 
 

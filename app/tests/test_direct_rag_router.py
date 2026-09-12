@@ -1,5 +1,6 @@
 """聊天路由图与公开流式入口的兼容性测试。"""
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -16,6 +17,12 @@ from app.services.chat_routing_graph import (
     classify_intent,
 )
 from app.services.react_agent import ReactAgent
+
+
+async def _collect(stream):
+    """收集异步 Agent 事件，供同步测试函数断言。"""
+
+    return [item async for item in stream]
 
 
 class FakeIntentClassifier:
@@ -126,7 +133,7 @@ def test_chat_sse_contract_is_unchanged_for_direct_rag_route():
         """返回固定且可序列化的直接检索事件。"""
 
         @staticmethod
-        def stream(**_kwargs):
+        async def astream(**_kwargs):
             """按既有 SSE 事件顺序生成响应。"""
             yield {"type": "tool", "name": "检索知识库"}
             yield {"type": "evidence", "items": [{"evidence_id": "guide#1"}]}
@@ -139,10 +146,14 @@ def test_chat_sse_contract_is_unchanged_for_direct_rag_route():
 
     events = [
         json.loads(chunk)
-        for chunk in agent.execute_stream(
-            [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
-            user_id=7,
-            session_id="stable-session",
+        for chunk in asyncio.run(
+            _collect(
+                agent.execute_stream(
+                    [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
+                    user_id=7,
+                    session_id="stable-session",
+                )
+            )
         )
     ]
 
@@ -160,7 +171,7 @@ def test_chat_sse_contract_is_unchanged_for_personalized_route():
         """模拟内层 Agent 的工具调用和最终文本。"""
 
         @staticmethod
-        def stream(input_state, **_kwargs):
+        async def astream(input_state, **_kwargs):
             """返回工具通知后可消费的最终文本。"""
             from langchain_core.messages import AIMessageChunk, ToolMessage
 
@@ -187,7 +198,7 @@ def test_chat_sse_contract_is_unchanged_for_personalized_route():
                     {"langgraph_step": 2},
                 ),
             )
-            yield "values", {**input_state, "rag_evidence": [], "tool_call_count": 1}
+            yield "values", {**input_state, "rag_evidence": []}
 
     agent = _public_agent(
         FakeIntentClassifier(IntentDecision(route="personalized_agent")),
@@ -196,10 +207,14 @@ def test_chat_sse_contract_is_unchanged_for_personalized_route():
 
     events = [
         json.loads(chunk)
-        for chunk in agent.execute_stream(
-            [{"role": "user", "content": "结合我的目标安排训练"}],
-            user_id=7,
-            session_id="stable-session",
+        for chunk in asyncio.run(
+            _collect(
+                agent.execute_stream(
+                    [{"role": "user", "content": "结合我的目标安排训练"}],
+                    user_id=7,
+                    session_id="stable-session",
+                )
+            )
         )
     ]
 
@@ -216,12 +231,12 @@ def test_classifier_exception_returns_successful_personalized_sse_flow():
         """提供分类回退后使用的固定文本流。"""
 
         @staticmethod
-        def stream(input_state, **_kwargs):
+        async def astream(input_state, **_kwargs):
             """返回个性化分支的最终文本。"""
             from langchain_core.messages import AIMessageChunk
 
             yield "messages", (AIMessageChunk(content="请补充你的训练频率。"), {})
-            yield "values", {**input_state, "rag_evidence": [], "tool_call_count": 0}
+            yield "values", {**input_state, "rag_evidence": []}
 
     agent = _public_agent(
         FakeIntentClassifier(RuntimeError("classifier unavailable")),
@@ -230,10 +245,14 @@ def test_classifier_exception_returns_successful_personalized_sse_flow():
 
     events = [
         json.loads(chunk)
-        for chunk in agent.execute_stream(
-            [{"role": "user", "content": "深蹲怎么做？"}],
-            user_id=7,
-            session_id="stable-session",
+        for chunk in asyncio.run(
+            _collect(
+                agent.execute_stream(
+                    [{"role": "user", "content": "深蹲怎么做？"}],
+                    user_id=7,
+                    session_id="stable-session",
+                )
+            )
         )
     ]
 
@@ -253,10 +272,11 @@ def test_execute_stream_passes_callback_config_to_routing_graph():
         """捕获公开入口交给路由图的运行参数。"""
 
         @staticmethod
-        def stream(_state, **kwargs):
+        async def astream(_state, **kwargs):
             """记录配置后返回空事件流。"""
             captured.update(kwargs)
-            return []
+            if False:
+                yield None
 
     agent = object.__new__(ReactAgent)
     agent.direct_rag_executor = object()
@@ -266,7 +286,7 @@ def test_execute_stream_passes_callback_config_to_routing_graph():
 
     messages = [{"role": "user", "content": "深蹲怎么做？"}]
 
-    assert list(agent.execute_stream(messages, config=config)) == []
+    assert asyncio.run(_collect(agent.execute_stream(messages, config=config))) == []
     assert captured["config"] is config
 
 
@@ -277,7 +297,7 @@ def test_direct_rag_custom_stream_emits_tool_before_executor_error():
         """先产生工具事件，再模拟后续检索失败。"""
 
         @staticmethod
-        def stream(**_kwargs):
+        async def astream(**_kwargs):
             """验证图不会因后续异常吞掉首个事件。"""
             yield {"type": "tool", "name": "检索知识库"}
             raise RuntimeError("direct executor failed")
@@ -286,15 +306,19 @@ def test_direct_rag_custom_stream_emits_tool_before_executor_error():
         FakeIntentClassifier(IntentDecision(route="direct_rag")),
         direct_executor=FailingDirectExecutor(),
     )
-    stream = agent.execute_stream(
-        [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
-        user_id=7,
-        session_id="stable-session",
-    )
 
-    assert json.loads(next(stream)) == {"type": "tool", "name": "检索知识库"}
-    with pytest.raises(RuntimeError, match="direct executor failed"):
-        next(stream)
+    async def collect_until_error():
+        stream = agent.execute_stream(
+            [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
+            user_id=7,
+            session_id="stable-session",
+        )
+        first = await anext(stream)
+        with pytest.raises(RuntimeError, match="direct executor failed"):
+            await anext(stream)
+        return first
+
+    assert json.loads(asyncio.run(collect_until_error())) == {"type": "tool", "name": "检索知识库"}
 
 
 def test_personalized_custom_stream_emits_tool_before_executor_error():
@@ -304,7 +328,7 @@ def test_personalized_custom_stream_emits_tool_before_executor_error():
         """先产生工具调用，再模拟后续模型执行失败。"""
 
         @staticmethod
-        def stream(_input_state, **_kwargs):
+        async def astream(_input_state, **_kwargs):
             """验证内层 Agent 事件可穿过图的 custom 流。"""
             from langchain_core.messages import AIMessageChunk
 
@@ -324,15 +348,22 @@ def test_personalized_custom_stream_emits_tool_before_executor_error():
         FakeIntentClassifier(IntentDecision(route="personalized_agent")),
         inner_agent=FailingInnerAgent(),
     )
-    stream = agent.execute_stream(
-        [{"role": "user", "content": "结合我的目标安排训练"}],
-        user_id=7,
-        session_id="stable-session",
-    )
 
-    assert json.loads(next(stream)) == {"type": "tool", "name": "获取用户画像"}
-    with pytest.raises(RuntimeError, match="personalized executor failed"):
-        next(stream)
+    async def collect_until_error():
+        stream = agent.execute_stream(
+            [{"role": "user", "content": "结合我的目标安排训练"}],
+            user_id=7,
+            session_id="stable-session",
+        )
+        first = await anext(stream)
+        with pytest.raises(RuntimeError, match="personalized executor failed"):
+            await anext(stream)
+        return first
+
+    assert json.loads(asyncio.run(collect_until_error())) == {
+        "type": "tool",
+        "name": "获取用户画像",
+    }
 
 
 def test_direct_rag_graph_emits_tool_evidence_then_text():
@@ -352,10 +383,10 @@ def test_direct_rag_graph_emits_tool_evidence_then_text():
         """提供无需真实模型的固定文本流。"""
 
         @staticmethod
-        def stream(_messages, config=None):
+        async def astream(_messages, config=None):
             """返回一条带证据标记的固定模型输出。"""
             del config
-            return [SimpleNamespace(content="膝盖跟随脚尖。[证据:1]")]
+            yield SimpleNamespace(content="膝盖跟随脚尖。[证据:1]")
 
     executor = react_agent.DirectRagExecutor(
         model=FakeModel(),
@@ -365,19 +396,21 @@ def test_direct_rag_graph_emits_tool_evidence_then_text():
     graph = build_chat_routing_graph(
         classifier=FakeIntentClassifier(IntentDecision(route="direct_rag"))
     )
-    result = graph.invoke(
-        build_initial_chat_state(
-            messages=[
-                {"role": "user", "content": "先说深蹲。"},
-                {"role": "assistant", "content": "好的。"},
-                {"role": "user", "content": "那膝盖呢？"},
-            ]
-        ),
-        context=ChatRuntimeContext(
-            user_id=1,
-            session_id="session-1",
-            dependencies=SimpleNamespace(direct_rag_executor=executor),
-        ),
+    result = asyncio.run(
+        graph.ainvoke(
+            build_initial_chat_state(
+                messages=[
+                    {"role": "user", "content": "先说深蹲。"},
+                    {"role": "assistant", "content": "好的。"},
+                    {"role": "user", "content": "那膝盖呢？"},
+                ]
+            ),
+            context=ChatRuntimeContext(
+                user_id=1,
+                session_id="session-1",
+                dependencies=SimpleNamespace(direct_rag_executor=executor),
+            ),
+        )
     )
 
     assert [event["type"] for event in result["events"]] == ["tool", "evidence", "text"]
@@ -405,16 +438,25 @@ def test_direct_rag_uses_collector_for_named_retrieval_runnable():
         """提供无需真实模型的固定文本流。"""
 
         @staticmethod
-        def stream(_messages, config=None):
+        async def astream(_messages, config=None):
             """返回固定回答分块。"""
-            return [SimpleNamespace(content="暂时没有可靠证据。")]
+            del config
+            yield SimpleNamespace(content="暂时没有可靠证据。")
 
     collector = RunCollectorCallbackHandler()
     executor = react_agent.DirectRagExecutor(
         model=FakeModel(),
         rag_service_factory=FakeRagService,
     )
-    list(executor.stream(query="解释一下深蹲。", history=[], config={"callbacks": [collector]}))
+    asyncio.run(
+        _collect(
+            executor.astream(
+                query="解释一下深蹲。",
+                history=[],
+                config={"callbacks": [collector]},
+            )
+        )
+    )
 
     assert any(
         run.name == "rag_summarize" and "agent_tool" in run.tags
@@ -430,7 +472,7 @@ def test_direct_rag_graph_rejects_non_json_executor_events():
         """生成包含运行时对象的非法事件。"""
 
         @staticmethod
-        def stream(**_kwargs):
+        async def astream(**_kwargs):
             """返回无法序列化的证据事件。"""
             yield {"type": "evidence", "items": [{"unsafe": object()}]}
 
@@ -439,11 +481,13 @@ def test_direct_rag_graph_rejects_non_json_executor_events():
     )
 
     with pytest.raises(ValueError, match="不可序列化"):
-        graph.invoke(
-            build_initial_chat_state(messages=[{"role": "user", "content": "解释一下深蹲。"}]),
-            context=ChatRuntimeContext(
-                user_id=1,
-                session_id="session-1",
-                dependencies=SimpleNamespace(direct_rag_executor=FakeDirectRagExecutor()),
-            ),
+        asyncio.run(
+            graph.ainvoke(
+                build_initial_chat_state(messages=[{"role": "user", "content": "解释一下深蹲。"}]),
+                context=ChatRuntimeContext(
+                    user_id=1,
+                    session_id="session-1",
+                    dependencies=SimpleNamespace(direct_rag_executor=FakeDirectRagExecutor()),
+                ),
+            )
         )

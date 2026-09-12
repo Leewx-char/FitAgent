@@ -8,7 +8,6 @@ SSE 格式：每块数据以 "data: <文本>\n\n" 发送，前端 EventSource �
 """
 
 import json
-import asyncio
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter
@@ -105,38 +104,21 @@ async def sse_generator(
     """执行 Agent 流式响应，转发 SSE 事件并保存回答与执行轨迹。"""
     timing = timing or ChatLatencyTracker(request_id_var.get())
     timing.mark("sse.started")
-    # 获取当前事件循环
-    loop = asyncio.get_event_loop()
     full_response = ""
-    # 用哨兵值代替 StopIteration，避免 run_in_executor 报错
-    _SENTINEL = object()
-
-    # 调 next(gen) 取下一块，如果生成器结束了（抛出 StopIteration），返回哨兵而不是让异常冒泡
-    def _next_chunk(gen):
-        """读取生成器下一块内容，并以哨兵表示正常结束。"""
-        try:
-            return next(gen)
-        except StopIteration:
-            return _SENTINEL
 
     # HTTP 层仅传递原始消息、身份与稳定会话标识。
     user_id = current_user.id
     collector = RunCollectorCallbackHandler()
-    gen = iter(
-        agent.execute_stream(
-            messages,
-            user_id=user_id,
-            session_id=session_id,
-            config={"callbacks": [collector]},
-            timing=timing,
-        )
+    event_stream = agent.execute_stream(
+        messages,
+        user_id=user_id,
+        session_id=session_id,
+        config={"callbacks": [collector]},
+        timing=timing,
     )
     stream_failed = False
     try:
-        while True:
-            chunk = await loop.run_in_executor(None, _next_chunk, gen)
-            if chunk is _SENTINEL:
-                break
+        async for chunk in event_stream:
             chunk = chunk.strip()
             if not chunk:
                 continue
