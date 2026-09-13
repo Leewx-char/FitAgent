@@ -1,0 +1,9 @@
+Sport Records — 2026-09-07 to 2026-09-13 (1 records)
+
+1. Track Run — 2026-09-11
+Location: [redacted]
+Start Coordinates: [redacted]
+Time Window: startTimestamp=1726045200 | endTimestamp=1726046457
+Duration: 20:57 | Distance: 3.00 km
+Average Pace: 6:59 /km | Avg HR: 151 bpm | Calories: 273 kcal
+LabelId: activity-redacted | SportType: 103

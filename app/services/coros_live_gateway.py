@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from functools import lru_cache
@@ -66,8 +67,13 @@ class CorosLiveGateway:
         "activities": "querySportRecords",
         "daily": "queryDailyHealthData",
         "sleep": "querySleepData",
+        "training_load": "queryTrainingLoadAssessment",
+        "resting_heart_rate": "queryRestingHeartRate",
+        "sleep_hrv": "querySleepHrv",
         "activity_detail": "getActivityDetail",
     }
+    _CORE_SOURCES = ("activities", "daily", "sleep")
+    _ENRICHMENT_SOURCES = ("training_load", "resting_heart_rate", "sleep_hrv")
     _DATE_START_KEYS = ("startDate", "start_date", "startDay", "start_day", "fromDate")
     _DATE_END_KEYS = ("endDate", "end_date", "endDay", "end_day", "toDate")
     _ACTIVITY_ID_KEYS = ("activityId", "activity_id", "sportRecordId", "recordId", "id")
@@ -77,6 +83,21 @@ class CorosLiveGateway:
     _NEXT_CURSOR_KEYS = ("nextCursor", "next_cursor", "nextPageCursor", "next_page_cursor")
     _HAS_MORE_KEYS = ("hasMore", "has_more", "more")
     _MAX_PAGES = 20
+    _MAX_SPECIALIST_DAYS = 7
+    _TEXT_ERROR_MARKERS = (
+        "tool call anomalies detected",
+        "session context pollution",
+        "request exceeds the llm capability boundary",
+    )
+    _ACTIVITY_FILTERS = {
+        "sportTypeCodes": [65535],
+        "minDistanceKm": 0,
+        "maxDistanceKm": 10000,
+        "minDurationMinutes": 0,
+        "maxDurationMinutes": 1440,
+        "maxAveragePace": "",
+        "locationKeyword": "",
+    }
 
     def __init__(
         self,
@@ -109,6 +130,8 @@ class CorosLiveGateway:
 
     @classmethod
     def _date_arguments(cls, tool: Any, start_date: date, end_date: date) -> dict[str, str]:
+        """按当前 COROS 文本工具契约生成紧凑日期参数。"""
+
         fields = cls._tool_fields(tool)
         start_key = cls._find_field(fields, cls._DATE_START_KEYS)
         end_key = cls._find_field(fields, cls._DATE_END_KEYS)
@@ -117,19 +140,37 @@ class CorosLiveGateway:
         if start_key is None or end_key is None:
             raise CorosMcpSchemaError("COROS 工具日期参数不完整，暂无法安全调用")
         return {
-            start_key: start_date.isoformat(),
-            end_key: end_date.isoformat(),
+            start_key: start_date.strftime("%Y%m%d"),
+            end_key: end_date.strftime("%Y%m%d"),
         }
+
+    @classmethod
+    def _days_arguments(cls, tool: Any, start_date: date, end_date: date) -> dict[str, int]:
+        """只在 schema 声明 days 时传入包含首尾日期的安全天数。"""
+
+        if "days" not in cls._tool_fields(tool):
+            return {}
+        days = (end_date - start_date).days + 1
+        return {"days": max(1, min(days, cls._MAX_SPECIALIST_DAYS))}
 
     @classmethod
     def _source_arguments(
         cls, source: str, tool: Any, start_date: date, end_date: date
     ) -> dict[str, Any]:
-        """daily 交由 COROS 默认范围决定，其余工具仍要求明确日期范围。"""
+        """依赖运行时 schema 构造各读取工具的最小完整参数。"""
 
-        if source == "daily":
-            return {}
-        return cls._date_arguments(tool, start_date, end_date)
+        fields = cls._tool_fields(tool)
+        if source in {"daily", "training_load", "resting_heart_rate"}:
+            return cls._days_arguments(tool, start_date, end_date)
+
+        arguments: dict[str, Any] = cls._date_arguments(tool, start_date, end_date)
+        if source in {"sleep", "sleep_hrv"}:
+            arguments.update(cls._days_arguments(tool, start_date, end_date))
+        if source == "activities":
+            arguments.update(
+                {name: value for name, value in cls._ACTIVITY_FILTERS.items() if name in fields}
+            )
+        return arguments
 
     @classmethod
     def _activity_arguments(cls, tool: Any, activity_id: str) -> dict[str, str]:
@@ -176,6 +217,214 @@ class CorosLiveGateway:
             except json.JSONDecodeError:
                 return content
         return content
+
+    @staticmethod
+    def _number(text: str, pattern: str) -> int | float | None:
+        """从已脱敏的局部文本提取首个数值，缺失时保持为空。"""
+
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match is None:
+            return None
+        value = float(match.group(1).replace(",", ""))
+        return int(value) if value.is_integer() else value
+
+    @staticmethod
+    def _duration_seconds(text: str) -> int | None:
+        """将 COROS 的时分秒文本转换为秒数，不推断缺失时间。"""
+
+        match = re.search(r"Duration:\s*(\d{1,2}):(\d{2})(?::(\d{2}))?", text, re.I)
+        if match is None:
+            return None
+        first, minute, second = (int(value or 0) for value in match.groups())
+        return (first * 3600 + minute * 60 + second) if match.group(3) else (first * 60 + minute)
+
+    @classmethod
+    def _empty_daily_metric(cls, record_date: str) -> dict[str, Any]:
+        """生成兼容既有快照字段的每日指标基线。"""
+
+        return {
+            "date": record_date,
+            "rhr": None,
+            "avg_sleep_hrv": None,
+            "training_load": None,
+            "training_load_ratio": None,
+            "tired_rate": None,
+            "vo2max": None,
+        }
+
+    @classmethod
+    def _parse_activity_text(cls, text: str) -> list[dict[str, Any]]:
+        """解析活动摘要，只保留面板和训练所需的非位置字段。"""
+
+        records: list[dict[str, Any]] = []
+        pattern = re.compile(
+            r"(?ms)^\s*\d+\.\s*(?P<name>.+?)\s+[—-]\s*(?P<date>\d{4}-\d{2}-\d{2})"
+            r"(?P<body>.*?)(?=^\s*\d+\.\s+|\Z)"
+        )
+        for match in pattern.finditer(text):
+            body = match.group("body")
+            activity_id = re.search(r"LabelId:\s*([^\s|]+)", body, re.I)
+            if activity_id is None:
+                continue
+            distance_km = cls._number(body, r"Distance:\s*([\d.,]+)\s*km")
+            records.append(
+                {
+                    "external_id": activity_id.group(1),
+                    "date": match.group("date"),
+                    "start_time": "",
+                    "name": match.group("name").strip(),
+                    "sport_name": match.group("name").strip(),
+                    "duration_seconds": cls._duration_seconds(body),
+                    "distance_meters": int(distance_km * 1000) if distance_km is not None else None,
+                    "avg_heart_rate": cls._number(body, r"Avg HR:\s*([\d.,]+)\s*bpm"),
+                    "max_heart_rate": None,
+                    "training_load": None,
+                    "calories": cls._number(body, r"Calories:\s*([\d.,]+)\s*kcal"),
+                }
+            )
+        return records
+
+    @classmethod
+    def _parse_daily_text(cls, text: str) -> list[dict[str, Any]]:
+        """解析每日健康文本，并把全局 HR/HRV 摘要附到最新日期。"""
+
+        records: list[dict[str, Any]] = []
+        pattern = re.compile(
+            r"(?ms)^---\s*(?P<date>\d{8})\s*---\s*(?P<body>.*?)(?=^---\s*\d{8}\s*---|\Z)"
+        )
+        for match in pattern.finditer(text):
+            record = cls._empty_daily_metric(cls._date_value(match.group("date")))
+            body = match.group("body")
+            optional_values = {
+                "steps": cls._number(body, r"Steps:\s*([\d.,]+)"),
+                "calories": cls._number(body, r"Calories:\s*([\d.,]+)\s*kcal"),
+                "exercise_minutes": cls._number(body, r"Exercise:\s*([\d.,]+)\s*min"),
+            }
+            record.update(
+                {key: value for key, value in optional_values.items() if value is not None}
+            )
+            records.append(record)
+        if records:
+            records[-1].update(
+                {
+                    key: value
+                    for key, value in {
+                        "rhr": cls._number(text, r"Resting HR:\s*([\d.,]+)\s*bpm"),
+                        "avg_sleep_hrv": cls._number(text, r"HRV Baseline:\s*([\d.,]+)\s*ms"),
+                    }.items()
+                    if value is not None
+                }
+            )
+        return records
+
+    @classmethod
+    def _parse_sleep_text(cls, text: str) -> list[dict[str, Any]]:
+        """解析睡眠与午睡分钟数；缺少阶段时保留明确的空阶段记录。"""
+
+        records: list[dict[str, Any]] = []
+        pattern = re.compile(
+            r"(?ms)^\s*(?P<date>\d{4}-\d{2}-\d{2})\s*:?\s*(?P<body>.*?)(?=^\s*\d{4}-\d{2}-\d{2}\s*:|\Z)"
+        )
+        phase_patterns = {
+            "awake_minutes": r"Awake(?:\s+Sleep)?\s*:\s*([\d.,]+)\s*min",
+            "rem_minutes": r"REM(?:\s+Sleep)?\s*:\s*([\d.,]+)\s*min",
+            "light_minutes": r"Light(?:\s+Sleep)?\s*:\s*([\d.,]+)\s*min",
+            "deep_minutes": r"Deep(?:\s+Sleep)?\s*:\s*([\d.,]+)\s*min",
+        }
+        for match in pattern.finditer(text):
+            body = match.group("body")
+            if cls._is_no_data_text(body):
+                continue
+            phases = {
+                key: value
+                for key, value in (
+                    (key, cls._number(body, expression))
+                    for key, expression in phase_patterns.items()
+                )
+                if value is not None
+            }
+            record: dict[str, Any] = {
+                "date": match.group("date"),
+                "total_duration_minutes": cls._number(
+                    body, r"(?:Total Sleep|Sleep Duration):\s*([\d.,]+)\s*min"
+                ),
+                "phases": phases,
+            }
+            nap_minutes = cls._number(body, r"Naps? Total:\s*([\d.,]+)\s*min")
+            if nap_minutes is not None:
+                record["nap_minutes"] = nap_minutes
+            records.append(record)
+        return records
+
+    @classmethod
+    def _parse_training_load_text(cls, text: str) -> list[dict[str, Any]]:
+        """解析每日短期负荷和负荷比，避免把描述文本暴露给客户端。"""
+
+        records: list[dict[str, Any]] = []
+        pattern = re.compile(
+            r"(?ms)^\s*(?P<date>\d{4}-\d{2}-\d{2})\s*(?P<body>.*?)(?=^\s*\d{4}-\d{2}-\d{2}\s*|\Z)"
+        )
+        for match in pattern.finditer(text):
+            load = cls._number(match.group("body"), r"Short-Term Load:\s*([\d.,]+)")
+            ratio = cls._number(match.group("body"), r"Load Ratio:\s*([\d.,]+)")
+            if load is None and ratio is None:
+                continue
+            record = cls._empty_daily_metric(match.group("date"))
+            metrics = {"training_load": load, "training_load_ratio": ratio}
+            record.update({key: value for key, value in metrics.items() if value is not None})
+            records.append(record)
+        return records
+
+    @classmethod
+    def _parse_time_series_text(cls, text: str, metric: str) -> list[dict[str, Any]]:
+        """解析按日期返回的静息心率或睡眠 HRV 时序。"""
+
+        unit = "bpm" if metric == "rhr" else "ms"
+        records: list[dict[str, Any]] = []
+        for match in re.finditer(
+            rf"(?m)^\s*(\d{{4}}-\d{{2}}-\d{{2}})\s*:\s*(?:[^\n]*?\s*)?([\d.,]+)\s*{unit}\b",
+            text,
+            re.I,
+        ):
+            record = cls._empty_daily_metric(match.group(1))
+            record[metric] = cls._number(match.group(2), r"([\d.,]+)")
+            records.append(record)
+        return records
+
+    @classmethod
+    def _is_no_data_text(cls, text: str) -> bool:
+        """识别 MCP 明确的无数据响应，避免把它当作调用失败。"""
+
+        normalized = text.lower()
+        return (
+            "no data" in normalized
+            or "no records" in normalized
+            or "no " in normalized and " found" in normalized
+        )
+
+    @classmethod
+    def _parse_text_source(cls, source: str, text: str) -> list[dict[str, Any]]:
+        """将已知 COROS 文本协议转换为记录，未知非空文本显式失败。"""
+
+        normalized = text.strip()
+        if not normalized or cls._is_no_data_text(normalized):
+            return []
+        if any(marker in normalized.lower() for marker in cls._TEXT_ERROR_MARKERS):
+            logger.warning("COROS_MCP_SOURCE_TEXT_FAILED source=%s text_kind=tool_error", source)
+            raise CorosMcpError("COROS MCP 数据读取失败，请稍后重试")
+        parsers: dict[str, Callable[[str], list[dict[str, Any]]]] = {
+            "activities": cls._parse_activity_text,
+            "daily": cls._parse_daily_text,
+            "sleep": cls._parse_sleep_text,
+            "training_load": cls._parse_training_load_text,
+            "resting_heart_rate": lambda value: cls._parse_time_series_text(value, "rhr"),
+            "sleep_hrv": lambda value: cls._parse_time_series_text(value, "avg_sleep_hrv"),
+        }
+        records = parsers[source](normalized)
+        if records:
+            return records
+        logger.warning("COROS_MCP_SOURCE_TEXT_FAILED source=%s text_kind=unrecognized", source)
+        raise CorosMcpSchemaError("COROS MCP 返回的数据格式不兼容")
 
     @staticmethod
     def _records(payload: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -238,15 +487,28 @@ class CorosLiveGateway:
         record_date = cls._date_value(cls._value(record, "date", "day", "recordDate"))
         if not record_date:
             return None
-        return {
-            "date": record_date,
-            "rhr": cls._value(record, "rhr", "restingHeartRate"),
-            "avg_sleep_hrv": cls._value(record, "avg_sleep_hrv", "sleepHrv", "avgSleepHrv"),
-            "training_load": cls._value(record, "training_load", "trainingLoad"),
-            "training_load_ratio": cls._value(record, "training_load_ratio", "trainingLoadRatio"),
-            "tired_rate": cls._value(record, "tired_rate", "tiredRate", "fatigue"),
-            "vo2max": cls._value(record, "vo2max", "vo2Max"),
+        normalized = cls._empty_daily_metric(record_date)
+        normalized.update(
+            {
+                "rhr": cls._value(record, "rhr", "restingHeartRate"),
+                "avg_sleep_hrv": cls._value(record, "avg_sleep_hrv", "sleepHrv", "avgSleepHrv"),
+                "training_load": cls._value(record, "training_load", "trainingLoad"),
+                "training_load_ratio": cls._value(
+                    record, "training_load_ratio", "trainingLoadRatio"
+                ),
+                "tired_rate": cls._value(record, "tired_rate", "tiredRate", "fatigue"),
+                "vo2max": cls._value(record, "vo2max", "vo2Max"),
+            }
+        )
+        optional_values = {
+            "steps": cls._value(record, "steps", "stepCount"),
+            "calories": cls._value(record, "calories", "calorie", "caloriesBurned"),
+            "exercise_minutes": cls._value(record, "exercise_minutes", "exerciseMinutes"),
         }
+        normalized.update(
+            {key: value for key, value in optional_values.items() if value is not None}
+        )
+        return normalized
 
     @classmethod
     def _normalize_sleep(cls, record: dict[str, Any]) -> dict[str, Any] | None:
@@ -255,7 +517,7 @@ class CorosLiveGateway:
             return None
         raw_phases = cls._value(record, "phases", "sleepStages", "stages")
         phases = raw_phases if isinstance(raw_phases, dict) else {}
-        return {
+        normalized = {
             "date": record_date,
             "total_duration_minutes": cls._value(
                 record, "total_duration_minutes", "totalSleepMinutes", "sleepMinutes"
@@ -267,10 +529,16 @@ class CorosLiveGateway:
                 "deep_minutes": cls._value(phases, "deep_minutes", "deepMinutes") or 0,
             },
         }
+        nap_minutes = cls._value(record, "nap_minutes", "napMinutes")
+        if nap_minutes is not None:
+            normalized["nap_minutes"] = nap_minutes
+        return normalized
 
     @classmethod
     def _normalize_activity(cls, record: dict[str, Any]) -> dict[str, Any] | None:
-        external_id = cls._value(record, "activityId", "activity_id", "id", "recordId", "uuid")
+        external_id = cls._value(
+            record, "external_id", "activityId", "activity_id", "id", "recordId", "uuid"
+        )
         start_time = cls._value(record, "start_time", "startTime", "startAt")
         record_date = cls._date_value(start_time or cls._value(record, "date", "day"))
         if not external_id or not record_date:
@@ -302,6 +570,26 @@ class CorosLiveGateway:
         normalizer: Callable[[dict[str, Any]], dict[str, Any] | None],
     ) -> list[dict[str, Any]]:
         return [normalized for record in records if (normalized := normalizer(record)) is not None]
+
+    @classmethod
+    def _merge_daily_metrics(
+        cls, source_records: Iterable[list[dict[str, Any]]]
+    ) -> list[dict[str, Any]]:
+        """按日期合并每日健康与专项指标，后者只覆盖实际返回的字段。"""
+
+        merged: dict[str, dict[str, Any]] = {}
+        for records in source_records:
+            for record in cls._normalize_many(records, cls._normalize_daily):
+                target = merged.setdefault(record["date"], cls._empty_daily_metric(record["date"]))
+                target.update({key: value for key, value in record.items() if value is not None})
+        return list(merged.values())
+
+    @staticmethod
+    def _within_date_range(record: dict[str, Any], start_date: date, end_date: date) -> bool:
+        """丢弃上游超出请求范围的记录，确保面板日期窗口精确。"""
+
+        record_date = CorosLiveGateway._date_value(record.get("date"))
+        return start_date.isoformat() <= record_date <= end_date.isoformat()
 
     async def _with_tools(
         self,
@@ -356,7 +644,7 @@ class CorosLiveGateway:
     async def _read_all_pages(
         self, source: str, tool: Any, start_date: date, end_date: date
     ) -> list[dict[str, Any]]:
-        """读取有限分页；daily 使用 COROS 默认范围，其余来源带日期范围。"""
+        """读取文本或有限 JSON 分页；文本结果在首次调用即转为安全记录。"""
 
         fields = self._tool_fields(tool)
         arguments: dict[str, Any] = self._source_arguments(source, tool, start_date, end_date)
@@ -372,6 +660,8 @@ class CorosLiveGateway:
         for page_index in range(self._MAX_PAGES):
             result = await self._call_tool(tool, arguments)
             payload = self._decode_result(result)
+            if isinstance(payload, str):
+                return self._parse_text_source(source, payload)
             records.extend(
                 self._records(
                     payload,
@@ -401,7 +691,7 @@ class CorosLiveGateway:
         self, credential: CorosAccessCredential, start_date: date, end_date: date
     ) -> LiveFitnessData:
         async def operation(tools: dict[str, Any]) -> LiveFitnessData:
-            sources = ("activities", "daily", "sleep")
+            sources = self._CORE_SOURCES
             raw: dict[str, list[dict[str, Any]]] = {}
             unavailable: list[str] = []
             for source in sources:
@@ -420,13 +710,49 @@ class CorosLiveGateway:
                     unavailable.append(source)
             if len(unavailable) == len(sources):
                 raise CorosMcpUnavailableError("COROS 未返回可用运动数据")
+            for source in self._ENRICHMENT_SOURCES:
+                tool = tools.get(self._TOOL_NAMES[source])
+                if tool is None:
+                    continue
+                try:
+                    raw[source] = await self._read_all_pages(source, tool, start_date, end_date)
+                except CorosMcpUnauthorizedError:
+                    raise
+                except CorosMcpError as error:
+                    logger.warning(
+                        "COROS_MCP_SOURCE_UNAVAILABLE source=%s error_type=%s reason=%s",
+                        source,
+                        type(error).__name__,
+                        str(error),
+                    )
+                    unavailable.append(source)
             activities = self._normalize_many(raw.get("activities", []), self._normalize_activity)
-            daily_metrics = self._normalize_many(raw.get("daily", []), self._normalize_daily)
+            daily_metrics = self._merge_daily_metrics(
+                raw.get(source, []) for source in ("daily", *self._ENRICHMENT_SOURCES)
+            )
             sleep_records = self._normalize_many(raw.get("sleep", []), self._normalize_sleep)
+            activities = [
+                record
+                for record in activities
+                if self._within_date_range(record, start_date, end_date)
+            ]
+            daily_metrics = [
+                record
+                for record in daily_metrics
+                if self._within_date_range(record, start_date, end_date)
+            ]
+            sleep_records = [
+                record
+                for record in sleep_records
+                if self._within_date_range(record, start_date, end_date)
+            ]
             normalized_by_source = {
                 "activities": activities,
                 "daily": daily_metrics,
                 "sleep": sleep_records,
+                "training_load": daily_metrics,
+                "resting_heart_rate": daily_metrics,
+                "sleep_hrv": daily_metrics,
             }
             for source, records in raw.items():
                 if records and not normalized_by_source[source] and source not in unavailable:
@@ -436,7 +762,7 @@ class CorosLiveGateway:
                         len(records),
                     )
                     unavailable.append(source)
-            if len(unavailable) == len(sources):
+            if all(source in unavailable for source in sources):
                 raise CorosMcpUnavailableError("COROS 返回的数据格式不兼容")
             return LiveFitnessData(
                 start_date=start_date,

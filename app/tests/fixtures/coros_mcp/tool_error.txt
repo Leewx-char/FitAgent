@@ -1,0 +1,1 @@
+Tool call anomalies detected. High risk of session context pollution or request exceeds the LLM capability boundary.

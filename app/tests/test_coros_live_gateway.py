@@ -3,6 +3,7 @@
 import json
 import logging
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,15 @@ from app.services.coros_live_gateway import (
     CorosMcpUnavailableError,
 )
 from app.services.coros_oauth import CorosAccessCredential, CorosReconnectionRequiredError
+
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "coros_mcp"
+
+
+def fixture_text(name: str) -> str:
+    """读取脱敏的 COROS MCP 文本样本，避免在测试中内嵌原始数据。"""
+
+    return (FIXTURE_DIR / name).read_text(encoding="utf-8")
 
 
 class FakeOAuth:
@@ -43,7 +53,8 @@ class FakeTool:
 
     async def ainvoke(self, arguments):
         self.calls.append(arguments)
-        return SimpleNamespace(content=json.dumps(self.payload))
+        content = self.payload if isinstance(self.payload, str) else json.dumps(self.payload)
+        return SimpleNamespace(content=content)
 
 
 class FakeSession:
@@ -126,8 +137,8 @@ def test_gateway_returns_partial_when_one_source_fails():
     assert snapshot.unavailable_sources == ["sleep"]
 
 
-def test_gateway_reads_parameterless_daily_without_local_date_filter():
-    """daily 交由 COROS 默认范围决定，网关不再追加日期限制。"""
+def test_gateway_reads_daily_with_schema_declared_seven_day_limit():
+    """daily schema 声明 days 时，网关按请求范围传递受控天数。"""
 
     today = date.today()
     activities = FakeTool("querySportRecords", {"records": []})
@@ -157,7 +168,7 @@ def test_gateway_reads_parameterless_daily_without_local_date_filter():
         object(), user_id=1, start_date=today, end_date=today
     )
 
-    assert daily.calls == [{}]
+    assert daily.calls == [{"days": 1}]
     assert snapshot.daily_metrics == [
         {
             "date": today.isoformat(),
@@ -167,19 +178,149 @@ def test_gateway_reads_parameterless_daily_without_local_date_filter():
             "training_load_ratio": None,
             "tired_rate": None,
             "vo2max": None,
-        },
-        {
-            "date": "2020-01-01",
-            "rhr": 60,
-            "avg_sleep_hrv": None,
-            "training_load": None,
-            "training_load_ratio": None,
-            "tired_rate": None,
-            "vo2max": None,
-        },
+        }
     ]
-    expected_bounded_call = {"startDate": today.isoformat(), "endDate": today.isoformat()}
+    expected_bounded_call = {
+        "startDate": today.strftime("%Y%m%d"),
+        "endDate": today.strftime("%Y%m%d"),
+    }
     assert activities.calls == sleep.calls == [expected_bounded_call]
+
+
+def test_gateway_parses_coros_text_and_uses_compact_complete_filters():
+    """文本工具结果会映射成安全快照，并按实际 schema 提供完整筛选参数。"""
+
+    start_date = date(2026, 9, 7)
+    end_date = date(2026, 9, 13)
+    activities = FakeTool(
+        "querySportRecords",
+        fixture_text("sport_records.txt"),
+        fields=(
+            "startDate",
+            "endDate",
+            "sportTypeCodes",
+            "minDistanceKm",
+            "maxDistanceKm",
+            "minDurationMinutes",
+            "maxDurationMinutes",
+            "maxAveragePace",
+            "locationKeyword",
+            "limit",
+        ),
+    )
+    daily = FakeTool("queryDailyHealthData", fixture_text("daily_health.txt"), fields=("days",))
+    sleep = FakeTool(
+        "querySleepData", fixture_text("sleep.txt"), fields=("startDate", "endDate", "days")
+    )
+    load = FakeTool(
+        "queryTrainingLoadAssessment", fixture_text("training_load.txt"), fields=("days",)
+    )
+    rhr = FakeTool(
+        "queryRestingHeartRate", "Resting Heart Rate — Last 7 days\nNo data", fields=("days",)
+    )
+    hrv = FakeTool(
+        "querySleepHrv",
+        fixture_text("no_data.txt"),
+        fields=("startDate", "endDate", "days"),
+    )
+
+    async def load_tools(_session, **_kwargs):
+        return [activities, daily, sleep, load, rhr, hrv]
+
+    gateway = CorosLiveGateway(
+        oauth_service=FakeOAuth(),
+        settings=Settings(coros_mcp_timeout_seconds=5),
+        client_factory=FakeClient,
+        tool_loader=load_tools,
+    )
+
+    snapshot = gateway.fetch_snapshot(
+        object(), user_id=1, start_date=start_date, end_date=end_date
+    )
+
+    assert activities.calls == [
+        {
+            "startDate": "20260907",
+            "endDate": "20260913",
+            "sportTypeCodes": [65535],
+            "minDistanceKm": 0,
+            "maxDistanceKm": 10000,
+            "minDurationMinutes": 0,
+            "maxDurationMinutes": 1440,
+            "maxAveragePace": "",
+            "locationKeyword": "",
+            "limit": 100,
+        }
+    ]
+    assert daily.calls == [{"days": 7}]
+    assert sleep.calls == [{"startDate": "20260907", "endDate": "20260913", "days": 7}]
+    assert load.calls == rhr.calls == [{"days": 7}]
+    assert hrv.calls == [{"startDate": "20260907", "endDate": "20260913", "days": 7}]
+    assert snapshot.activities == [
+        {
+            "external_id": "activity-redacted",
+            "date": "2026-09-11",
+            "start_time": "",
+            "name": "Track Run",
+            "sport_name": "Track Run",
+            "duration_seconds": 1257,
+            "distance_meters": 3000,
+            "avg_heart_rate": 151,
+            "max_heart_rate": None,
+            "training_load": None,
+            "calories": 273,
+        }
+    ]
+    assert all(
+        "location" not in record and "coordinates" not in record
+        for record in snapshot.activities
+    )
+    assert snapshot.daily_metrics[0]["steps"] == 7039
+    assert snapshot.daily_metrics[1]["calories"] == 273
+    assert snapshot.daily_metrics[1]["exercise_minutes"] == 21
+    assert snapshot.daily_metrics[1]["training_load"] == 11
+    assert snapshot.daily_metrics[1]["training_load_ratio"] == 0.25
+    assert snapshot.sleep_records == [
+        {
+            "date": "2026-09-11",
+            "total_duration_minutes": None,
+            "phases": {
+                "awake_minutes": 0,
+                "rem_minutes": 0,
+                "light_minutes": 0,
+                "deep_minutes": 0,
+            },
+            "nap_minutes": 0,
+        }
+    ]
+    assert snapshot.unavailable_sources == []
+
+
+def test_gateway_treats_recognized_no_data_as_empty_and_text_errors_as_unavailable(caplog):
+    """无数据文本不伪造数值；工具异常文本只产生脱敏的来源失败日志。"""
+
+    activities = FakeTool("querySportRecords", {"records": []})
+    daily = FakeTool("queryDailyHealthData", {"records": []})
+    sleep = FakeTool("querySleepData", fixture_text("tool_error.txt"))
+
+    async def load_tools(_session, **_kwargs):
+        return [activities, daily, sleep]
+
+    gateway = CorosLiveGateway(
+        oauth_service=FakeOAuth(),
+        settings=Settings(coros_mcp_timeout_seconds=5),
+        client_factory=FakeClient,
+        tool_loader=load_tools,
+    )
+    with caplog.at_level(logging.WARNING, logger="coros_live"):
+        snapshot = gateway.fetch_snapshot(
+            object(), user_id=1, start_date=date.today(), end_date=date.today()
+        )
+
+    assert snapshot.sleep_records == []
+    assert snapshot.unavailable_sources == ["sleep"]
+    assert "COROS_MCP_SOURCE_TEXT_FAILED source=sleep" in caplog.text
+    assert "session context pollution" not in caplog.text
 
 
 def test_gateway_logs_sanitized_daily_source_failure(caplog):

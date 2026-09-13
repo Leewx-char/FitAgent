@@ -1,0 +1,7 @@
+Daily Health Data — Last 7 days | Resting HR: 57 bpm | HRV Baseline: 42 ms
+
+--- 20260907 ---
+Steps: 7,039 | Calories: 148 kcal | Exercise: 0 min
+
+--- 20260911 ---
+Steps: 8,140 | Calories: 273 kcal | Exercise: 21 min

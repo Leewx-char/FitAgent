@@ -29,7 +29,7 @@ def get_fitness_snapshot(
     """读取 Dashboard 所需的实时日健康、睡眠和活动白名单快照。"""
 
     end_date = date.today()
-    start_date = end_date - timedelta(weeks=weeks)
+    start_date = end_date - timedelta(days=weeks * 7 - 1)
     try:
         live_data = get_coros_live_gateway().fetch_snapshot(
             db,

@@ -50,6 +50,22 @@ def test_snapshot_returns_realtime_data_without_fitness_table(auth_client, monke
     assert "fitness_data" not in Base.metadata.tables
 
 
+def test_snapshot_week_one_is_exactly_seven_inclusive_calendar_days(auth_client, monkeypatch):
+    """weeks=1 代表包含今天在内的七个自然日，避免原先多取一天。"""
+
+    from app.api.routers import fitness
+
+    today = date.today()
+    gateway = FakeGateway(LiveFitnessData(start_date=today, end_date=today))
+    monkeypatch.setattr(fitness, "get_coros_live_gateway", lambda: gateway)
+
+    response = auth_client.get("/api/fitness/snapshot?weeks=1")
+
+    assert response.status_code == 200
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0][1:] == (today - timedelta(days=6), today)
+
+
 def test_snapshot_requires_connection(auth_client, monkeypatch):
     """未连接用户不会误报为上游故障。"""
 
