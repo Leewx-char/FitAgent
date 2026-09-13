@@ -1,13 +1,19 @@
 <template>
   <div class="chat-main">
-    <div class="messages-container" ref="messagesRef">
-    <div v-if="messages.length === 0 && !uploadResult" class="empty-chat">
-      <div class="empty-brand">
-        <div class="empty-logo">F</div>
-        <div class="empty-ring"></div>
+    <header class="chat-header">
+      <div>
+        <p class="eyebrow">训练对话</p>
+        <h1>和你的训练教练聊聊</h1>
       </div>
-      <h2>你好，{{ authStore.user?.username || '运动达人' }}</h2>
-      <p class="empty-sub">我可以帮你制定训练计划、分析数据、解答健身疑问</p>
+      <p>建议会结合已确认档案、训练反馈与可用数据。</p>
+    </header>
+
+    <div class="conversation-shell">
+      <div class="messages-container" ref="messagesRef">
+    <div v-if="messages.length === 0 && !uploadResult" class="empty-chat">
+      <p class="empty-kicker">从一个具体问题开始</p>
+      <h2>今天想先解决哪件事？</h2>
+      <p class="empty-sub">我可以帮你梳理训练计划、分析数据或讨论动作与恢复。</p>
       <div class="quick-actions">
         <button
           v-for="action in quickActions"
@@ -73,6 +79,18 @@
       </div>
     </div>
   </div>
+
+      <aside class="chat-context" aria-label="训练上下文说明">
+        <p class="eyebrow">训练上下文</p>
+        <h2>建议如何形成</h2>
+        <dl>
+          <div><dt>档案</dt><dd>已确认的目标与限制</dd></div>
+          <div><dt>反馈</dt><dd>已保存的训练感受</dd></div>
+          <div><dt>COROS</dt><dd>已同步的结构化摘要</dd></div>
+        </dl>
+        <p class="context-note">只会按需使用可用信息；未确认的记忆不会进入长期个性化建议。</p>
+      </aside>
+    </div>
 
   <div v-if="uploadResult" class="confirm-overlay">
     <div class="confirm-panel">
@@ -956,5 +974,120 @@ watch(toolChain, () => {
 .input-bottom-row {
   display: flex;
   gap: 12px;
+}
+
+/* 将对话、上下文和输入区收束为安静的三段式工作台。 */
+.chat-main {
+  min-height: 100vh;
+  height: auto;
+  background: var(--bg-page);
+}
+
+.chat-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px 44px 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.eyebrow, .empty-kicker {
+  color: var(--text-quiet);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.chat-header h1 {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+  font-size: 24px;
+  letter-spacing: -.03em;
+}
+
+.chat-header > p {
+  max-width: 280px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: right;
+}
+
+.conversation-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  flex: 1;
+  min-height: 0;
+}
+
+.messages-container {
+  padding: 32px max(28px, 6vw);
+  background: var(--bg-page);
+}
+
+.empty-chat {
+  align-items: flex-start;
+  justify-content: center;
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 70px 0;
+  text-align: left;
+}
+
+.empty-chat h2 {
+  margin: 8px 0 10px;
+  font-size: 24px;
+  letter-spacing: -.03em;
+}
+
+.empty-sub { margin: 0 0 24px; max-width: 460px; line-height: 1.7; }
+.quick-actions { justify-content: flex-start; }
+.quick-btn { border-color: var(--border); border-radius: 7px; transition: background-color .16s ease, border-color .16s ease, color .16s ease; }
+.quick-btn:hover { background: var(--primary-light); border-color: var(--primary-light); color: var(--primary-dark); box-shadow: none; transform: none; }
+
+.message-row { margin-bottom: 18px; }
+.message-bubble { max-width: min(760px, 78%); border: 1px solid transparent; }
+.message-bubble.user { border-radius: 10px; background: var(--primary-light); }
+.message-bubble.assistant { border-color: var(--border); border-radius: 10px; box-shadow: none; }
+.evidence-panel { border-color: var(--border); }
+.evidence-card { border-color: var(--border); background: #F7F9FA; }
+
+.thinking-panel { border: 1px solid var(--border); border-radius: 10px; box-shadow: none; }
+.thinking-pulse { display: none; }
+.tool-line:not(:last-child)::after { background: var(--border); }
+
+.chat-context { align-self: stretch; padding: 32px 24px; border-left: 1px solid var(--border); background: var(--bg-card); }
+.chat-context h2 { margin: 6px 0 22px; color: var(--text-primary); font-size: 17px; letter-spacing: -.02em; }
+.chat-context dl { display: grid; gap: 16px; margin: 0; }
+.chat-context dl div { padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.chat-context dt { color: var(--text-primary); font-size: 13px; font-weight: 700; }
+.chat-context dd { margin: 5px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
+.context-note { margin: 24px 0 0; color: var(--text-quiet); font-size: 12px; line-height: 1.65; }
+
+.input-area { padding: 14px max(28px, 6vw) 18px; border-color: var(--border); }
+.input-bottom-row { max-width: 900px; }
+.input-area :deep(.n-input) { background: #FAFBFC; }
+.confirm-panel { border: 1px solid var(--border); border-radius: 10px; }
+.confirm-header, .confirm-actions { border-color: var(--border); }
+
+@media (max-width: 960px) {
+  .chat-header { padding-left: 28px; padding-right: 28px; }
+  .conversation-shell { grid-template-columns: 1fr; }
+  .chat-context { display: none; }
+}
+
+@media (max-width: 700px) {
+  .chat-main { min-height: calc(100vh - 54px); }
+  .chat-header { align-items: flex-start; flex-direction: column; gap: 10px; padding: 22px 16px 18px; }
+  .chat-header h1 { font-size: 22px; }
+  .chat-header > p { max-width: none; text-align: left; }
+  .messages-container { padding: 22px 16px; }
+  .empty-chat { padding: 48px 0; }
+  .message-bubble { max-width: 90%; }
+  .input-area { padding-left: 16px; padding-right: 16px; }
 }
 </style>

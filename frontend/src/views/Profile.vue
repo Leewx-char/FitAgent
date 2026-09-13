@@ -1,14 +1,18 @@
 <template>
   <div class="profile-page">
     <div class="profile-card">
-      <div class="profile-header">
-        <h2>健身画像</h2>
-        <n-button v-if="!editing" type="primary" size="small" @click="startEdit">编辑</n-button>
+      <header class="profile-header">
+        <div>
+          <p class="eyebrow">个性化设置</p>
+          <h1>训练档案</h1>
+          <p class="profile-intro">这份档案会帮助训练建议更贴近你的目标、经验和实际限制。</p>
+        </div>
+        <n-button v-if="!editing" type="primary" size="small" @click="startEdit">编辑档案</n-button>
         <n-space v-else>
           <n-button size="small" @click="cancelEdit">取消</n-button>
           <n-button type="primary" size="small" :loading="saving" @click="saveEdit">保存</n-button>
         </n-space>
-      </div>
+      </header>
 
       <n-spin :show="loading">
         <div v-if="profile" class="profile-grid">
@@ -420,6 +424,105 @@ onMounted(loadProfile)
 .health-data-item .data-none {
   color: var(--text-secondary);
   font-weight: 400;
+}
+
+/* 用轻边框和内容分组呈现长期维护的档案信息。 */
+.profile-page {
+  display: block;
+  min-height: 100%;
+  padding: 40px 44px 56px;
+}
+
+.profile-card {
+  width: min(100%, 1040px);
+  margin: 0 auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.profile-header {
+  align-items: flex-start;
+  margin: 0;
+  padding: 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.eyebrow {
+  color: var(--text-quiet);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.profile-header h1 {
+  margin: 4px 0 8px;
+  color: var(--text-primary);
+  font-size: 28px;
+  letter-spacing: -.035em;
+}
+
+.profile-intro {
+  max-width: 560px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+}
+
+.profile-section {
+  padding: 24px 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.profile-section:nth-child(odd) {
+  border-right: 1px solid var(--border);
+}
+
+.profile-section:last-child:nth-child(odd) {
+  grid-column: span 2;
+  border-right: 0;
+}
+
+.profile-section h4 {
+  margin-bottom: 18px;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.profile-section h4::before {
+  width: 0;
+  height: 0;
+}
+
+.profile-items { gap: 14px; }
+.profile-item { min-height: 28px; }
+.profile-item .label { width: 88px; color: var(--text-secondary); }
+.profile-item .value { color: var(--text-primary); }
+
+.health-data-item {
+  background: #F7F9FA;
+  border-color: var(--border);
+  border-radius: 8px;
+}
+
+.empty-profile { padding: 76px 0; }
+
+@media (max-width: 760px) {
+  .profile-page { padding: 24px 16px 40px; }
+  .profile-header { gap: 16px; flex-direction: column; padding: 22px 18px; }
+  .profile-header h1 { font-size: 25px; }
+  .profile-grid { grid-template-columns: 1fr; }
+  .profile-section, .profile-section:last-child:nth-child(odd) { grid-column: auto; padding: 20px 18px; border-right: 0; }
+  .health-data-grid { grid-template-columns: 1fr; }
 }
 
 </style>
