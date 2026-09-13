@@ -44,7 +44,10 @@
               </div>
               <div>
                 <dt>最新负荷</dt>
-                <dd>{{ latestTrainingLoad }}</dd>
+                <dd>
+                  {{ latestTrainingLoad }}
+                  <small v-if="latestLoadRatio">负荷比 {{ latestLoadRatio }}</small>
+                </dd>
               </div>
             </dl>
           </article>
@@ -124,7 +127,7 @@
             <li v-for="act in activities" :key="act.external_id" class="activity-item">
               <time :datetime="act.date">{{ formatDate(act.date) }}</time>
               <div class="act-main">
-                <strong>{{ sportName(act.sport_name || act.name) }}</strong>
+                <strong>{{ activityNameInChinese(act.sport_name || act.name) }}</strong>
                 <span>{{ activitySummary(act) }}</span>
               </div>
               <span v-if="act.avg_heart_rate" class="act-heart">均心率 {{ act.avg_heart_rate }} 次/分</span>
@@ -154,6 +157,7 @@ import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { getErrorMessage } from '@/api'
+import { activityNameInChinese, latestLoadRecord } from '@/utils/dashboardPresentation'
 import {
   connectCoros,
   disconnectCoros,
@@ -162,23 +166,6 @@ import {
 } from '@/api/fitness'
 
 echarts.use([GridComponent, TooltipComponent, LegendComponent, LineChart, BarChart, CanvasRenderer])
-
-const SPORT_MAP = {
-  Run: '跑步',
-  'Trail Run': '越野跑',
-  'Track Running': '跑道跑步',
-  'Road Bike': '公路骑行',
-  'Indoor Cycling': '室内骑行',
-  'Mountain Bike': '山地骑行',
-  'Strength Training': '力量训练',
-  Swim: '游泳',
-  'Open Water Swim': '公开水域游泳',
-  Hike: '徒步',
-  Walk: '步行',
-  Yoga: '瑜伽',
-  Treadmill: '跑步机',
-  'Sport 1002': '跑步',
-}
 
 const SOURCE_LABELS = {
   activities: '活动记录',
@@ -208,22 +195,10 @@ const sleepChartRef = ref(null)
 let tloadChart = null
 let sleepChart = null
 
-/** 将设备返回的运动类型转为中文名称，未知类型保留原值。 */
-function sportName(name) {
-  if (!name) return '--'
-  return SPORT_MAP[name] || name
-}
-
 /** 仅累计存在的数值，避免把未返回的数据错误当作零。 */
 function sumMetric(key) {
   const values = dailyMetrics.value.map(item => item[key]).filter(Number.isFinite)
   return values.length ? values.reduce((total, value) => total + value, 0) : null
-}
-
-/** 返回最近一个有效指标，保证面板不凭空推断身体状态。 */
-function latestMetric(key) {
-  const sorted = [...dailyMetrics.value].sort((a, b) => b.date.localeCompare(a.date))
-  return sorted.find(item => Number.isFinite(item[key]))?.[key] ?? null
 }
 
 /** 将紧凑日期转为面向用户的月日格式。 */
@@ -276,7 +251,7 @@ function buildWeekDays() {
       isToday: date === today,
       steps: Number.isFinite(record.steps) ? record.steps.toLocaleString() : '--',
       exerciseMinutes: Number.isFinite(record.exercise_minutes) ? formatMinutes(record.exercise_minutes) : '运动时长未返回',
-      activity: activity ? sportName(activity.sport_name || activity.name) : '暂无活动',
+      activity: activity ? activityNameInChinese(activity.sport_name || activity.name) : '暂无活动',
     })
     cursor.setDate(cursor.getDate() + 1)
   }
@@ -294,12 +269,9 @@ const weeklyCalories = computed(() => {
   return value === null ? '--' : `${Math.round(value).toLocaleString()} 千卡`
 })
 const weeklyExerciseMinutes = computed(() => formatMinutes(sumMetric('exercise_minutes')))
-const latestTrainingLoad = computed(() => {
-  const value = latestMetric('training_load')
-  const ratio = latestMetric('training_load_ratio')
-  if (value === null) return '--'
-  return ratio === null ? `${Math.round(value)}` : `${Math.round(value)} · 比 ${ratio.toFixed(2)}`
-})
+const latestLoad = computed(() => latestLoadRecord(dailyMetrics.value))
+const latestTrainingLoad = computed(() => latestLoad.value.load === null ? '--' : Math.round(latestLoad.value.load))
+const latestLoadRatio = computed(() => latestLoad.value.ratio === null ? '' : latestLoad.value.ratio.toFixed(2))
 const hasLoadHrvSeries = computed(() => dailyMetrics.value.some(item => Number.isFinite(item.training_load) || Number.isFinite(item.avg_sleep_hrv)))
 const hasSleepStageData = computed(() => sleepRecords.value.some((record) => {
   const phases = record.phases || {}
@@ -476,6 +448,7 @@ onBeforeUnmount(() => {
 .metric-list div { min-width: 0; padding-left: 12px; border-left: 2px solid var(--primary-light); }
 .metric-list dt { color: var(--text-secondary); font-size: 12px; }
 .metric-list dd { margin: 5px 0 0; color: var(--text-primary); font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+.metric-list dd small { display: block; margin-top: 4px; color: var(--text-secondary); font-size: 12px; font-weight: 500; }
 .next-step { padding: 28px; background: #F1F5F7; }
 .next-step .primary-link { display: inline-flex; margin-top: 24px; color: var(--primary-dark); font-size: 14px; font-weight: 700; }
 .next-step .primary-link:hover { text-decoration: underline; }
