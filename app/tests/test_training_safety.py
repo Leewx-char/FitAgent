@@ -3,6 +3,7 @@
 import pytest
 from datetime import date
 
+from app.services import training_plan_service
 from app.models import UserProfile
 from app.schemas import PlanDay, PlanExercise, WeeklyTrainingPlan
 from app.services.fitness_insights import FitnessSnapshot
@@ -130,3 +131,37 @@ def test_plan_generation_rejects_partial_realtime_snapshot_for_connected_user():
 
     with pytest.raises(PlanGenerationError, match="不完整"):
         service._fitness_snapshot(object(), user_id=1)
+
+
+def test_plan_generation_uses_the_latest_seven_calendar_days(monkeypatch):
+    """生成计划只读取最近七天快照，并将相同周期传给模型摘要。"""
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 13)
+
+    class RecordingGateway:
+        def __init__(self):
+            self.calls = []
+
+        def fetch_snapshot(self, _db, **kwargs):
+            self.calls.append(kwargs)
+            return LiveFitnessData(
+                start_date=kwargs["start_date"],
+                end_date=kwargs["end_date"],
+                daily_metrics=[{"date": "2026-09-13", "rhr": 55}],
+            )
+
+    monkeypatch.setattr(training_plan_service, "date", FixedDate)
+    gateway = RecordingGateway()
+    snapshot = TrainingPlanService(coros_gateway=gateway)._fitness_snapshot(object(), user_id=1)
+
+    assert gateway.calls == [
+        {
+            "user_id": 1,
+            "start_date": FixedDate(2026, 9, 7),
+            "end_date": FixedDate(2026, 9, 13),
+        }
+    ]
+    assert snapshot.period_label == "2026-09-07 至 2026-09-13"

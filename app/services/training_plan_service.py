@@ -77,13 +77,13 @@ class TrainingSafetyPolicy:
             constraints.append("存在用户记录的伤病/不适，本周仅安排低强度且无痛范围内训练")
         if snapshot.max_training_load_ratio is not None and snapshot.max_training_load_ratio > 1.3:
             maximum_intensity = "低"
-            signals.append("近4周训练负荷比偏高")
+            signals.append(f"{snapshot.period_label}训练负荷比偏高")
         if snapshot.avg_sleep_hours is not None and snapshot.avg_sleep_hours < 6:
             maximum_intensity = "低"
-            signals.append("近4周平均睡眠不足6小时")
+            signals.append(f"{snapshot.period_label}平均睡眠不足6小时")
         if snapshot.avg_tired_rate is not None and snapshot.avg_tired_rate >= 7:
             maximum_intensity = "低"
-            signals.append("近4周平均疲劳度较高")
+            signals.append(f"{snapshot.period_label}平均疲劳度较高")
 
         pain_scores = [item.pain_score for item in recent_feedback if item.pain_score is not None]
         rpes = [item.rpe for item in recent_feedback if item.rpe is not None]
@@ -136,19 +136,19 @@ class TrainingPlanService:
         return self._coros_gateway or get_coros_live_gateway()
 
     def _fitness_snapshot(self, db: DBSession, *, user_id: int) -> FitnessSnapshot:
-        """连接后必须使用实时数据；未连接时才允许退回画像与知识库路径。"""
+        """每次生成优先从 COROS MCP 读取最近七天数据；未连接时才允许回退。"""
 
         end_date = date.today()
-        start_date = end_date - timedelta(weeks=4)
+        start_date = end_date - timedelta(days=6)
         try:
             live_data = self.coros_gateway.fetch_snapshot(
                 db,
                 user_id=user_id,
                 start_date=start_date,
                 end_date=end_date,
-            )
+        )
         except CorosNotConnectedError:
-            return FitnessSnapshot()
+            return FitnessSnapshot(period_label="近1周")
         except (CorosMcpError, CorosOAuthError) as error:
             raise PlanGenerationError(
                 "COROS 已连接但实时运动数据暂不可用，无法安全生成训练计划，请稍后重试"

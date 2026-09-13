@@ -1,5 +1,6 @@
 """结构化训练计划持久化的 API 测试，不依赖真实 LLM 或 Qdrant。"""
 
+import json
 from datetime import date
 from types import SimpleNamespace
 
@@ -158,3 +159,71 @@ def test_structured_plan_failure_does_not_persist(monkeypatch):
         service.generate(db, user_id=1, week_start=date(2026, 9, 7))
 
     assert db.added == []
+
+
+def test_generate_plan_passes_profile_weekly_snapshot_and_feedback_to_model(monkeypatch):
+    """模型上下文必须同时包含用户画像、最近一周快照和训练反馈。"""
+
+    class CapturingPlanModel(FakePlanModel):
+        def invoke(self, messages):
+            """记录模型上下文，并返回满足结构化契约的计划。"""
+            self.messages = messages
+            return WeeklyTrainingPlan.model_validate(_model_plan())
+
+    class EmptyPlanQuery:
+        def filter(self, *_args):
+            """模拟计划归档查询的筛选链。"""
+            return self
+
+        @staticmethod
+        def all():
+            """模拟当前周没有既有训练计划。"""
+            return []
+
+    class RecordingDb:
+        def __init__(self):
+            self.added = []
+
+        @staticmethod
+        def query(*_args):
+            """返回仅支持计划查询的轻量替身。"""
+            return EmptyPlanQuery()
+
+        def add(self, value):
+            """记录生成服务待写入的计划。"""
+            self.added.append(value)
+
+        @staticmethod
+        def flush():
+            """模拟 ORM 刷新，不访问真实数据库。"""
+            return None
+
+    model = CapturingPlanModel()
+    service = TrainingPlanService(model=model)
+    profile = SimpleNamespace(
+        age=28,
+        weight=70,
+        goal="健康管理",
+        weekly_days=3,
+        experience="初级",
+        injuries="[]",
+        preferences="[]",
+    )
+    feedback = SimpleNamespace(day_of_week=2, completed=True, rpe=7, pain_score=0, notes="状态良好")
+    monkeypatch.setattr(service, "_load_profile", lambda _db, _user_id: profile)
+    monkeypatch.setattr(
+        service,
+        "_fitness_snapshot",
+        lambda _db, **_kwargs: FitnessSnapshot(period_label="近1周", days_observed=5),
+    )
+    monkeypatch.setattr(service, "_recent_feedback", lambda _db, _user_id: [feedback])
+    monkeypatch.setattr(service, "_retrieve_evidence", lambda *_args: ("训练证据", []))
+
+    service.generate(RecordingDb(), user_id=1, week_start=date(2026, 9, 7))
+
+    context = json.loads(model.messages[-1].content)
+    assert context["profile"]["goal"] == "健康管理"
+    assert "用户近1周运动数据摘要" in context["fitness_snapshot"]
+    assert context["recent_feedback"] == [
+        {"day_of_week": 2, "completed": True, "rpe": 7, "pain_score": 0, "notes": "状态良好"}
+    ]
