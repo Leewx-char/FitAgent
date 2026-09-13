@@ -1,29 +1,10 @@
 <template>
   <div class="chat-main">
-    <header class="chat-header">
-      <div>
-        <p class="eyebrow">训练对话</p>
-        <h1>和你的训练教练聊聊</h1>
-      </div>
-      <p>建议会结合已确认档案、训练反馈与可用数据。</p>
-    </header>
-
     <div class="conversation-shell">
       <div class="messages-container" ref="messagesRef">
     <div v-if="messages.length === 0 && !uploadResult" class="empty-chat">
-      <p class="empty-kicker">从一个具体问题开始</p>
       <h2>今天想先解决哪件事？</h2>
       <p class="empty-sub">我可以帮你梳理训练计划、分析数据或讨论动作与恢复。</p>
-      <div class="quick-actions">
-        <button
-          v-for="action in quickActions"
-          :key="action"
-          class="quick-btn"
-          @click="sendQuick(action)"
-        >
-          {{ action }}
-        </button>
-      </div>
     </div>
 
     <div
@@ -80,16 +61,6 @@
     </div>
   </div>
 
-      <aside class="chat-context" aria-label="训练上下文说明">
-        <p class="eyebrow">训练上下文</p>
-        <h2>建议如何形成</h2>
-        <dl>
-          <div><dt>档案</dt><dd>已确认的目标与限制</dd></div>
-          <div><dt>反馈</dt><dd>已保存的训练感受</dd></div>
-          <div><dt>COROS</dt><dd>已同步的结构化摘要</dd></div>
-        </dl>
-        <p class="context-note">只会按需使用可用信息；未确认的记忆不会进入长期个性化建议。</p>
-      </aside>
     </div>
 
   <div v-if="uploadResult" class="confirm-overlay">
@@ -251,13 +222,6 @@ function selectConflict(key, metric) {
   delete uploadResult.value.data.conflicts[key]
 }
 
-const quickActions = [
-  '帮我制定减脂训练计划',
-  '膝盖不好怎么练腿？',
-  '蛋白质每天吃多少？',
-  '新手健身注意事项',
-]
-
 /** 将助手 Markdown 渲染为已净化的 HTML，供消息内容安全展示。 */
 function renderMarkdown(text) {
   if (!text) return ''
@@ -284,12 +248,6 @@ function handleSend(e) {
   e?.preventDefault()
   sendMessage(inputText.value.trim())
   inputText.value = ''
-}
-
-/** 发送预设快捷问题，上传或流式回复期间不重复发起请求。 */
-function sendQuick(text) {
-  if (streaming.value || uploading.value) return
-  sendMessage(text)
 }
 
 /** 追加用户消息并消费聊天接口的 SSE 流，持续更新助手回复和工具状态。 */
@@ -518,44 +476,6 @@ watch(toolChain, () => {
   text-align: center;
 }
 
-.empty-brand {
-  position: relative;
-  width: 80px;
-  height: 80px;
-  margin-bottom: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.empty-logo {
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, var(--primary), #1E88E5);
-  color: #fff;
-  font-size: 28px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 2;
-}
-
-.empty-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 2px solid var(--primary-light);
-  animation: empty-pulse 3s ease-out infinite;
-  transform-origin: center;
-}
-
-@keyframes empty-pulse {
-  0%, 100% { transform: scale(1); opacity: 0.3; }
-  50% { transform: scale(1.15); opacity: 0.8; }
-}
-
 .empty-chat h2 {
   color: var(--text-primary);
   font-size: 22px;
@@ -568,37 +488,6 @@ watch(toolChain, () => {
   font-size: 15px;
   margin: 0 0 28px;
   max-width: 360px;
-}
-
-.quick-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.quick-btn {
-  padding: 8px 18px;
-  border-radius: 20px;
-  border: 1px solid var(--primary-light);
-  background: var(--bg-card);
-  color: var(--text-primary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  font-family: inherit;
-}
-
-.quick-btn:hover {
-  background: var(--primary);
-  color: #fff;
-  border-color: var(--primary);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(66, 165, 245, 0.25);
-}
-
-.quick-btn:active {
-  transform: translateY(0);
 }
 
 .message-row {
@@ -983,43 +872,9 @@ watch(toolChain, () => {
   background: var(--bg-page);
 }
 
-.chat-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 28px 44px 22px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-card);
-}
-
-.eyebrow, .empty-kicker {
-  color: var(--text-quiet);
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-
-.chat-header h1 {
-  margin: 4px 0 0;
-  color: var(--text-primary);
-  font-size: 24px;
-  letter-spacing: -.03em;
-}
-
-.chat-header > p {
-  max-width: 280px;
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-  text-align: right;
-}
-
 .conversation-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
 }
@@ -1045,10 +900,6 @@ watch(toolChain, () => {
 }
 
 .empty-sub { margin: 0 0 24px; max-width: 460px; line-height: 1.7; }
-.quick-actions { justify-content: flex-start; }
-.quick-btn { border-color: var(--border); border-radius: 7px; transition: background-color .16s ease, border-color .16s ease, color .16s ease; }
-.quick-btn:hover { background: var(--primary-light); border-color: var(--primary-light); color: var(--primary-dark); box-shadow: none; transform: none; }
-
 .message-row { margin-bottom: 18px; }
 .message-bubble { max-width: min(760px, 78%); border: 1px solid transparent; }
 .message-bubble.user { border-radius: 10px; background: var(--primary-light); }
@@ -1060,14 +911,6 @@ watch(toolChain, () => {
 .thinking-pulse { display: none; }
 .tool-line:not(:last-child)::after { background: var(--border); }
 
-.chat-context { align-self: stretch; padding: 32px 24px; border-left: 1px solid var(--border); background: var(--bg-card); }
-.chat-context h2 { margin: 6px 0 22px; color: var(--text-primary); font-size: 17px; letter-spacing: -.02em; }
-.chat-context dl { display: grid; gap: 16px; margin: 0; }
-.chat-context dl div { padding-bottom: 16px; border-bottom: 1px solid var(--border); }
-.chat-context dt { color: var(--text-primary); font-size: 13px; font-weight: 700; }
-.chat-context dd { margin: 5px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
-.context-note { margin: 24px 0 0; color: var(--text-quiet); font-size: 12px; line-height: 1.65; }
-
 .input-area { padding: 14px max(28px, 6vw) 18px; border-color: var(--border); }
 .input-bottom-row { max-width: 900px; }
 .input-area :deep(.n-input) { background: #FAFBFC; }
@@ -1075,16 +918,11 @@ watch(toolChain, () => {
 .confirm-header, .confirm-actions { border-color: var(--border); }
 
 @media (max-width: 960px) {
-  .chat-header { padding-left: 28px; padding-right: 28px; }
-  .conversation-shell { grid-template-columns: 1fr; }
-  .chat-context { display: none; }
+  .messages-container { padding-left: 28px; padding-right: 28px; }
 }
 
 @media (max-width: 700px) {
   .chat-main { min-height: calc(100vh - 54px); }
-  .chat-header { align-items: flex-start; flex-direction: column; gap: 10px; padding: 22px 16px 18px; }
-  .chat-header h1 { font-size: 22px; }
-  .chat-header > p { max-width: none; text-align: left; }
   .messages-container { padding: 22px 16px; }
   .empty-chat { padding: 48px 0; }
   .message-bubble { max-width: 90%; }
