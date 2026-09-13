@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from functools import lru_cache
@@ -19,11 +20,10 @@ from app.services.coros_oauth import (
     CorosOAuthService,
     CorosReconnectionRequiredError,
 )
-from app.utils.logger_handler import get_logger
 
 
-# COROS 上游故障写入独立文件，便于与通用业务日志分开排查。
-logger = get_logger("coros_live")
+# 由应用生命周期配置独立文件处理器，避免导入模块时写入测试日志。
+logger = logging.getLogger("coros_live")
 
 
 class CorosMcpError(RuntimeError):

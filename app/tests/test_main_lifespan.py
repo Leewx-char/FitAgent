@@ -11,10 +11,11 @@ async def test_lifespan_initializes_schema_before_runtime_work(monkeypatch):
     events: list[str] = []
     monkeypatch.setattr(main, "initialize_schema", lambda: events.append("schema"))
     monkeypatch.setattr(main, "validate_runtime", lambda: events.append("runtime") or [])
+    monkeypatch.setattr(main, "get_logger", lambda name: events.append(name))
     async with main.lifespan(main.app):
-        assert events == ["schema", "runtime"]
+        assert events == ["schema", "runtime", "coros_live"]
 
-    assert events == ["schema", "runtime"]
+    assert events == ["schema", "runtime", "coros_live"]
 
 
 @pytest.mark.anyio

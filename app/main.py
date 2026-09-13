@@ -19,6 +19,7 @@ from app.schemas import ApiResponse
 from app.api.exception_handlers import register_exception_handlers
 from app.core.database import initialize_schema
 from app.utils.bootstrap import validate_runtime
+from app.utils.logger_handler import get_logger
 from app.services.vector_store import VectorStoreService
 from app.api.routers.chat import router as chat_router
 from app.api.routers.auth import router as auth_router
@@ -51,6 +52,8 @@ async def lifespan(app: FastAPI):
         for issue in issues:
             print(f"[启动检查失败] {issue}")
         raise RuntimeError(f"启动检查未通过，共 {len(issues)} 个问题，请修复后重试")
+    # COROS 上游故障记录到独立文件，供连接诊断使用。
+    get_logger("coros_live")
     yield
 
 
