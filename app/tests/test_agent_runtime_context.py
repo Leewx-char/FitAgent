@@ -8,7 +8,7 @@ from threading import Barrier
 
 import pytest
 from langchain.tools import ToolRuntime
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 from langgraph.types import Command
 
@@ -325,6 +325,114 @@ def test_personalized_agent_keeps_tool_and_evidence_events():
         {"type": "tool_completed", "id": "rag-call"},
         {"type": "evidence", "items": [{"rank": 1, "evidence_id": "guide.md#1"}]},
         {"type": "text", "content": "膝盖跟随脚尖。"},
+    ]
+
+
+def test_personalized_agent_emits_final_ai_message_after_tool():
+    """工具结果后的完整 AIMessage 必须转发为 SSE 文本事件。"""
+
+    class ToolThenFinalMessageAgent:
+        @staticmethod
+        async def astream(_input_state, **_kwargs):
+            """模拟工具完成后以完整 AIMessage 返回正式回答。"""
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[{"name": "get_weather", "id": "weather-call"}],
+                    ),
+                    {"langgraph_step": 1},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    ToolMessage(content="广州晴", tool_call_id="weather-call"),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    AIMessage(content="建议傍晚慢跑 30 分钟。", id="answer-1"),
+                    {"langgraph_step": 3},
+                ),
+            )
+
+    executor = object.__new__(ReactAgent)
+    executor.agent = ToolThenFinalMessageAgent()
+    executor.max_steps = 30
+    executor.max_tool_calls = 10
+    result = asyncio.run(
+        executor.astream_personalized_events(
+            build_initial_chat_state(messages=[{"role": "user", "content": "广州怎么训练？"}]),
+            ChatRuntimeContext(
+                user_id=5,
+                session_id="session-5",
+                dependencies=SimpleNamespace(max_tool_calls=10),
+            ),
+        )
+    )
+
+    assert result["events"] == [
+        {"type": "tool", "id": "weather-call", "name": "查询天气"},
+        {"type": "tool_completed", "id": "weather-call"},
+        {"type": "text", "content": "建议傍晚慢跑 30 分钟。"},
+    ]
+
+
+def test_personalized_agent_accepts_complete_ai_message_tool_calls():
+    """非流式工具调用也必须与分片工具事件保持一致。"""
+
+    class CompleteMessageToolAgent:
+        @staticmethod
+        async def astream(_input_state, **_kwargs):
+            """模拟完整消息声明工具后返回正式回答。"""
+            yield (
+                "messages",
+                (
+                    AIMessage(
+                        content="",
+                        tool_calls=[{"name": "get_weather", "args": {}, "id": "weather-call"}],
+                    ),
+                    {"langgraph_step": 1},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    ToolMessage(content="广州晴", tool_call_id="weather-call"),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    AIMessage(content="建议傍晚慢跑 30 分钟。", id="answer-1"),
+                    {"langgraph_step": 3},
+                ),
+            )
+
+    executor = object.__new__(ReactAgent)
+    executor.agent = CompleteMessageToolAgent()
+    executor.max_steps = 30
+    executor.max_tool_calls = 10
+    result = asyncio.run(
+        executor.astream_personalized_events(
+            build_initial_chat_state(messages=[{"role": "user", "content": "广州怎么训练？"}]),
+            ChatRuntimeContext(
+                user_id=5,
+                session_id="session-5",
+                dependencies=SimpleNamespace(max_tool_calls=10),
+            ),
+        )
+    )
+
+    assert result["events"] == [
+        {"type": "tool", "id": "weather-call", "name": "查询天气"},
+        {"type": "tool_completed", "id": "weather-call"},
+        {"type": "text", "content": "建议傍晚慢跑 30 分钟。"},
     ]
 
 

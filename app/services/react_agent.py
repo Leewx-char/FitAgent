@@ -5,7 +5,7 @@ from typing import Annotated, Any, AsyncIterator, Callable, Iterable, cast
 from langchain.agents import AgentState, create_agent
 from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.runnables.config import merge_configs
 
@@ -247,8 +247,13 @@ class ReactAgent:
             ):
                 if stream_mode == "messages":
                     message, metadata = payload
-                    if isinstance(message, AIMessageChunk):
-                        for tool_call in getattr(message, "tool_call_chunks", None) or []:
+                    if isinstance(message, (AIMessage, AIMessageChunk)):
+                        tool_calls = (
+                            getattr(message, "tool_call_chunks", None)
+                            or getattr(message, "tool_calls", None)
+                            or []
+                        )
+                        for tool_call in tool_calls:
                             tool_id = tool_call.get("id")
                             tool_name = tool_call.get("name")
                             if tool_id and tool_name and tool_id not in seen_tool_ids:
