@@ -1,4 +1,3 @@
-import json
 import asyncio
 from operator import add, or_
 from types import SimpleNamespace
@@ -29,6 +28,7 @@ from app.services.rag_service import RagContext, RagSummarizeService
 from app.services.chat_routing_graph import (
     ChatGraphState,
     ChatRuntimeContext,
+    JsonValue,
     StructuredOutputIntentClassifier,
     build_chat_routing_graph,
     build_initial_chat_state,
@@ -325,8 +325,8 @@ class ReactAgent:
         session_id: str = "",
         config: RunnableConfig | None = None,
         timing: ChatLatencyTracker | None = None,
-    ):
-        """构造请求级图上下文，并编码兼容既有 SSE 的执行事件。"""
+    ) -> AsyncIterator[dict[str, JsonValue]]:
+        """构造请求级图上下文，并产出已验证的内部事件。"""
         if timing is not None:
             timing.mark("agent.execute_stream_started", message_count=len(messages))
         normalized_messages = self._normalize_messages(messages)
@@ -348,7 +348,9 @@ class ReactAgent:
             config=config,
         ):
             if stream_mode == "custom":
-                yield json.dumps(event, ensure_ascii=False) + "\n"
+                if not isinstance(event, dict) or not is_json_value(event):
+                    raise ValueError("Agent 输出了不可序列化的内部事件")
+                yield event
 
 
 if __name__ == "__main__":

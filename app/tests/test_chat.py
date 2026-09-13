@@ -32,7 +32,7 @@ class TestChat:
                 """通过本地 Runnable 消费回调配置并输出固定文本事件。"""
                 cls.captured_config = kwargs["config"]
                 RunnableLambda(lambda _input: "已执行").invoke({}, config=cls.captured_config)
-                yield '{"type": "text", "content": "膝盖跟随脚尖。"}'
+                yield {"type": "text", "content": "膝盖跟随脚尖。"}
 
         class FakeDb:
             """提供 SSE 收尾所需的最小数据库接口。"""
@@ -101,7 +101,7 @@ class TestChat:
             @staticmethod
             async def execute_stream(_messages, **_kwargs):
                 """输出一段成功的文本事件。"""
-                yield '{"type": "text", "content": "保持呼吸。"}'
+                yield {"type": "text", "content": "保持呼吸。"}
 
         class FakeDb:
             """提供 SSE 收尾所需的最小数据库接口。"""
@@ -149,6 +149,60 @@ class TestChat:
             'data: {"type": "text", "content": "保持呼吸。"}\n\n',
             "data: [DONE]\n\n",
         ]
+
+    def test_sse_turns_invalid_internal_event_into_standard_error(self, monkeypatch):
+        """内部事件不合法时必须走既有 SSE 错误契约，而非作为文本透传。"""
+
+        class FakeAgent:
+            @staticmethod
+            async def execute_stream(_messages, **_kwargs):
+                yield "invalid internal event"
+
+        class FakeDb:
+            @staticmethod
+            def add(_message):
+                """忽略测试中的待保存消息。"""
+
+            @staticmethod
+            def query(_model):
+                """返回不会命中会话的查询对象。"""
+                return SimpleNamespace(filter=lambda *_args: SimpleNamespace(first=lambda: None))
+
+            @staticmethod
+            def commit():
+                """避免测试访问真实数据库。"""
+
+        @contextmanager
+        def fake_trace_db():
+            """提供轨迹保存所需的独立会话。"""
+            yield object()
+
+        monkeypatch.setattr(chat_router, "get_db_session", fake_trace_db)
+        monkeypatch.setattr(
+            chat_router.AgentTraceRepository, "save", lambda *_args, **_kwargs: None
+        )
+
+        async def collect_sse():
+            """收集真实 sse_generator 的全部响应块。"""
+            return [
+                chunk
+                async for chunk in chat_router.sse_generator(
+                    FakeAgent(),
+                    [{"role": "user", "content": "深蹲怎么做？"}],
+                    FakeDb(),
+                    "session-invalid-event",
+                    "深蹲怎么做？",
+                    SimpleNamespace(id=9),
+                )
+            ]
+
+        chunks = asyncio.run(collect_sse())
+
+        assert json.loads(chunks[0][6:]) == {
+            "type": "error",
+            "content": "服务暂时不可用，请稍后重试",
+        }
+        assert chunks[1] == "data: [DONE]\n\n"
 
     def test_chat_creates_session(self, auth_client, agent_mock):
         """无 session_id → 自动创建会话，响应头返回 X-Session-Id"""
@@ -265,13 +319,20 @@ class TestChat:
         """RAG 证据事件必须穿过聊天路由，前端才能渲染来源卡片。"""
         agent_mock.execute_stream.side_effect = lambda *_args, **_kwargs: _stream_events(
             [
-                '{"type": "tool", "name": "检索知识库"}',
-                (
-                    '{"type": "evidence", "items": [{"rank": 1, '
-                    '"evidence_id": "动作指南.md#squat", "source_id": "动作指南.md", '
-                    '"snippet": "膝盖与脚尖方向一致。", "score": 0.03}]}'
-                ),
-                '{"type": "text", "content": "膝盖跟随脚尖。[证据:1]"}',
+                {"type": "tool", "name": "检索知识库"},
+                {
+                    "type": "evidence",
+                    "items": [
+                        {
+                            "rank": 1,
+                            "evidence_id": "动作指南.md#squat",
+                            "source_id": "动作指南.md",
+                            "snippet": "膝盖与脚尖方向一致。",
+                            "score": 0.03,
+                        }
+                    ],
+                },
+                {"type": "text", "content": "膝盖跟随脚尖。[证据:1]"},
             ]
         )
 
@@ -329,7 +390,7 @@ class TestChat:
         """第 11 次请求前已有 21 条消息时只把最近 20 条原文交给 Agent。"""
 
         agent_mock.execute_stream.side_effect = lambda *args, **kwargs: _stream_events(
-            ['{"type": "text", "content": "ok"}']
+            [{"type": "text", "content": "ok"}]
         )
         session_id = ""
         for index in range(11):
@@ -353,7 +414,7 @@ class TestChat:
 
         async def stream_response(*_args, **_kwargs):
             call_order.append("model")
-            yield '{"type": "text", "content": "已生成回答"}'
+            yield {"type": "text", "content": "已生成回答"}
             call_order.append("model_completed")
 
         class BackgroundMemoryService:

@@ -1,7 +1,6 @@
 """聊天路由图与公开流式入口的兼容性测试。"""
 
 import asyncio
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -127,7 +126,7 @@ def _public_agent(classifier, *, direct_executor=None, inner_agent=None):
 
 
 def test_chat_sse_contract_is_unchanged_for_direct_rag_route():
-    """直接 RAG 图路径仍应输出既有工具、证据和文本 JSON 行。"""
+    """直接 RAG 图路径仍应输出既有工具、证据和文本事件。"""
 
     class DirectExecutor:
         """返回固定且可序列化的直接检索事件。"""
@@ -144,18 +143,15 @@ def test_chat_sse_contract_is_unchanged_for_direct_rag_route():
         direct_executor=DirectExecutor(),
     )
 
-    events = [
-        json.loads(chunk)
-        for chunk in asyncio.run(
-            _collect(
-                agent.execute_stream(
-                    [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
-                    user_id=7,
-                    session_id="stable-session",
-                )
+    events = asyncio.run(
+        _collect(
+            agent.execute_stream(
+                [{"role": "user", "content": "深蹲时膝盖应该朝哪里？"}],
+                user_id=7,
+                session_id="stable-session",
             )
         )
-    ]
+    )
 
     assert events == [
         {"type": "tool", "name": "检索知识库"},
@@ -165,7 +161,7 @@ def test_chat_sse_contract_is_unchanged_for_direct_rag_route():
 
 
 def test_chat_sse_contract_is_unchanged_for_personalized_route():
-    """个性化图路径仍应输出既有工具和文本 JSON 行。"""
+    """个性化图路径仍应输出既有工具和文本事件。"""
 
     class PersonalizedInnerAgent:
         """模拟内层 Agent 的工具调用和最终文本。"""
@@ -205,18 +201,15 @@ def test_chat_sse_contract_is_unchanged_for_personalized_route():
         inner_agent=PersonalizedInnerAgent(),
     )
 
-    events = [
-        json.loads(chunk)
-        for chunk in asyncio.run(
-            _collect(
-                agent.execute_stream(
-                    [{"role": "user", "content": "结合我的目标安排训练"}],
-                    user_id=7,
-                    session_id="stable-session",
-                )
+    events = asyncio.run(
+        _collect(
+            agent.execute_stream(
+                [{"role": "user", "content": "结合我的目标安排训练"}],
+                user_id=7,
+                session_id="stable-session",
             )
         )
-    ]
+    )
 
     assert events == [
         {"type": "tool", "name": "获取用户画像"},
@@ -243,18 +236,15 @@ def test_classifier_exception_returns_successful_personalized_sse_flow():
         inner_agent=PersonalizedInnerAgent(),
     )
 
-    events = [
-        json.loads(chunk)
-        for chunk in asyncio.run(
-            _collect(
-                agent.execute_stream(
-                    [{"role": "user", "content": "深蹲怎么做？"}],
-                    user_id=7,
-                    session_id="stable-session",
-                )
+    events = asyncio.run(
+        _collect(
+            agent.execute_stream(
+                [{"role": "user", "content": "深蹲怎么做？"}],
+                user_id=7,
+                session_id="stable-session",
             )
         )
-    ]
+    )
 
     assert events == [{"type": "text", "content": "请补充你的训练频率。"}]
 
@@ -318,7 +308,7 @@ def test_direct_rag_custom_stream_emits_tool_before_executor_error():
             await anext(stream)
         return first
 
-    assert json.loads(asyncio.run(collect_until_error())) == {"type": "tool", "name": "检索知识库"}
+    assert asyncio.run(collect_until_error()) == {"type": "tool", "name": "检索知识库"}
 
 
 def test_personalized_custom_stream_emits_tool_before_executor_error():
@@ -360,7 +350,7 @@ def test_personalized_custom_stream_emits_tool_before_executor_error():
             await anext(stream)
         return first
 
-    assert json.loads(asyncio.run(collect_until_error())) == {
+    assert asyncio.run(collect_until_error()) == {
         "type": "tool",
         "name": "获取用户画像",
     }

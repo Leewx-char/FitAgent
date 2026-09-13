@@ -118,22 +118,9 @@ async def sse_generator(
     )
     stream_failed = False
     try:
-        async for chunk in event_stream:
-            chunk = chunk.strip()
-            if not chunk:
-                continue
-            # 解析 agent 发来的 JSON 事件
-            try:
-                event = json.loads(chunk)
-            except (json.JSONDecodeError, TypeError):
-                # 不是 JSON（兜底），当纯文本处理
-                chunk = _redact_sensitive(chunk)
-                full_response += chunk
-                payload = {"type": "text", "content": chunk}
-                timing.mark_once("sse_first_event", "sse.first_event", event_type="text")
-                timing.mark_once("sse_first_text", "sse.first_text", content_chars=len(chunk))
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                continue
+        async for event in event_stream:
+            if not isinstance(event, dict):
+                raise ValueError("Agent 输出了无效的内部事件")
             if event.get("type") == "tool":
                 # 工具调用通知：把英文名翻译成中文显示给用户
                 payload = {"type": "tool", "name": event.get("name", "")}

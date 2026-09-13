@@ -124,7 +124,7 @@ def agent_mock(auth_client):
     async def stream_events():
         """生成默认的异步 Agent 事件。"""
 
-        yield '{"type": "text", "content": "你好，我是健身助手"}'
+        yield {"type": "text", "content": "你好，我是健身助手"}
 
     mock = MagicMock()
     mock.execute_stream.side_effect = lambda *_args, **_kwargs: stream_events()

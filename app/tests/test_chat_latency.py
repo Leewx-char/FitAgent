@@ -22,8 +22,8 @@ def test_sse_logs_first_text_once_without_exposing_message(caplog, monkeypatch):
     class FakeAgent:
         @staticmethod
         async def execute_stream(_messages, **_kwargs):
-            yield '{"type": "text", "content": "第一段回答"}'
-            yield '{"type": "text", "content": "第二段回答"}'
+            yield {"type": "text", "content": "第一段回答"}
+            yield {"type": "text", "content": "第二段回答"}
 
     class FakeDb:
         @staticmethod
