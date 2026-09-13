@@ -2,7 +2,6 @@
   <aside class="sidebar">
     <div class="sidebar-top">
       <div class="sidebar-brand">
-        <div class="brand-icon">F</div>
         <span class="brand-name">FitAgent</span>
       </div>
       <n-button type="primary" ghost block size="small" @click="newSession">
@@ -163,82 +162,65 @@ onMounted(async () => {
 
 <style scoped>
 .sidebar {
-  width: 260px;
+  width: 232px;
   background: var(--bg-card);
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #e2e8f0;
+  border-right: 1px solid var(--border);
   height: 100vh;
 }
 
 .sidebar-top {
-  padding: 16px 16px 12px;
+  padding: 24px 16px 14px;
 }
 
 .sidebar-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
-}
-
-.brand-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, var(--primary), #42A5F5);
-  color: white;
-  font-weight: 700;
-  font-size: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  margin: 0 8px 20px;
 }
 
 .brand-name {
   font-size: 18px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
 }
 
 .sidebar-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   padding: 0 8px;
-  margin-bottom: 8px;
+  margin-bottom: 14px;
 }
 
 .nav-item {
-  padding: 10px 12px;
+  padding: 9px 12px;
   border-radius: 8px;
-  font-size: 13px;
-  color: var(--text-primary);
+  font-size: 14px;
+  color: var(--text-secondary);
   text-decoration: none;
-  transition: all 0.2s ease;
-  position: relative;
+  transition: background-color 0.16s ease, color 0.16s ease;
 }
 
 .nav-item:hover {
-  background: var(--primary-light);
-  transform: translateX(2px);
+  background: #F1F4F6;
+  color: var(--text-primary);
 }
 
 .nav-item.active {
-  background: var(--primary);
-  color: #fff;
+  background: var(--primary-light);
+  color: var(--primary-dark);
   font-weight: 600;
-  transform: translateX(0);
 }
 
 .session-list {
   flex: 1;
   overflow-y: auto;
   padding: 0 8px;
-  border-top: 1px solid #e2e8f0;
-  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
   position: relative;
-  transition: box-shadow 0.3s ease;
+  transition: box-shadow 0.16s ease;
 }
 
 .session-list.scrolled {
@@ -253,25 +235,25 @@ onMounted(async () => {
 }
 
 .session-item {
-  padding: 10px 12px;
+  padding: 9px 12px;
   border-radius: 8px;
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 2px;
-  transition: background 0.15s;
+  transition: background-color 0.16s ease;
   font-size: 13px;
   color: var(--text-primary);
   position: relative;
 }
 
 .session-item:hover {
-  background: #eef2f7;
+  background: #F1F4F6;
 }
 
 .session-item.active {
-  background: #e3edf7;
+  background: var(--primary-light);
 }
 
 .session-dot {
@@ -311,8 +293,8 @@ onMounted(async () => {
 }
 
 .sidebar-bottom {
-  border-top: 1px solid #e2e8f0;
-  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  padding: 12px;
   position: relative;
 }
 
@@ -327,7 +309,7 @@ onMounted(async () => {
 }
 
 .sidebar-profile:hover {
-  background: #eef2f7;
+  background: #F1F4F6;
 }
 
 .profile-avatar {
@@ -376,8 +358,9 @@ onMounted(async () => {
   left: 8px;
   right: 8px;
   background: white;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 8px 24px rgba(31, 41, 51, 0.1);
   margin-bottom: 6px;
   overflow: hidden;
 }
@@ -391,7 +374,7 @@ onMounted(async () => {
 }
 
 .menu-item:hover {
-  background: #f0f5ff;
+  background: #F1F4F6;
 }
 
 .menu-danger {
@@ -399,7 +382,7 @@ onMounted(async () => {
 }
 
 .menu-danger:hover {
-  background: #fff0f0;
+  background: #FFF3F2;
 }
 
 .fade-enter-active,
@@ -410,5 +393,52 @@ onMounted(async () => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+@media (max-width: 760px) {
+  .sidebar {
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    gap: 14px;
+  }
+
+  .sidebar-top {
+    padding: 0;
+  }
+
+  .sidebar-brand {
+    margin: 0;
+  }
+
+  .brand-name {
+    font-size: 16px;
+  }
+
+  .sidebar-top :deep(.n-button),
+  .session-list,
+  .sidebar-bottom {
+    display: none;
+  }
+
+  .sidebar-nav {
+    flex: 1;
+    flex-direction: row;
+    overflow-x: auto;
+    margin: 0;
+    padding: 0;
+    gap: 2px;
+  }
+
+  .nav-item {
+    flex: 0 0 auto;
+    padding: 7px 8px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
 }
 </style>

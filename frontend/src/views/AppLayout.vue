@@ -18,12 +18,12 @@ import Sidebar from '@/components/Sidebar.vue'
 <style scoped>
 .app-layout {
   display: flex;
-  height: 100vh;
-  overflow: hidden;
+  min-height: 100vh;
 }
 
 .app-main {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   background: var(--bg-page);
 }
@@ -36,5 +36,11 @@ import Sidebar from '@/components/Sidebar.vue'
 .page-fade-enter-from,
 .page-fade-leave-to {
   opacity: 0;
+}
+
+@media (max-width: 760px) {
+  .app-layout {
+    flex-direction: column;
+  }
 }
 </style>
