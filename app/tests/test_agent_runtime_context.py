@@ -437,6 +437,81 @@ def test_personalized_agent_accepts_complete_ai_message_tool_calls():
     ]
 
 
+def test_personalized_agent_uses_values_for_tool_completion_and_final_text():
+    """消息分片为空时，必须从 values 补齐工具完成与最终回答。"""
+
+    class ValuesOnlyResultAgent:
+        @staticmethod
+        async def astream(input_state, **_kwargs):
+            """模拟 DeepSeek 将工具结果和正式回答仅写入 values 状态。"""
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[],
+                    ),
+                    {"langgraph_step": 1},
+                ),
+            )
+            tool_state = {
+                **input_state,
+                "messages": [
+                    *input_state["messages"],
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {"name": "get_weather", "args": {}, "id": "weather-call"},
+                            {"name": "get_current_month", "args": {}, "id": "month-call"},
+                        ],
+                    ),
+                    ToolMessage(content="广州晴", tool_call_id="weather-call"),
+                    ToolMessage(content="9 月", tool_call_id="month-call"),
+                ],
+            }
+            yield ("values", tool_state)
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="", id="answer-1", chunk_position="last"),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield (
+                "values",
+                {
+                    **tool_state,
+                    "messages": [
+                        *tool_state["messages"],
+                        AIMessage(content="建议傍晚慢跑 30 分钟。", id="answer-1"),
+                    ],
+                },
+            )
+
+    executor = object.__new__(ReactAgent)
+    executor.agent = ValuesOnlyResultAgent()
+    executor.max_steps = 30
+    executor.max_tool_calls = 10
+    result = asyncio.run(
+        executor.astream_personalized_events(
+            build_initial_chat_state(messages=[{"role": "user", "content": "广州怎么训练？"}]),
+            ChatRuntimeContext(
+                user_id=5,
+                session_id="session-5",
+                dependencies=SimpleNamespace(max_tool_calls=10),
+            ),
+        )
+    )
+
+    assert result["events"] == [
+        {"type": "tool", "id": "weather-call", "name": "查询天气"},
+        {"type": "tool", "id": "month-call", "name": "获取月份"},
+        {"type": "tool_completed", "id": "weather-call"},
+        {"type": "tool_completed", "id": "month-call"},
+        {"type": "text", "content": "建议傍晚慢跑 30 分钟。"},
+    ]
+
+
 def test_personalized_agent_logs_empty_final_message(caplog):
     """工具链结束后的空最终消息必须留下可关联的诊断记录。"""
 
@@ -495,7 +570,6 @@ def test_personalized_agent_logs_empty_final_message(caplog):
             ),
         )
     )
-
     assert result["events"] == [
         {"type": "tool", "id": "weather-call", "name": "查询天气"},
         {"type": "tool_completed", "id": "weather-call"},
@@ -529,6 +603,16 @@ def test_personalized_agent_logs_only_terminal_stream_chunk(caplog):
                     AIMessageChunk(content="", id="answer-1", chunk_position="last"),
                     {"langgraph_step": 2},
                 ),
+            )
+            yield (
+                "values",
+                {
+                    **_input_state,
+                    "messages": [
+                        *_input_state["messages"],
+                        AIMessage(content="最终回答", id="answer-1"),
+                    ],
+                },
             )
 
     executor = object.__new__(ReactAgent)

@@ -269,6 +269,67 @@ class TestChat:
         }
         assert chunks[1] == "data: [DONE]\n\n"
 
+    def test_sse_turns_empty_agent_output_into_standard_error(self, monkeypatch):
+        """工具执行完成却没有正文时，SSE 必须显式标记本次回答失败。"""
+
+        class FakeAgent:
+            @staticmethod
+            async def execute_stream(_messages, **_kwargs):
+                yield {"type": "tool", "id": "weather-call", "name": "查询天气"}
+                yield {"type": "tool_completed", "id": "weather-call"}
+
+        class FakeDb:
+            @staticmethod
+            def add(_message):
+                """忽略测试中的待保存消息。"""
+
+            @staticmethod
+            def query(_model):
+                """返回不会命中会话的查询对象。"""
+                return SimpleNamespace(filter=lambda *_args: SimpleNamespace(first=lambda: None))
+
+            @staticmethod
+            def commit():
+                """避免测试访问真实数据库。"""
+
+        @contextmanager
+        def fake_trace_db():
+            """提供轨迹保存所需的独立会话。"""
+            yield object()
+
+        saved = {}
+        monkeypatch.setattr(chat_router, "get_db_session", fake_trace_db)
+        monkeypatch.setattr(
+            chat_router.AgentTraceRepository,
+            "save",
+            lambda _db, _collector, **kwargs: saved.update(kwargs),
+        )
+
+        async def collect_sse():
+            """收集真实 sse_generator 的全部响应块。"""
+            return [
+                chunk
+                async for chunk in chat_router.sse_generator(
+                    FakeAgent(),
+                    [{"role": "user", "content": "广州怎么训练？"}],
+                    FakeDb(),
+                    "session-empty-answer",
+                    "广州怎么训练？",
+                    SimpleNamespace(id=10),
+                )
+            ]
+
+        chunks = asyncio.run(collect_sse())
+
+        assert [json.loads(chunk[6:]) for chunk in chunks[:-1]] == [
+            {"type": "tool", "id": "weather-call", "name": "查询天气"},
+            {"type": "tool_completed", "id": "weather-call"},
+            {"type": "error", "content": "服务暂时不可用，请稍后重试"},
+        ]
+        assert chunks[-1] == "data: [DONE]\n\n"
+        assert saved["assistant_answer"] == "服务暂时不可用，请稍后重试"
+        assert saved["status"] == "failed"
+
     def test_chat_creates_session(self, auth_client, agent_mock):
         """无 session_id → 自动创建会话，响应头返回 X-Session-Id"""
         resp = auth_client.post("/api/chat", json={"message": "你好"})

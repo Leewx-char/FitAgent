@@ -101,6 +101,15 @@ def _log_agent_stream_state(state: object) -> None:
     )
 
 
+def _final_state_answer(state: object) -> str:
+    """从最终 values 状态提取不含工具调用的助手正文。"""
+    messages = state.get("messages") if isinstance(state, dict) else None
+    last_message = messages[-1] if isinstance(messages, list) and messages else None
+    if not isinstance(last_message, AIMessage) or last_message.tool_calls:
+        return ""
+    return last_message.content if isinstance(last_message.content, str) else ""
+
+
 class PersonalizedAgentState(AgentState, total=False):
     """声明内层 Agent 在单次个性化执行中可读写的短期字段。"""
 
@@ -288,6 +297,57 @@ class ReactAgent:
                 stream_writer(event)
             events.append(event)
 
+        def register_tool_call(tool_call: object) -> None:
+            """登记工具请求；messages 与 values 两条流共用去重逻辑。"""
+            nonlocal emitted_text_since_last_tool
+            if not isinstance(tool_call, dict):
+                return
+            tool_id = tool_call.get("id")
+            tool_name = tool_call.get("name")
+            if (
+                not isinstance(tool_id, str)
+                or not isinstance(tool_name, str)
+                or tool_id in seen_tool_ids
+            ):
+                return
+            seen_tool_ids.add(tool_id)
+            if not pending_tool_call_ids and emitted_text_since_last_tool:
+                # 工具调用前的说明不是最终答案，通知客户端撤回该临时文本。
+                emit({"type": "text_reset"})
+                emitted_text_since_last_tool = False
+            pending_tool_call_ids.add(tool_id)
+            if timing is not None:
+                timing.mark("agent.tool_requested", tool=tool_name)
+            emit(
+                {
+                    "type": "tool",
+                    "id": tool_id,
+                    "name": TOOL_DISPLAY.get(tool_name, tool_name),
+                }
+            )
+
+        def complete_tool_call(tool_call_id: object) -> None:
+            """仅为已登记且未完成的工具转发一次完成事件。"""
+            nonlocal evidence_pending
+            if not isinstance(tool_call_id, str) or tool_call_id not in pending_tool_call_ids:
+                return
+            pending_tool_call_ids.discard(tool_call_id)
+            emit({"type": "tool_completed", "id": tool_call_id})
+            evidence_pending = True
+
+        def emit_text(content: object) -> None:
+            """发送最终文本，并记录首次可见正文的链路耗时。"""
+            nonlocal emitted_text_since_last_tool
+            if timing is not None:
+                timing.mark_once(
+                    "model_first_text",
+                    "model.first_text",
+                    branch="personalized_agent",
+                    content_chars=len(str(content)),
+                )
+            emit({"type": "text", "content": content})
+            emitted_text_since_last_tool = True
+
         if timing is not None:
             timing.mark("agent.personalized_model_stream_started")
         stream_outcome = "succeeded"
@@ -309,40 +369,24 @@ class ReactAgent:
                         )
                         _log_agent_stream_message(message, metadata, tool_calls)
                         for tool_call in tool_calls:
-                            tool_id = tool_call.get("id")
-                            tool_name = tool_call.get("name")
-                            if tool_id and tool_name and tool_id not in seen_tool_ids:
-                                seen_tool_ids.add(tool_id)
-                                if not pending_tool_call_ids and emitted_text_since_last_tool:
-                                    # 工具调用前的说明不是最终答案，通知客户端撤回该临时文本。
-                                    emit({"type": "text_reset"})
-                                    emitted_text_since_last_tool = False
-                                pending_tool_call_ids.add(tool_id)
-                                if timing is not None:
-                                    timing.mark("agent.tool_requested", tool=tool_name)
-                                event = {
-                                    "type": "tool",
-                                    "id": tool_id,
-                                    "name": TOOL_DISPLAY.get(tool_name, tool_name),
-                                }
-                                emit(event)
+                            register_tool_call(tool_call)
                         if message.content and not pending_tool_call_ids:
-                            if timing is not None:
-                                timing.mark_once(
-                                    "model_first_text",
-                                    "model.first_text",
-                                    branch="personalized_agent",
-                                    content_chars=len(str(message.content)),
-                                )
-                            event = {"type": "text", "content": message.content}
-                            emit(event)
-                            emitted_text_since_last_tool = True
+                            emit_text(message.content)
                     elif isinstance(message, ToolMessage):
-                        pending_tool_call_ids.discard(message.tool_call_id)
-                        emit({"type": "tool_completed", "id": message.tool_call_id})
-                        evidence_pending = True
+                        complete_tool_call(message.tool_call_id)
                 elif stream_mode == "values":
                     latest_state = payload
+                    for state_message in latest_state.get("messages", []):
+                        if isinstance(state_message, (AIMessage, AIMessageChunk)):
+                            tool_calls = (
+                                getattr(state_message, "tool_call_chunks", None)
+                                or getattr(state_message, "tool_calls", None)
+                                or []
+                            )
+                            for tool_call in tool_calls:
+                                register_tool_call(tool_call)
+                        elif isinstance(state_message, ToolMessage):
+                            complete_tool_call(state_message.tool_call_id)
                     evidence = latest_state.get("rag_evidence", [])
                     new_evidence = evidence[emitted_evidence_count:]
                     if evidence_pending and new_evidence:
@@ -350,6 +394,10 @@ class ReactAgent:
                         emit(event)
                     emitted_evidence_count = len(evidence)
                     evidence_pending = False
+            if not emitted_text_since_last_tool and not pending_tool_call_ids:
+                final_answer = _final_state_answer(latest_state)
+                if final_answer:
+                    emit_text(final_answer)
         except Exception as error:
             stream_outcome = "failed"
             stream_error_type = type(error).__name__

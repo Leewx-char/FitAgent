@@ -155,6 +155,9 @@ async def sse_generator(
                 timing.mark_once("sse_first_event", "sse.first_event", event_type="text")
                 timing.mark_once("sse_first_text", "sse.first_text", content_chars=len(content))
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        if not full_response.strip():
+            # 工具成功而没有最终文本，不能以成功状态持久化一条空回答。
+            raise RuntimeError("模型未产生最终回答")
     except Exception as e:
         stream_failed = True
         timing.mark("sse.error", error_type=type(e).__name__)
