@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from functools import lru_cache
@@ -19,6 +20,9 @@ from app.services.coros_oauth import (
     CorosOAuthService,
     CorosReconnectionRequiredError,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class CorosMcpError(RuntimeError):
@@ -134,6 +138,14 @@ class CorosLiveGateway:
                 return True
             current = current.__cause__
         return False
+
+    @staticmethod
+    def _error_status_code(error: BaseException) -> int | None:
+        """提取上游状态码，不记录可能包含敏感信息的响应正文。"""
+
+        response = getattr(error, "response", None)
+        value = getattr(response, "status_code", getattr(error, "status_code", None))
+        return value if isinstance(value, int) else None
 
     @staticmethod
     def _decode_result(value: Any) -> Any:
@@ -313,10 +325,20 @@ class CorosLiveGateway:
         try:
             result = await tool.ainvoke(arguments)
         except Exception as error:
+            logger.warning(
+                "COROS_MCP_TOOL_CALL_FAILED tool=%s error_type=%s status_code=%s",
+                getattr(tool, "name", "unknown"),
+                type(error).__name__,
+                CorosLiveGateway._error_status_code(error),
+            )
             if CorosLiveGateway._is_unauthorized(error):
                 raise CorosMcpUnauthorizedError("COROS MCP 授权已失效") from error
             raise CorosMcpError("COROS MCP 数据读取失败，请稍后重试") from error
         if getattr(result, "status", None) == "error":
+            logger.warning(
+                "COROS_MCP_TOOL_RESULT_ERROR tool=%s",
+                getattr(tool, "name", "unknown"),
+            )
             raise CorosMcpError("COROS MCP 数据读取失败，请稍后重试")
         return result
 
@@ -377,7 +399,13 @@ class CorosLiveGateway:
                     raw[source] = await self._read_all_pages(tool, start_date, end_date)
                 except CorosMcpUnauthorizedError:
                     raise
-                except CorosMcpError:
+                except CorosMcpError as error:
+                    logger.warning(
+                        "COROS_MCP_SOURCE_UNAVAILABLE source=%s error_type=%s reason=%s",
+                        source,
+                        type(error).__name__,
+                        str(error),
+                    )
                     unavailable.append(source)
             if len(unavailable) == len(sources):
                 raise CorosMcpUnavailableError("COROS 未返回可用运动数据")
@@ -391,6 +419,11 @@ class CorosLiveGateway:
             }
             for source, records in raw.items():
                 if records and not normalized_by_source[source] and source not in unavailable:
+                    logger.warning(
+                        "COROS_MCP_SOURCE_NORMALIZATION_FAILED source=%s record_count=%s",
+                        source,
+                        len(records),
+                    )
                     unavailable.append(source)
             if len(unavailable) == len(sources):
                 raise CorosMcpUnavailableError("COROS 返回的数据格式不兼容")

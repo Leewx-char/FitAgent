@@ -1,6 +1,7 @@
 """官方远程 MCP Gateway 的白名单、隔离和失败路径测试。"""
 
 import json
+import logging
 from datetime import date
 from types import SimpleNamespace
 
@@ -123,6 +124,41 @@ def test_gateway_returns_partial_when_one_source_fails():
 
     assert snapshot.daily_metrics
     assert snapshot.unavailable_sources == ["sleep"]
+
+
+def test_gateway_logs_sanitized_daily_source_failure(caplog):
+    """日报工具失败时记录可诊断且不泄露上游异常正文的日志。"""
+
+    class FailingDailyTool(FakeTool):
+        async def ainvoke(self, arguments):
+            del arguments
+            raise RuntimeError("provider failure token=secret-value")
+
+    activities = FakeTool("querySportRecords", {"records": []})
+    daily = FailingDailyTool("queryDailyHealthData", {})
+    sleep = FakeTool("querySleepData", {"records": []})
+
+    async def load_tools(_session, **_kwargs):
+        return [activities, daily, sleep]
+
+    gateway = CorosLiveGateway(
+        oauth_service=FakeOAuth(),
+        settings=Settings(coros_mcp_timeout_seconds=5),
+        client_factory=FakeClient,
+        tool_loader=load_tools,
+    )
+    with caplog.at_level(logging.WARNING, logger="app.services.coros_live_gateway"):
+        snapshot = gateway.fetch_snapshot(
+            object(), user_id=1, start_date=date.today(), end_date=date.today()
+        )
+
+    assert snapshot.unavailable_sources == ["daily"]
+    assert (
+        "COROS_MCP_TOOL_CALL_FAILED tool=queryDailyHealthData error_type=RuntimeError"
+        in caplog.text
+    )
+    assert "COROS_MCP_SOURCE_UNAVAILABLE source=daily error_type=CorosMcpError" in caplog.text
+    assert "secret-value" not in caplog.text
 
 
 def test_gateway_fails_when_all_sources_fail():
