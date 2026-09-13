@@ -26,6 +26,7 @@
               <span v-else class="tool-spinner"></span>
             </span>
             <span class="tool-name">{{ tool.name }}</span>
+            <span v-if="tool.count > 1" class="tool-count">×{{ tool.count }}</span>
           </div>
         </div>
       </div>
@@ -66,6 +67,7 @@
             <span v-else class="tool-spinner"></span>
           </span>
           <span class="tool-name">{{ tool.name }}</span>
+          <span v-if="tool.count > 1" class="tool-count">×{{ tool.count }}</span>
         </div>
         <div v-if="toolChain.length === 0" class="tool-line active">
           <span class="tool-dot">
@@ -179,7 +181,7 @@ import { useMessage } from 'naive-ui'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useAuthStore } from '@/stores/auth'
-import { useChatStore } from '@/stores/chat'
+import { compactToolChain, useChatStore } from '@/stores/chat'
 import { getErrorMessage } from '@/api'
 import { updateProfile, uploadHealthDoc } from '@/api/profile'
 
@@ -259,7 +261,7 @@ async function scrollToBottom() {
 
 /** 复制当前工具状态，避免后续流式更新改写已绑定消息的调用记录。 */
 function snapshotToolChain() {
-  return toolChain.value.map((tool) => ({ ...tool }))
+  return compactToolChain(toolChain.value)
 }
 
 /** 将所有仍在执行的工具标为完成，并同步到已绑定的助手消息。 */
@@ -776,6 +778,11 @@ watch(toolChain, () => {
 .tool-name {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.tool-count {
+  color: var(--text-quiet);
+  font-variant-numeric: tabular-nums;
 }
 
 .tool-line.active .tool-name {

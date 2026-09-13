@@ -1,6 +1,22 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
+/** 将同名工具的展示状态合并，并保留真实执行次数。 */
+export function compactToolChain(tools) {
+  const groupedTools = new Map()
+  for (const tool of tools) {
+    const key = tool.name || tool.id
+    const current = groupedTools.get(key)
+    if (current) {
+      current.count += 1
+      if (tool.status === 'active') current.status = 'active'
+      continue
+    }
+    groupedTools.set(key, { ...tool, count: 1 })
+  }
+  return [...groupedTools.values()]
+}
+
 /** 提供会话选择和当前消息列表的 Pinia store。 */
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref([])
