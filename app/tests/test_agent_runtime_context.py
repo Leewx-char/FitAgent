@@ -1,6 +1,7 @@
 """个性化 Agent 请求上下文与短期产物隔离测试。"""
 
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -434,6 +435,160 @@ def test_personalized_agent_accepts_complete_ai_message_tool_calls():
         {"type": "tool_completed", "id": "weather-call"},
         {"type": "text", "content": "建议傍晚慢跑 30 分钟。"},
     ]
+
+
+def test_personalized_agent_logs_empty_final_message(caplog):
+    """工具链结束后的空最终消息必须留下可关联的诊断记录。"""
+
+    class EmptyFinalMessageAgent:
+        @staticmethod
+        async def astream(input_state, **_kwargs):
+            """模拟模型正常结束但没有返回正文的异常边界。"""
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[
+                            {
+                                "name": "get_weather",
+                                "id": "weather-call",
+                                "args": '{"city":"广州","token":"test-secret"}',
+                            }
+                        ],
+                    ),
+                    {"langgraph_step": 1},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    ToolMessage(
+                        content="广州晴，token=test-secret",
+                        tool_call_id="weather-call",
+                    ),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield (
+                "messages",
+                (AIMessage(content="", id="answer-1"), {"langgraph_step": 2}),
+            )
+            yield (
+                "values",
+                {**input_state, "messages": [*input_state["messages"], AIMessage(content="")]},
+            )
+
+    executor = object.__new__(ReactAgent)
+    executor.agent = EmptyFinalMessageAgent()
+    executor.max_steps = 30
+    executor.max_tool_calls = 10
+    caplog.set_level(logging.INFO, logger="agent")
+
+    result = asyncio.run(
+        executor.astream_personalized_events(
+            build_initial_chat_state(messages=[{"role": "user", "content": "广州怎么训练？"}]),
+            ChatRuntimeContext(
+                user_id=5,
+                session_id="session-5",
+                dependencies=SimpleNamespace(max_tool_calls=10),
+            ),
+        )
+    )
+
+    assert result["events"] == [
+        {"type": "tool", "id": "weather-call", "name": "查询天气"},
+        {"type": "tool_completed", "id": "weather-call"},
+    ]
+    assert any(
+        "AGENT_STREAM_MESSAGE" in record.message
+        and '"message_type": "AIMessage"' in record.message
+        and '"content_chars": 0' in record.message
+        for record in caplog.records
+    )
+    assert all(
+        "广州" not in record.message and "test-secret" not in record.message
+        for record in caplog.records
+    )
+
+
+def test_personalized_agent_logs_only_terminal_stream_chunk(caplog):
+    """分片流只应记录终止边界，避免空分片淹没诊断日志。"""
+
+    class StreamChunkAgent:
+        @staticmethod
+        async def astream(_input_state, **_kwargs):
+            """模拟一轮带中间空分片与终止分片的模型流。"""
+            yield (
+                "messages",
+                (AIMessageChunk(content="", id="answer-1"), {"langgraph_step": 2}),
+            )
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="", id="answer-1", chunk_position="last"),
+                    {"langgraph_step": 2},
+                ),
+            )
+
+    executor = object.__new__(ReactAgent)
+    executor.agent = StreamChunkAgent()
+    executor.max_steps = 30
+    executor.max_tool_calls = 10
+    caplog.set_level(logging.INFO, logger="agent")
+
+    asyncio.run(
+        executor.astream_personalized_events(
+            build_initial_chat_state(messages=[{"role": "user", "content": "广州怎么训练？"}]),
+            ChatRuntimeContext(
+                user_id=5,
+                session_id="session-5",
+                dependencies=SimpleNamespace(max_tool_calls=10),
+            ),
+        )
+    )
+
+    stream_logs = [record for record in caplog.records if "AGENT_STREAM_MESSAGE" in record.message]
+    assert len(stream_logs) == 1
+    assert '"chunk_position": "last"' in stream_logs[0].message
+
+
+def test_personalized_agent_logs_summary_when_stream_fails(caplog):
+    """流异常时也必须记录不含异常原文的事件摘要。"""
+
+    class FailingAgent:
+        @staticmethod
+        async def astream(_input_state, **_kwargs):
+            """模拟模型流在工具后异常中断。"""
+            if False:
+                yield None
+            raise RuntimeError("test-secret")
+
+    executor = object.__new__(ReactAgent)
+    executor.agent = FailingAgent()
+    executor.max_steps = 30
+    executor.max_tool_calls = 10
+    caplog.set_level(logging.INFO, logger="agent")
+
+    with pytest.raises(RuntimeError, match="test-secret"):
+        asyncio.run(
+            executor.astream_personalized_events(
+                build_initial_chat_state(messages=[{"role": "user", "content": "广州怎么训练？"}]),
+                ChatRuntimeContext(
+                    user_id=5,
+                    session_id="session-5",
+                    dependencies=SimpleNamespace(max_tool_calls=10),
+                ),
+            )
+        )
+
+    assert any(
+        "AGENT_STREAM_SUMMARY" in record.message
+        and '"outcome": "failed"' in record.message
+        and '"error_type": "RuntimeError"' in record.message
+        for record in caplog.records
+    )
+    assert all("test-secret" not in record.message for record in caplog.records)
 
 
 def test_personalized_agent_resets_preamble_and_emits_final_text_after_tool():

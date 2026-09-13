@@ -1,4 +1,5 @@
 import asyncio
+import json
 from operator import add, or_
 from types import SimpleNamespace
 from typing import Annotated, Any, AsyncIterator, Callable, Iterable, cast
@@ -35,7 +36,9 @@ from app.services.chat_routing_graph import (
     is_json_value,
 )
 from app.core.settings import get_settings
+from app.core.request_context import request_id_var
 from app.utils.chat_latency import ChatLatencyTracker
+from app.utils.logger_handler import logger
 
 TOOL_DISPLAY = {
     "get_user_profile": "获取用户画像",
@@ -47,6 +50,55 @@ TOOL_DISPLAY = {
     "trigger_report": "生成报告",
     "get_fitness_summary": "获取运动数据",
 }
+
+
+def _log_agent_stream_message(
+    message: AIMessage | AIMessageChunk, metadata: object, tool_calls: list[object]
+) -> None:
+    """记录消息流边界的脱敏摘要，便于定位工具后的空回答。"""
+    content = getattr(message, "content", "")
+    chunk_position = getattr(message, "chunk_position", None)
+    is_terminal_chunk = chunk_position in {"last", "end"}
+    if isinstance(message, AIMessageChunk) and not is_terminal_chunk:
+        return
+    stream_step = metadata.get("langgraph_step") if isinstance(metadata, dict) else None
+    logger.info(
+        "AGENT_STREAM_MESSAGE %s",
+        json.dumps(
+            {
+                "request_id": request_id_var.get(),
+                "message_type": type(message).__name__,
+                "content_chars": len(str(content)),
+                "tool_call_count": len(tool_calls),
+                "stream_step": stream_step,
+                "chunk_position": chunk_position,
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+
+def _log_agent_stream_state(state: object) -> None:
+    """记录状态快照的末条消息摘要，不写入用户文本或模型回答。"""
+    messages = state.get("messages") if isinstance(state, dict) else None
+    last_message = messages[-1] if isinstance(messages, list) and messages else None
+    if last_message is None:
+        return
+    content = getattr(last_message, "content", "")
+    tool_calls = getattr(last_message, "tool_calls", None) or []
+    logger.info(
+        "AGENT_STREAM_STATE %s",
+        json.dumps(
+            {
+                "request_id": request_id_var.get(),
+                "message_count": len(messages),
+                "last_message_type": type(last_message).__name__,
+                "last_content_chars": len(str(content)),
+                "last_tool_call_count": len(tool_calls),
+            },
+            ensure_ascii=False,
+        ),
+    )
 
 
 class PersonalizedAgentState(AgentState, total=False):
@@ -238,6 +290,8 @@ class ReactAgent:
 
         if timing is not None:
             timing.mark("agent.personalized_model_stream_started")
+        stream_outcome = "succeeded"
+        stream_error_type: str | None = None
         try:
             async for stream_mode, payload in self.agent.astream(
                 input_state,
@@ -253,6 +307,7 @@ class ReactAgent:
                             or getattr(message, "tool_calls", None)
                             or []
                         )
+                        _log_agent_stream_message(message, metadata, tool_calls)
                         for tool_call in tool_calls:
                             tool_id = tool_call.get("id")
                             tool_name = tool_call.get("name")
@@ -296,14 +351,33 @@ class ReactAgent:
                     emitted_evidence_count = len(evidence)
                     evidence_pending = False
         except Exception as error:
+            stream_outcome = "failed"
+            stream_error_type = type(error).__name__
             if timing is not None:
-                timing.mark(
-                    "agent.personalized_model_stream_error", error_type=type(error).__name__
-                )
+                timing.mark("agent.personalized_model_stream_error", error_type=stream_error_type)
             raise
         else:
             if timing is not None:
                 timing.mark("agent.personalized_model_stream_completed")
+        finally:
+            _log_agent_stream_state(latest_state)
+            text_events = [event for event in events if event.get("type") == "text"]
+            logger.info(
+                "AGENT_STREAM_SUMMARY %s",
+                json.dumps(
+                    {
+                        "request_id": request_id_var.get(),
+                        "outcome": stream_outcome,
+                        "error_type": stream_error_type,
+                        "event_count": len(events),
+                        "text_event_count": len(text_events),
+                        "text_chars": sum(
+                            len(str(event.get("content", ""))) for event in text_events
+                        ),
+                    },
+                    ensure_ascii=False,
+                ),
+            )
         output = {
             "retrieval_history": latest_state.get("retrieval_history", state["retrieval_history"]),
             "rag_evidence": latest_state.get("rag_evidence", state["rag_evidence"]),
