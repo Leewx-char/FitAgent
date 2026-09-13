@@ -1,137 +1,147 @@
-# FitAgent — 可解释 RAG、用户可控记忆与自适应训练计划
+# FitAgent
 
-面向私人健身场景的 LLM 应用：通用问题走带证据的快速 RAG，个性化问题才进入 Agent 工具编排；用户明确确认后才会形成跨会话记忆；周训练计划则同时受 RAG 证据、Coros 运动摘要、执行反馈与确定性安全策略约束。
+面向健身场景的 AI 智能教练全栈项目。系统结合 RAG、受控 Agent、长期记忆与运动数据，提供流式健身问答、个性化训练计划、健康报告解析和 COROS 实时数据看板等能力。
 
-> 第一次阅读代码建议从 [项目学习路线](./docs/learning-guide.md) 开始：它以一次聊天请求为主线串起前端、SSE、RAG、Agent、记忆、计划和 COROS 实时读取。
+## 项目模块
 
-## 文档导航与时效性
+```text
+app/        后端服务（FastAPI + LangGraph + MySQL + Qdrant）
+frontend/   Web 前端（Vue 3 + Vite + Naive UI）
+config/     模型、检索与知识源配置
+prompts/    Agent 与任务提示词
+data/       离线构建的健身知识库源文件
+```
 
-以下文档以当前代码为准，发生架构变更时必须同步更新：
+| 模块 | 技术栈 | 说明 |
+| --- | --- | --- |
+| `app` | FastAPI、LangChain、LangGraph、SQLAlchemy、MySQL | REST API、JWT 认证、SSE 流式聊天、Agent 编排与训练业务 |
+| `frontend` | Vue 3、Vite、Pinia、Naive UI、ECharts | 健身对话、训练计划、健康画像、记忆管理与数据看板 |
+| RAG 与记忆 | Qdrant、DashScope、mem0 | Dense + BM25 混合检索、重排、证据引用与用户确认的长期记忆 |
+| 外部集成 | DeepSeek、DashScope、COROS MCP | 聊天/视觉模型、Embedding/重排与 OAuth 授权后的实时运动数据读取 |
 
-- [项目学习路线](./docs/learning-guide.md)：按真实请求链路阅读代码；
-- [面试材料](./docs/interview/)：项目介绍、亮点、问答和简历写法。
+## 核心功能
 
-## 项目能力
+- **AI 健身对话**：通过 SSE 实时输出回答；普通知识问题走快速 RAG，个性化问题进入 LangGraph Agent。
+- **可解释 RAG**：Dense 与 BM25 召回经 RRF 融合、DashScope 重排后生成回答，并返回可追溯的证据卡片。
+- **个性化训练计划**：结合用户画像、已确认记忆、知识证据和安全策略生成周训练计划。
+- **用户可控记忆**：从用户消息中提取候选记忆，只有用户确认后才可跨会话被 Agent 检索使用。
+- **健康报告解析**：支持 PDF 与图片健康文档解析，识别结果须经用户确认后写入健康画像，不提供医疗诊断。
+- **COROS 数据看板**：通过 OAuth 和官方远程 MCP 按需读取健康、睡眠与活动数据，不在本地持久化原始运动数据。
+- **运行可观测性**：记录聊天请求的分段耗时，以及 Agent 工具调用与执行轨迹，便于定位性能和调用问题。
 
-- **可解释 RAG**：一次 Qdrant Query API 请求完成 Dense + BM25 prefetch 与 RRF 融合，DashScope 重排候选后返回最终证据；回答带 `[证据:N]` 和来源卡片。
-- **受控 Agent**：LangGraph ReAct 只在个性化问题中调用画像、已确认记忆、运动摘要、天气等工具；有递归步数、工具预算，以及基于官方 Collector 的本地执行记录。
-- **用户可控记忆**：mem0 调用 LLM 从用户消息提取 `proposed` 候选；用户在“我的记忆”页确认后，由模型自主选择调用工具进行语义检索。状态和有效期随记忆保存在向量库，助手回答不进入提取输入。
-- **自适应周计划**：已连接时读取 COROS 近四周实时聚合快照；未连接时使用画像/RAG 路径；已连接但上游失败则拒绝生成，避免静默降级。
-- **多模态健康信息**：体检 PDF/图片提取十项指标，用户核对后才写入画像；不做医学诊断。
+## 整体架构
 
-## 环境要求
+```text
+┌──────────────────────────────────────────────────┐
+│                  frontend                         │
+│ Vue 3 + Pinia + Naive UI + ECharts                │
+└────────────────────┬─────────────────────────────┘
+                     │ HTTP REST + SSE
+                     ▼
+┌──────────────────────────────────────────────────┐
+│                  FastAPI Backend                  │
+│  Chat Router ──> LangGraph 路由 ──> Direct RAG    │
+│                         └──────────> ReAct Agent  │
+│  认证 / 画像 / 记忆 / 训练计划 / 文档解析 / COROS │
+└───────┬─────────────────┬─────────────────┬──────┘
+        │                 │                 │
+        ▼                 ▼                 ▼
+     MySQL             Qdrant       DeepSeek / DashScope
+  用户与业务数据    知识库与记忆       聊天、嵌入、重排、视觉
+                                            │
+                                            ▼
+                                      COROS OAuth + MCP
+```
 
-| 依赖 | 版本 | 说明 |
-|------|------|------|
-| Python | 3.11+ | |
-| Node.js | 20+ | |
-| Docker Compose | v2+ | Qdrant demo 容器 |
-| MySQL | 8.0+ | 需提前安装并启动服务 |
-| [Windows] poppler | 最新版 | pdf2image 依赖,[下载地址](https://github.com/oschwartz10612/poppler-windows/releases),将 `bin/` 加入系统 PATH |
+## 快速开始
 
-## 技术栈
+### 1. 准备依赖
 
-| 层次 | 技术 |
-|------|------|
-| 后端框架 | FastAPI 0.136 + Uvicorn 0.47 |
-| 数据库 | MySQL 8.0 + SQLAlchemy 2.0 |
-| 认证 | JWT (python-jose) + bcrypt |
-| LLM | DeepSeek 官方 API (`deepseek-flash`)；DashScope（`text-embedding-v1` / `gte-rerank-v2` / 视觉模型） |
-| Agent | LangGraph + LangChain（ReAct + 受控工具调用） |
-| 向量数据库 | Qdrant（单节点 Docker，生产演进 demo） |
-| 混合检索 | Qdrant 原生 Dense + BM25 + RRF + DashScope 二阶段重排 |
-| 文档处理 | PyPDF + pdf2image + python-magic + Pillow |
-| 前端框架 | Vue 3 + Vite + Pinia + Naive UI |
-| 图表 | ECharts |
+- Python 3.11+
+- Node.js 20+
+- MySQL 8.0+
+- Docker Compose v2+（用于启动 Qdrant）
 
-## Windows 启动指南
+确保 MySQL 已启动。应用启动时会创建 `.env` 中指定的数据库及缺失的表。
 
-```powershell
-# 0. 允许 PowerShell 脚本执行（仅首次需要）
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+### 2. 配置环境变量
 
-# 1. 克隆并配置环境变量
+```bash
 cp .env.example .env
-# 编辑 .env，填入 DEEPSEEK_API_KEY、DASHSCOPE_API_KEY、MySQL 配置、JWT_SECRET_KEY
-# COROS 是可选能力：另见“官方 COROS 实时 MCP 配置”
+```
 
-# 2. Python 环境与开发依赖（pyproject.toml 是唯一依赖入口）
+至少配置以下项目：
+
+```dotenv
+MYSQL_PASSWORD=your_mysql_password
+JWT_SECRET_KEY=your_jwt_secret
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DASHSCOPE_API_KEY=your_dashscope_api_key
+QDRANT_API_KEY=your_qdrant_api_key
+```
+
+COROS 为可选功能。使用前还需配置公网 HTTPS 回调地址与 Fernet 加密密钥：
+
+```dotenv
+COROS_OAUTH_REDIRECT_URI=https://api.example.com/api/coros/callback
+COROS_OAUTH_POST_CONNECT_REDIRECT_URI=https://app.example.com/dashboard
+COROS_TOKEN_ENCRYPTION_KEY=your_fernet_key
+```
+
+### 3. 启动后端与知识库
+
+```bash
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+source .venv/bin/activate # Windows PowerShell: .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 
-# 3. 启动 Qdrant，并显式重建知识库索引（首次或知识文件变更后执行）
 docker compose up -d qdrant
-# 该命令会**重建** `fitagent_knowledge`；执行前确认可丢弃现有知识库数据。
+# 首次运行或 data/ 更新后执行；该命令会重建 fitagent_knowledge 集合
 python -m app.services.knowledge_indexer
 
-# 4. 确保 MySQL 服务已启动，然后启动后端
-# 应用启动只创建缺失关系表，不重建知识库
 uvicorn app.main:app --reload --port 8000
+```
 
-# 5. 启动前端（新终端）
+### 4. 启动前端
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-## macOS / Linux 启动指南
+访问 <http://localhost:5173>。
 
-```bash
-# 1. 克隆并配置环境变量
-cp .env.example .env
+## 对话流程
 
-# 2. Python 环境与开发依赖
-python -m venv .venv && source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+```mermaid
+sequenceDiagram
+    actor U as 用户
+    participant F as Vue 前端
+    participant B as FastAPI
+    participant G as LangGraph
+    participant R as Qdrant RAG
+    participant L as LLM
+    participant D as MySQL
 
-# 3. 启动 Qdrant，并显式重建知识库索引
-docker compose up -d qdrant
-# 该命令会**重建** `fitagent_knowledge`；执行前确认可丢弃现有知识库数据。
-python -m app.services.knowledge_indexer
-
-# 4. 确保 MySQL 服务已启动，然后启动后端
-# 应用启动只创建缺失关系表，不重建知识库
-uvicorn app.main:app --reload --port 8000
-
-# 5. 启动前端
-cd frontend && npm install && npm run dev
+    U->>F: 发送健身问题
+    F->>B: POST /api/chat（SSE）
+    B->>D: 保存消息并加载近期会话
+    B->>G: 分类并选择执行路径
+    alt 通用知识问题
+        G->>R: 混合检索与重排
+        R-->>G: 证据上下文
+    else 个性化问题
+        G->>D: 读取画像、已确认记忆与业务数据
+    end
+    G->>L: 流式生成回答
+    L-->>B: 文本分片
+    B-->>F: SSE 文本与证据事件
+    F-->>U: 实时渲染回答
 ```
 
-浏览器打开 http://localhost:5173
-
-只安装运行依赖时使用：`python -m pip install .`。
-
-## 数据库 Schema 初始化与升级
-
-应用启动时会根据 `app/models.py` 执行 `create_all()`，仅创建空 MySQL 数据库中缺失的模型表；它不会变更、删除或升级已存在的表。升级到包含新模型字段的版本前，必须先备份现有数据库，并由操作者删除或新建一个开发数据库后再启动应用。`create_all()` 不是数据库升级工具。
-
-## 官方 COROS 实时 MCP 配置
-
-FitAgent 通过官方 HTTP MCP 和浏览器 OAuth 按请求读取数据，不启动社区 stdio 子进程、不创建本地缓存，也不把日健康、睡眠或活动写入 MySQL。每个 FitAgent 用户独立保存加密的 access/refresh token；浏览器授权使用短时 `state` 与 PKCE。服务仅调用 `querySportRecords`、`queryDailyHealthData`、`querySleepData`；用户明确选择单次活动时才调用 `getActivityDetail`。
-
-预发必须先验证官方动态客户端注册与 HTTPS 回调。配置 `.env`：
-
-```dotenv
-COROS_MCP_GATEWAY_URL=https://mcp.coros.com/mcp
-COROS_OAUTH_REDIRECT_URI=https://api.example.com/api/coros/callback
-COROS_OAUTH_POST_CONNECT_REDIRECT_URI=https://app.example.com/dashboard
-COROS_TOKEN_ENCRYPTION_KEY=<Fernet 生成的随机密钥>
-```
-
-用户在 Dashboard 点击“连接 COROS”后，服务端创建 `state`、PKCE verifier 和区域 issuer；回调后只保存加密令牌。`GET /api/fitness/snapshot?weeks=4` 返回当次的实时白名单快照和 `partial` 状态；没有持久化运动数据接口。断开连接只删除本地凭据，不承诺官方侧远端撤销。
-
-发布此版本会删除全部 MySQL 数据。停止后端后，先确认已完成运维备份，再执行（命令会校验确认值精确匹配当前 `MYSQL_DATABASE`）：
-
-```bash
-python scripts/rebuild_database.py --confirm-database zhitong
-```
-
-脚本重建所有当前 ORM 表；新 schema 包含 `coros_connections` 与 `coros_authorization_requests`，不包含 `fitness_data`。随后部署代码和配置、启动后端，并使用测试账号完成 OAuth PoC；不保留旧表或回退查询路径。
-
-## 开发门禁
+## 开发与验证
 
 ```bash
 ruff format --check app
@@ -139,144 +149,27 @@ ruff check app
 pytest app/tests
 ```
 
-当前测试还覆盖：assistant/tool 输出不能进入 mem0 候选、记忆确认/撤销、训练计划的强度与证据校验，以及 COROS OAuth 加密存储、一次性 state、工具白名单、局部失败和无运动数据落库。
+## 文档导航
 
-检索质量基线（需要 Qdrant 与 DashScope embedding、重排服务可访问）：
-
-```powershell
-.\.venv\Scripts\python.exe -m app.evaluation.retrieval_evaluator
-```
-
-评测只检查最终返回的 Top-6 证据是否命中人工标注的 `source_id`/`chunk_id`，并强制 `Recall@6 >= 0.90` 与 `MRR >= 0.70`。它不调用回答模型，也不会改写索引；报告打印到标准输出。
-
-## Agent 运行防护栏
-
-完整 Agent 请求使用受配置约束的递归步数与工具调用预算，避免模型陷入工具循环。中间件的脱敏业务日志与下文的运行记录是两套用途不同的机制：前者不记录用户原文或工具参数值，后者在 SSE 结束后由官方 Collector 投影到本地 MySQL。可在 `.env` 中按部署环境调整：
-
-```dotenv
-AGENT_MAX_STEPS=8
-AGENT_MAX_TOOL_CALLS=6
-```
-
-## 聊天路由与状态边界
-
-`ReactAgent.execute_stream` 会在每次请求开始时构造 LangGraph 短期状态，并由 LLM 的结构化意图分类决定进入直接 RAG 或个性化 Agent。GraphState 只保存原始消息、路由、检索产物、工具计数和 SSE 事件等可序列化数据；RuntimeContext 只保存可信的请求身份和依赖，**没有 city 字段**。执行记录不写入 RuntimeContext：HTTP 层为每次请求创建官方 `RunCollectorCallbackHandler`，并通过 `RunnableConfig.callbacks` 传给图。
-
-| 层级 | 载体 | 进入模型的方式 |
-| --- | --- | --- |
-| 近期会话 | 当前会话最近 20 条原始消息 | 个性化 Agent 初始上下文；分类器仅见最新 6 条 |
-| 早期会话背景 | MySQL session_summaries v3 缓存 | 当前窗口不足以解释早期引用时，Agent 按需调用 get_session_summary；压缩早期全部已存储消息，不是长期记忆 |
-| 长期记忆 | mem0 | 用户消息提取为 proposed；模型按需调用 get_confirmed_memories(query)，只读 confirmed、未过期结果 |
-
-`session_summaries` 是 LLM 生成、可再生成的 v3 缓存：仅在按需调用时压缩早期全部已存储消息（不按角色过滤），绝不每轮预先生成，也不写入 mem0、用户画像或长期记忆。模型结合当前系统提示词、最近消息和早期摘要综合判断。分类器实际只读取最新 6 条**规范化** user/assistant 消息；只有个性化 Agent 能调用 `get_session_summary`。天气工具必须从当前窗口或该摘要得到明确城市，否则先追问，不能编造城市。MySQL 保存账号、完整聊天、会话摘要及训练业务，旧 `memory_facts` 表保留待显式迁移。LangGraph 不启用 Store 或 checkpointer，不自动召回记忆；分类失败时仍保守回退个性化 Agent，既有 SSE 契约保持。
-
-## mem0 长期记忆
-
-安装项目依赖会安装固定的 `mem0ai==2.0.20`。在 `.env` 中设置 `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY` 和 `QDRANT_URL`，其余 `MEMORY_*` 配置见 `.env.example`。默认使用 `config/models.yml` 的 DeepSeek 提取模型及 1536 维 DashScope 嵌入，记忆使用独立 Qdrant collection，不写入知识库 RAG 集合。
-
-mem0 主向量库存记忆正文和元数据；Entity Store 按实体关联主库记忆；SQLite 存变更日志与每个 scope 最近 10 条消息。当前基础安装使用语义检索，不安装 NLP extras，也不启用图谱记忆。详细数据流、状态边界与故障行为见 [记忆架构说明](docs/memory-architecture.md)。
-
-旧 MySQL 记忆不会自动迁移。先预览，再显式写入 mem0；两个命令都保留源表数据，迁移可重跑：
-
-```powershell
-.\.venv\Scripts\python.exe -m app.services.memory_migration --user-id 1
-.\.venv\Scripts\python.exe -m app.services.memory_migration --user-id 1 --apply
-```
-
-模型只通过只读工具查询长期记忆。提取调用在线程池执行，失败不阻断聊天；管理接口失败返回 503。成功撤销后，后续工具查询排除该条记忆。切换 `MEMORY_ENABLED=false` 会停用提取与记忆读写，不影响短期聊天历史。
-
-当前按上述单 worker 启动方式运行，同一记忆的状态修改使用进程内互斥。多 worker 或多实例部署前需补充跨进程状态协调，详见 [记忆架构](docs/memory-architecture.md)。
-
-## Agent 执行轨迹
-
-每轮聊天的官方 `RunCollectorCallbackHandler` 只在内存中采集本次运行树。SSE 流结束后，系统以独立事务将其投影到既有 MySQL `agent_runs` 和 `agent_tool_calls`：前者保存请求 ID、状态、总耗时、用户问题和最终回答；后者按顺序保存工具名、真实工具输入、工具输出（或错误）及耗时。
-
-该记录功能只使用本地 MySQL，不接入 LangSmith；不新增日志表、HTTP 路由或长期运行时 `trace` 字段。
-
-服务启动时会创建缺失的数据库和模型表。模型字段变更需要制定显式的数据库维护方案；重启服务不会修改已有表结构。
-
-登录后可调用 `GET /api/sessions/{session_id}/agent-runs` 查看该会话最近的执行轨迹。此操作不需要重新构建知识库索引。
-
-## 健康文档处理提示
-
-- 可选文字的 PDF 使用文本模型；扫描版 PDF 和图片先使用 Qwen-VL Plus，失败页才以更高精度交给 Max 重试。扫描 PDF 会处理全部页面，默认最多 20 页。
-- 上传前会提示文件将发送至 DashScope 用于指标提取；原始临时文件在处理完成后删除。
-- 健康文档接口统一返回 `{code, messages, data}`：成功时 `data` 包含指标和冲突候选，失败时为 `null`。系统只整理十项体检指标及单位，不提供医疗诊断。识别结果必须经用户编辑/确认后才写入健康画像。
+- [项目学习路线](docs/learning-guide.md)：从一次真实聊天请求理解前后端、RAG、Agent、记忆与训练计划。
+- [记忆架构](docs/memory-architecture.md)：长期记忆的数据流、状态边界和运维约束。
+- [Agent 运行记录架构](docs/agent-run-logging-architecture.md)：本地 Agent 执行轨迹与工具调用记录。
+- [项目面试材料](docs/interview/)：项目简介、技术亮点、常见问题与简历写法。
 
 ## 项目结构
 
-```
+```text
 FitAgent/
-├── app/                        # 后端代码（FastAPI 标准结构）
-│   ├── main.py                 # 应用入口 + CORS + lifespan
-│   ├── models.py               # ORM 模型
-│   ├── schemas.py              # Pydantic 请求/响应模型
-│   ├── core/                   # 基础设施
-│   │   ├── database.py         # MySQL 连接与新数据库模型表初始化
-│   │   ├── settings.py         # 环境配置
-│   │   ├── auth.py             # JWT 认证
-│   │   └── deps.py             # 依赖注入
-│   ├── api/                    # HTTP 层
-│   │   ├── routers/            # auth/chat/profile/fitness/memory/training_plans 等
-│   │   ├── exception_handlers.py
-│   │   └── response.py
-│   ├── services/               # 业务逻辑层
-│   │   ├── factory.py          # LLM/VL/Embedding 模型工厂
-│   │   ├── react_agent.py      # 聊天图执行门面与内层 ReAct Agent
-│   │   ├── chat_routing_graph.py # LangGraph 短期状态与意图路由图
-│   │   ├── agent_tools.py      # 工具定义
-│   │   ├── memory_service.py   # mem0 长期记忆权限与候选/确认生命周期
-│   │   ├── session_summary_service.py # 按需生成和读取早期已存储消息的 v3 摘要缓存
-│   │   ├── memory_backend.py   # 与 SDK 无关的记忆接口
-│   │   ├── memory_migration.py # 旧记忆显式迁移，默认只预览
-│   │   ├── training_plan_service.py # 计划编排与安全策略
-│   │   ├── fitness_insights.py # Coros 数据受限聚合快照
-│   │   ├── middleware.py       # Agent 中间件
-│   │   ├── rag_service.py      # RAG 检索、RRF 融合与二阶段排序
-│   │   ├── reranker.py         # DashScope 重排边界
-│   │   ├── vector_repository.py # Qdrant 仓储边界
-│   │   ├── vector_store.py     # Qdrant 查询与 embedding 服务
-│   │   ├── knowledge_indexer.py # 离线索引构建入口
-│   │   └── doc_parser.py       # 多模态文档解析
-│   └── utils/                  # 工具函数
-│       ├── config_handler.py
-│       ├── logger_handler.py
-│       ├── file_handler.py
-│       ├── prompt_loader.py
-│       └── bootstrap.py
-├── config/                     # YAML 配置（含 vector_store.yml）
-├── prompts/                    # 系统提示词
-├── data/                       # 经审核的知识源（Markdown / TXT / PDF）
-├── frontend/                   # Vue 3 前端
-├── docs/                       # 学习路线与面试文档
-│   ├── learning-guide.md        # 按事件流阅读代码的学习路线
-│   └── interview/               # 项目简介、技术亮点、问答与简历写法
-├── storage/uploads/            # 上传文件临时目录
-└── docker-compose.yml           # Qdrant 单节点演示部署
+├── app/                 # FastAPI 后端：API、服务、模型与测试
+├── frontend/            # Vue 3 前端
+├── config/              # 模型、向量库、知识源等配置
+├── data/                # 健身知识库原始文件
+├── docs/                # 架构与项目文档
+├── prompts/             # 系统提示词与任务模板
+├── scripts/             # 运维与数据维护脚本
+├── .env.example         # 环境变量模板
+└── docker-compose.yml   # Qdrant 本地开发容器
 ```
-
-## RAG 检索流程
-
-```
-用户提问
-  └── 一次 Qdrant Query API
-      ├── Dense prefetch（语义）
-      ├── Qdrant BM25 prefetch（关键词）
-      ├── RRF 融合
-      └── 取 Top-30 候选
-          └── DashScope `gte-rerank-v2` 重排
-              └── 返回最终 Top-6 证据
-```
-
-更多设计决策和技术细节请查看 [项目学习路线](./docs/learning-guide.md)，以及独立的 [项目简介](./docs/interview/项目简介.md)、[技术亮点](./docs/interview/技术亮点.md)、[常见面试题](./docs/interview/常见面试题.md)、[简历写法](./docs/interview/简历写法.md)。
-
-## Qdrant 演进 Demo
-
-演示使用单节点 Qdrant 与显式离线构建：`data/` 中受控 TXT、Markdown 或 PDF 文件只做 Unicode 与空白规范化，再经切分和 embedding 写入 `fitagent_knowledge`。`python -m app.services.knowledge_indexer` 是破坏性重建命令；在线 API 只读检索，应用启动也只创建缺失关系表，不会自动导入或重建知识库。
-
-- `GET /api/health/rag`：检查当前 Qdrant collection 是否可读。
-- `python -m app.services.knowledge_indexer`：知识文件更新后显式、破坏性地重建 `fitagent_knowledge`。
-- 每个查询只发起一次 Qdrant Query API：Dense + BM25 prefetch 经 RRF 选出最多 30 个候选，再由 DashScope `gte-rerank-v2` 返回最终 Top-6；没有本地 BM25 工件。重排请求仅发送用户问题和这些已召回的候选文本，且接口设置 `return_documents=false`，响应不回传候选正文。
 
 ## License
 
