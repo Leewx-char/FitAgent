@@ -23,7 +23,9 @@ class ToolBindingFakeModel(FakeMessagesListChatModel):
         return self
 
 
-def _invoke_parallel_tool_calls(tool_names: list[str], tool_limit: int):
+def _invoke_parallel_tool_calls(
+    tool_names: list[str], tool_limit: int, *, asynchronous: bool = False
+):
     """以真实 create_agent 执行同一 AIMessage 中的多个工具调用。"""
     calls = []
 
@@ -62,18 +64,21 @@ def _invoke_parallel_tool_calls(tool_names: list[str], tool_limit: int):
         state_schema=PersonalizedAgentState,
         context_schema=ChatRuntimeContext,
     )
-    result = agent.invoke(
-        {
-            "messages": [{"role": "user", "content": "执行工具"}],
-            "retrieval_history": [],
-            "rag_evidence": [],
-            "report": False,
-        },
-        context=ChatRuntimeContext(
-            user_id=1,
-            session_id="parallel-tools",
-            dependencies=SimpleNamespace(max_tool_calls=tool_limit),
-        ),
+    input_state = {
+        "messages": [{"role": "user", "content": "执行工具"}],
+        "retrieval_history": [],
+        "rag_evidence": [],
+        "report": False,
+    }
+    context = ChatRuntimeContext(
+        user_id=1,
+        session_id="parallel-tools",
+        dependencies=SimpleNamespace(max_tool_calls=tool_limit),
+    )
+    result = (
+        asyncio.run(agent.ainvoke(input_state, context=context))
+        if asynchronous
+        else agent.invoke(input_state, context=context)
     )
     return result, calls
 
@@ -112,6 +117,17 @@ def test_create_agent_allows_two_parallel_tool_calls_without_count_conflict():
         message.status != "error"
         for message in result["messages"]
         if isinstance(message, ToolMessage)
+    )
+
+
+def test_create_agent_allows_async_tool_calls_without_middleware_error():
+    """异步 Agent 调用工具时也应经过审计中间件并正常完成。"""
+    result, calls = _invoke_parallel_tool_calls(["first"], tool_limit=1, asynchronous=True)
+
+    assert calls == ["first"]
+    assert any(
+        isinstance(message, ToolMessage) and message.content == "first"
+        for message in result["messages"]
     )
 
 
