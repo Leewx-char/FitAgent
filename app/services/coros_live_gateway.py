@@ -76,6 +76,7 @@ class CorosLiveGateway:
     _CURSOR_KEYS = ("cursor", "pageCursor", "page_cursor")
     _NEXT_CURSOR_KEYS = ("nextCursor", "next_cursor", "nextPageCursor", "next_page_cursor")
     _HAS_MORE_KEYS = ("hasMore", "has_more", "more")
+    _RELATIVE_DAY_KEYS = ("days", "dayCount", "day_count")
     _MAX_PAGES = 20
 
     def __init__(
@@ -120,6 +121,18 @@ class CorosLiveGateway:
             start_key: start_date.isoformat(),
             end_key: end_date.isoformat(),
         }
+
+    @classmethod
+    def _source_arguments(
+        cls, source: str, tool: Any, start_date: date, end_date: date
+    ) -> dict[str, Any]:
+        """优先使用 daily 的相对天数参数，其余工具仍要求明确日期范围。"""
+
+        relative_days_key = cls._find_field(cls._tool_fields(tool), cls._RELATIVE_DAY_KEYS)
+        if source == "daily" and relative_days_key is not None:
+            requested_days = max(1, (end_date - start_date).days + 1)
+            return {relative_days_key: requested_days}
+        return cls._date_arguments(tool, start_date, end_date)
 
     @classmethod
     def _activity_arguments(cls, tool: Any, activity_id: str) -> dict[str, str]:
@@ -293,6 +306,22 @@ class CorosLiveGateway:
     ) -> list[dict[str, Any]]:
         return [normalized for record in records if (normalized := normalizer(record)) is not None]
 
+    @staticmethod
+    def _within_requested_range(
+        records: list[dict[str, Any]], start_date: date, end_date: date
+    ) -> list[dict[str, Any]]:
+        """过滤无日期参数工具的结果，确保响应仍限制在面板请求区间。"""
+
+        selected: list[dict[str, Any]] = []
+        for record in records:
+            try:
+                record_date = date.fromisoformat(str(record["date"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start_date <= record_date <= end_date:
+                selected.append(record)
+        return selected
+
     async def _with_tools(
         self,
         credential: CorosAccessCredential,
@@ -344,12 +373,12 @@ class CorosLiveGateway:
         return result
 
     async def _read_all_pages(
-        self, tool: Any, start_date: date, end_date: date
+        self, source: str, tool: Any, start_date: date, end_date: date
     ) -> list[dict[str, Any]]:
-        """在已验证的日期范围内读取有限分页；无法证明完整性则拒绝该数据源。"""
+        """读取有限分页；daily 可使用相对天数，结果仍在本地限制日期范围。"""
 
         fields = self._tool_fields(tool)
-        arguments: dict[str, Any] = self._date_arguments(tool, start_date, end_date)
+        arguments: dict[str, Any] = self._source_arguments(source, tool, start_date, end_date)
         page_size_key = self._find_field(fields, self._PAGE_SIZE_KEYS)
         page_number_key = self._find_field(fields, self._PAGE_NUMBER_KEYS)
         cursor_key = self._find_field(fields, self._CURSOR_KEYS)
@@ -397,7 +426,7 @@ class CorosLiveGateway:
             for source in sources:
                 try:
                     tool = self._required_tool(tools, source)
-                    raw[source] = await self._read_all_pages(tool, start_date, end_date)
+                    raw[source] = await self._read_all_pages(source, tool, start_date, end_date)
                 except CorosMcpUnauthorizedError:
                     raise
                 except CorosMcpError as error:
@@ -411,7 +440,11 @@ class CorosLiveGateway:
             if len(unavailable) == len(sources):
                 raise CorosMcpUnavailableError("COROS 未返回可用运动数据")
             activities = self._normalize_many(raw.get("activities", []), self._normalize_activity)
-            daily_metrics = self._normalize_many(raw.get("daily", []), self._normalize_daily)
+            daily_metrics = self._within_requested_range(
+                self._normalize_many(raw.get("daily", []), self._normalize_daily),
+                start_date,
+                end_date,
+            )
             sleep_records = self._normalize_many(raw.get("sleep", []), self._normalize_sleep)
             normalized_by_source = {
                 "activities": activities,

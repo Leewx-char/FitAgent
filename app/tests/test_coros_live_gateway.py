@@ -126,6 +126,53 @@ def test_gateway_returns_partial_when_one_source_fails():
     assert snapshot.unavailable_sources == ["sleep"]
 
 
+def test_gateway_reads_relative_days_daily_and_limits_return_to_requested_range():
+    """daily 使用相对天数读取，且返回结果不能越过面板日期范围。"""
+
+    today = date.today()
+    activities = FakeTool("querySportRecords", {"records": []})
+    daily = FakeTool(
+        "queryDailyHealthData",
+        {
+            "records": [
+                {"date": today.isoformat(), "rhr": 55},
+                {"date": "2020-01-01", "rhr": 60},
+            ]
+        },
+        fields=("days",),
+    )
+    sleep = FakeTool("querySleepData", {"records": []})
+
+    async def load_tools(_session, **_kwargs):
+        return [activities, daily, sleep]
+
+    gateway = CorosLiveGateway(
+        oauth_service=FakeOAuth(),
+        settings=Settings(coros_mcp_timeout_seconds=5),
+        client_factory=FakeClient,
+        tool_loader=load_tools,
+    )
+
+    snapshot = gateway.fetch_snapshot(
+        object(), user_id=1, start_date=today, end_date=today
+    )
+
+    assert daily.calls == [{"days": 1}]
+    assert snapshot.daily_metrics == [
+        {
+            "date": today.isoformat(),
+            "rhr": 55,
+            "avg_sleep_hrv": None,
+            "training_load": None,
+            "training_load_ratio": None,
+            "tired_rate": None,
+            "vo2max": None,
+        }
+    ]
+    expected_bounded_call = {"startDate": today.isoformat(), "endDate": today.isoformat()}
+    assert activities.calls == sleep.calls == [expected_bounded_call]
+
+
 def test_gateway_logs_sanitized_daily_source_failure(caplog):
     """日报工具失败时记录可诊断且不泄露上游异常正文的日志。"""
 
