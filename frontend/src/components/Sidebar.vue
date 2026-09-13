@@ -1,29 +1,48 @@
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :class="{ collapsed: isCollapsed }">
     <div class="sidebar-top">
+      <button
+        class="sidebar-collapse"
+        type="button"
+        :aria-label="isCollapsed ? '展开侧边栏' : '收起侧边栏'"
+        :title="isCollapsed ? '展开侧边栏' : '收起侧边栏'"
+        @click="toggleCollapse"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+          <path d="M9 5v14" />
+          <path v-if="isCollapsed" d="m12.5 9 3 3-3 3" />
+          <path v-else d="m14.5 9-3 3 3 3" />
+        </svg>
+      </button>
       <div class="sidebar-brand">
         <span class="brand-name">FitAgent</span>
       </div>
-      <n-button type="primary" ghost block size="small" @click="newSession">
-        + 新建对话
+      <n-button type="primary" ghost block size="small" aria-label="新建对话" title="新建对话" @click="newSession">
+        <span aria-hidden="true">＋</span><span class="new-session-label">新建对话</span>
       </n-button>
     </div>
 
     <nav class="sidebar-nav">
-      <router-link to="/" class="nav-item" :class="{ active: $route.name === 'Chat' }">
-        对话
+      <router-link to="/" class="nav-item" aria-label="对话" title="对话" :class="{ active: $route.name === 'Chat' }">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14v10H9l-4 3v-13Z" /></svg>
+        <span class="nav-label">对话</span>
       </router-link>
-      <router-link to="/dashboard" class="nav-item" :class="{ active: $route.name === 'Dashboard' }">
-        数据面板
+      <router-link to="/dashboard" class="nav-item" aria-label="数据面板" title="数据面板" :class="{ active: $route.name === 'Dashboard' }">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="4.5" width="6" height="6" rx="1" /><rect x="13.5" y="4.5" width="6" height="6" rx="1" /><rect x="4.5" y="13.5" width="6" height="6" rx="1" /><rect x="13.5" y="13.5" width="6" height="6" rx="1" /></svg>
+        <span class="nav-label">数据面板</span>
       </router-link>
-      <router-link to="/training-plan" class="nav-item" :class="{ active: $route.name === 'TrainingPlan' }">
-        本周计划
+      <router-link to="/training-plan" class="nav-item" aria-label="本周计划" title="本周计划" :class="{ active: $route.name === 'TrainingPlan' }">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5h12v15H6zM9 9.5h6M9 13.5h4M9 17l1.5 1.5L14 15" /></svg>
+        <span class="nav-label">本周计划</span>
       </router-link>
-      <router-link to="/memory" class="nav-item" :class="{ active: $route.name === 'Memory' }">
-        我的记忆
+      <router-link to="/memory" class="nav-item" aria-label="我的记忆" title="我的记忆" :class="{ active: $route.name === 'Memory' }">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5c2.6-1.3 5.3-1.3 8 0v13c-2.7-1.3-5.4-1.3-8 0zM19 5.5c-2.6-1.3-5.3-1.3-8 0v13c2.7-1.3 5.4-1.3 8 0z" /></svg>
+        <span class="nav-label">我的记忆</span>
       </router-link>
-      <router-link to="/profile" class="nav-item" :class="{ active: $route.name === 'Profile' }">
-        档案
+      <router-link to="/profile" class="nav-item" aria-label="档案" title="档案" :class="{ active: $route.name === 'Profile' }">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3" /><path d="M5.5 19c.7-3.1 3-4.5 6.5-4.5s5.8 1.4 6.5 4.5" /></svg>
+        <span class="nav-label">档案</span>
       </router-link>
     </nav>
 
@@ -90,6 +109,12 @@ const chatStore = useChatStore()
 const showUserMenu = ref(false)
 const sessionListRef = ref(null)
 const sessionScrollTop = ref(false)
+const isCollapsed = ref(false)
+
+/** 切换侧边栏的紧凑状态，保留图标导航供快速访问。 */
+function toggleCollapse() {
+  isCollapsed.value = !isCollapsed.value
+}
 
 /** 根据会话列表的滚动距离切换顶部阴影。 */
 function onSessionScroll() {
@@ -171,7 +196,45 @@ onMounted(async () => {
 }
 
 .sidebar-top {
+  position: relative;
   padding: 24px 16px 14px;
+}
+
+.sidebar-collapse {
+  position: absolute;
+  top: 20px;
+  right: 16px;
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.sidebar-collapse:hover {
+  background: #F1F4F6;
+  color: var(--text-primary);
+}
+
+.sidebar-collapse:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.sidebar-collapse svg,
+.nav-icon {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
 .sidebar-brand {
@@ -194,12 +257,19 @@ onMounted(async () => {
 }
 
 .nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 9px 12px;
   border-radius: 8px;
   font-size: 14px;
   color: var(--text-secondary);
   text-decoration: none;
   transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.nav-icon {
+  flex: 0 0 auto;
 }
 
 .nav-item:hover {
@@ -395,6 +465,56 @@ onMounted(async () => {
   opacity: 0;
 }
 
+.sidebar.collapsed {
+  width: 64px;
+}
+
+.sidebar.collapsed .sidebar-top {
+  padding: 58px 10px 14px;
+}
+
+.sidebar.collapsed .sidebar-collapse {
+  top: 16px;
+  right: 18px;
+}
+
+.sidebar.collapsed .sidebar-brand,
+.sidebar.collapsed .new-session-label,
+.sidebar.collapsed .nav-label,
+.sidebar.collapsed .session-list,
+.sidebar.collapsed .profile-info,
+.sidebar.collapsed .profile-arrow {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-top :deep(.n-button) {
+  min-width: 40px;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.sidebar.collapsed .sidebar-nav {
+  align-items: center;
+  padding: 0 10px;
+}
+
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+}
+
+.sidebar.collapsed .sidebar-bottom {
+  margin-top: auto;
+  padding: 10px;
+}
+
+.sidebar.collapsed .sidebar-profile {
+  justify-content: center;
+  padding: 6px 0;
+}
+
 @media (max-width: 760px) {
   .sidebar {
     width: 100%;
@@ -409,6 +529,10 @@ onMounted(async () => {
 
   .sidebar-top {
     padding: 0;
+  }
+
+  .sidebar-collapse {
+    display: none;
   }
 
   .sidebar-brand {
@@ -439,6 +563,10 @@ onMounted(async () => {
     padding: 7px 8px;
     font-size: 13px;
     white-space: nowrap;
+  }
+
+  .nav-icon {
+    display: none;
   }
 }
 </style>
