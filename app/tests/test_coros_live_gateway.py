@@ -126,8 +126,8 @@ def test_gateway_returns_partial_when_one_source_fails():
     assert snapshot.unavailable_sources == ["sleep"]
 
 
-def test_gateway_reads_relative_days_daily_and_limits_return_to_requested_range():
-    """daily 使用相对天数读取，且返回结果不能越过面板日期范围。"""
+def test_gateway_reads_parameterless_daily_without_local_date_filter():
+    """daily 交由 COROS 默认范围决定，网关不再追加日期限制。"""
 
     today = date.today()
     activities = FakeTool("querySportRecords", {"records": []})
@@ -157,7 +157,7 @@ def test_gateway_reads_relative_days_daily_and_limits_return_to_requested_range(
         object(), user_id=1, start_date=today, end_date=today
     )
 
-    assert daily.calls == [{"days": 1}]
+    assert daily.calls == [{}]
     assert snapshot.daily_metrics == [
         {
             "date": today.isoformat(),
@@ -167,7 +167,16 @@ def test_gateway_reads_relative_days_daily_and_limits_return_to_requested_range(
             "training_load_ratio": None,
             "tired_rate": None,
             "vo2max": None,
-        }
+        },
+        {
+            "date": "2020-01-01",
+            "rhr": 60,
+            "avg_sleep_hrv": None,
+            "training_load": None,
+            "training_load_ratio": None,
+            "tired_rate": None,
+            "vo2max": None,
+        },
     ]
     expected_bounded_call = {"startDate": today.isoformat(), "endDate": today.isoformat()}
     assert activities.calls == sleep.calls == [expected_bounded_call]
