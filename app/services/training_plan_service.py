@@ -146,7 +146,7 @@ class TrainingPlanService:
                 user_id=user_id,
                 start_date=start_date,
                 end_date=end_date,
-        )
+            )
         except CorosNotConnectedError:
             return FitnessSnapshot(period_label="近1周")
         except (CorosMcpError, CorosOAuthError) as error:

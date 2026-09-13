@@ -164,9 +164,7 @@ def test_gateway_reads_daily_with_schema_declared_seven_day_limit():
         tool_loader=load_tools,
     )
 
-    snapshot = gateway.fetch_snapshot(
-        object(), user_id=1, start_date=today, end_date=today
-    )
+    snapshot = gateway.fetch_snapshot(object(), user_id=1, start_date=today, end_date=today)
 
     assert daily.calls == [{"days": 1}]
     assert snapshot.daily_metrics == [
@@ -234,9 +232,7 @@ def test_gateway_parses_coros_text_and_uses_compact_complete_filters():
         tool_loader=load_tools,
     )
 
-    snapshot = gateway.fetch_snapshot(
-        object(), user_id=1, start_date=start_date, end_date=end_date
-    )
+    snapshot = gateway.fetch_snapshot(object(), user_id=1, start_date=start_date, end_date=end_date)
 
     assert activities.calls == [
         {
@@ -272,8 +268,7 @@ def test_gateway_parses_coros_text_and_uses_compact_complete_filters():
         }
     ]
     assert all(
-        "location" not in record and "coordinates" not in record
-        for record in snapshot.activities
+        "location" not in record and "coordinates" not in record for record in snapshot.activities
     )
     assert snapshot.daily_metrics[0]["steps"] == 7039
     assert snapshot.daily_metrics[1]["calories"] == 273

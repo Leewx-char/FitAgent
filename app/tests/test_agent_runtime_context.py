@@ -321,9 +321,241 @@ def test_personalized_agent_keeps_tool_and_evidence_events():
     )
 
     assert result["events"] == [
-        {"type": "tool", "name": "检索知识库"},
+        {"type": "tool", "id": "rag-call", "name": "检索知识库"},
+        {"type": "tool_completed", "id": "rag-call"},
         {"type": "evidence", "items": [{"rank": 1, "evidence_id": "guide.md#1"}]},
         {"type": "text", "content": "膝盖跟随脚尖。"},
+    ]
+
+
+def test_personalized_agent_resets_preamble_and_emits_final_text_after_tool():
+    """工具调用前的说明必须撤回，工具后的同一步号文本仍应透传。"""
+
+    class PreambleThenToolAgent:
+        @staticmethod
+        async def astream(input_state, **_kwargs):
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="I'll check the weather first.", id="draft-1"),
+                    {"langgraph_step": 1},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[{"name": "get_weather", "id": "weather-call"}],
+                    ),
+                    {"langgraph_step": 1},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    ToolMessage(content="广州晴", tool_call_id="weather-call"),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="建议傍晚慢跑 30 分钟。", id="answer-1"),
+                    {"langgraph_step": 2},
+                ),
+            )
+
+    executor = object.__new__(ReactAgent)
+    executor.agent = PreambleThenToolAgent()
+    executor.max_steps = 5
+    executor.max_tool_calls = 2
+    result = asyncio.run(
+        executor.astream_personalized_events(
+            build_initial_chat_state(messages=[{"role": "user", "content": "广州怎么训练？"}]),
+            ChatRuntimeContext(
+                user_id=5,
+                session_id="session-5",
+                dependencies=SimpleNamespace(max_tool_calls=2),
+            ),
+        )
+    )
+
+    assert result["events"] == [
+        {"type": "text", "content": "I'll check the weather first."},
+        {"type": "text_reset"},
+        {"type": "tool", "id": "weather-call", "name": "查询天气"},
+        {"type": "tool_completed", "id": "weather-call"},
+        {"type": "text", "content": "建议傍晚慢跑 30 分钟。"},
+    ]
+
+
+def test_personalized_agent_waits_for_all_parallel_tools_before_final_text():
+    """并行工具尚未全部返回时不得输出最终回答，避免答案抢在工具链之前展示。"""
+
+    class ParallelToolAgent:
+        @staticmethod
+        async def astream(input_state, **_kwargs):
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[
+                            {"name": "get_weather", "id": "weather-call"},
+                            {"name": "get_current_month", "id": "month-call"},
+                        ],
+                    ),
+                    {"langgraph_step": 1},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    ToolMessage(content="九月", tool_call_id="month-call"),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="不应提前输出。", id="premature-1"),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    ToolMessage(content="广州晴", tool_call_id="weather-call"),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="建议清晨进行轻松跑。", id="answer-1"),
+                    {"langgraph_step": 2},
+                ),
+            )
+
+    executor = object.__new__(ReactAgent)
+    executor.agent = ParallelToolAgent()
+    executor.max_steps = 5
+    executor.max_tool_calls = 2
+    result = asyncio.run(
+        executor.astream_personalized_events(
+            build_initial_chat_state(messages=[{"role": "user", "content": "广州怎么训练？"}]),
+            ChatRuntimeContext(
+                user_id=5,
+                session_id="session-5",
+                dependencies=SimpleNamespace(max_tool_calls=2),
+            ),
+        )
+    )
+
+    assert result["events"] == [
+        {"type": "tool", "id": "weather-call", "name": "查询天气"},
+        {"type": "tool", "id": "month-call", "name": "获取月份"},
+        {"type": "tool_completed", "id": "month-call"},
+        {"type": "tool_completed", "id": "weather-call"},
+        {"type": "text", "content": "建议清晨进行轻松跑。"},
+    ]
+
+
+def test_personalized_agent_resets_intermediate_text_without_losing_multi_round_tools():
+    """第二轮工具调用须撤回中间文本，并保留两轮工具事件供前端聚合。"""
+
+    class MultiRoundToolAgent:
+        @staticmethod
+        async def astream(input_state, **_kwargs):
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[{"name": "get_weather", "id": "weather-call"}],
+                    ),
+                    {"langgraph_step": 1},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    ToolMessage(content="广州晴", tool_call_id="weather-call"),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield (
+                "values",
+                {**input_state, "rag_evidence": [{"rank": 1, "evidence_id": "weather#1"}]},
+            )
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="我再确认当前月份。", id="draft-1"),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[{"name": "get_current_month", "id": "month-call"}],
+                    ),
+                    {"langgraph_step": 2},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    ToolMessage(content="九月", tool_call_id="month-call"),
+                    {"langgraph_step": 3},
+                ),
+            )
+            yield (
+                "values",
+                {
+                    **input_state,
+                    "rag_evidence": [
+                        {"rank": 1, "evidence_id": "weather#1"},
+                        {"rank": 2, "evidence_id": "month#1"},
+                    ],
+                },
+            )
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="建议傍晚慢跑 30 分钟。", id="answer-1"),
+                    {"langgraph_step": 3},
+                ),
+            )
+
+    executor = object.__new__(ReactAgent)
+    executor.agent = MultiRoundToolAgent()
+    executor.max_steps = 6
+    executor.max_tool_calls = 2
+    result = asyncio.run(
+        executor.astream_personalized_events(
+            build_initial_chat_state(messages=[{"role": "user", "content": "广州怎么训练？"}]),
+            ChatRuntimeContext(
+                user_id=5,
+                session_id="session-5",
+                dependencies=SimpleNamespace(max_tool_calls=2),
+            ),
+        )
+    )
+
+    assert result["events"] == [
+        {"type": "tool", "id": "weather-call", "name": "查询天气"},
+        {"type": "tool_completed", "id": "weather-call"},
+        {"type": "evidence", "items": [{"rank": 1, "evidence_id": "weather#1"}]},
+        {"type": "text", "content": "我再确认当前月份。"},
+        {"type": "text_reset"},
+        {"type": "tool", "id": "month-call", "name": "获取月份"},
+        {"type": "tool_completed", "id": "month-call"},
+        {"type": "evidence", "items": [{"rank": 2, "evidence_id": "month#1"}]},
+        {"type": "text", "content": "建议傍晚慢跑 30 分钟。"},
     ]
 
 
@@ -401,9 +633,11 @@ def test_personalized_agent_emits_evidence_for_each_rag_call():
     )
 
     assert result["events"] == [
-        {"type": "tool", "name": "检索知识库"},
+        {"type": "tool", "id": "rag-1", "name": "检索知识库"},
+        {"type": "tool_completed", "id": "rag-1"},
         {"type": "evidence", "items": [{"rank": 1, "evidence_id": "first.md#1"}]},
-        {"type": "tool", "name": "检索知识库"},
+        {"type": "tool", "id": "rag-2", "name": "检索知识库"},
+        {"type": "tool_completed", "id": "rag-2"},
         {"type": "evidence", "items": [{"rank": 1, "evidence_id": "second.md#1"}]},
     ]
     assert result["rag_evidence"] == [

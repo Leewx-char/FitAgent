@@ -223,7 +223,8 @@ class ReactAgent:
         events = []
         latest_state = input_state
         seen_tool_ids = set()
-        last_tool_step = None
+        pending_tool_call_ids = set()
+        emitted_text_since_last_tool = False
         evidence_pending = False
         emitted_evidence_count = len(input_state["rag_evidence"])
 
@@ -252,21 +253,20 @@ class ReactAgent:
                             tool_name = tool_call.get("name")
                             if tool_id and tool_name and tool_id not in seen_tool_ids:
                                 seen_tool_ids.add(tool_id)
-                                last_tool_step = None
+                                if not pending_tool_call_ids and emitted_text_since_last_tool:
+                                    # 工具调用前的说明不是最终答案，通知客户端撤回该临时文本。
+                                    emit({"type": "text_reset"})
+                                    emitted_text_since_last_tool = False
+                                pending_tool_call_ids.add(tool_id)
                                 if timing is not None:
                                     timing.mark("agent.tool_requested", tool=tool_name)
                                 event = {
                                     "type": "tool",
+                                    "id": tool_id,
                                     "name": TOOL_DISPLAY.get(tool_name, tool_name),
                                 }
                                 emit(event)
-                        if message.content and (
-                            not seen_tool_ids
-                            or (
-                                last_tool_step is not None
-                                and metadata.get("langgraph_step", 0) > last_tool_step
-                            )
-                        ):
+                        if message.content and not pending_tool_call_ids:
                             if timing is not None:
                                 timing.mark_once(
                                     "model_first_text",
@@ -276,8 +276,10 @@ class ReactAgent:
                                 )
                             event = {"type": "text", "content": message.content}
                             emit(event)
+                            emitted_text_since_last_tool = True
                     elif isinstance(message, ToolMessage):
-                        last_tool_step = metadata.get("langgraph_step", 0)
+                        pending_tool_call_ids.discard(message.tool_call_id)
+                        emit({"type": "tool_completed", "id": message.tool_call_id})
                         evidence_pending = True
                 elif stream_mode == "values":
                     latest_state = payload

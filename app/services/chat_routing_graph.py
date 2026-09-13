@@ -19,6 +19,8 @@ Route = Literal["direct_rag", "personalized_agent"]
 CLASSIFIER_MESSAGE_LIMIT = 6
 JsonPrimitive: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"]
+
+
 class IntentDecision(BaseModel):
     """约束分类模型只能返回两个受支持的路由。"""
 

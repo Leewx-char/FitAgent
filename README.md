@@ -53,6 +53,12 @@ data/       离线构建的健身知识库源文件
                                       COROS OAuth + MCP
 ```
 
+## 对话上下文与检索约定
+
+- 对话执行保留当前会话最近 20 条原始消息，分类器仅见最新 6 条；早期内容使用 MySQL session_summaries v3 缓存。当前窗口不足以解释早期引用时，Agent 按需调用 get_session_summary，压缩早期全部已存储消息，不按角色过滤；模型结合当前系统提示词、最近消息和早期摘要综合判断。
+- 长期记忆由 mem0 管理：用户消息提取为 proposed，Agent 仅通过 get_confirmed_memories(query) 读取只读 confirmed、未过期结果。
+- 混合检索使用一次 Qdrant Query API 完成 Dense 与 BM25 召回；证据文本统一按 Unicode 规范处理后交给 DashScope 重排。
+
 ## 快速开始
 
 ### 1. 准备依赖
@@ -62,7 +68,7 @@ data/       离线构建的健身知识库源文件
 - MySQL 8.0+
 - Docker Compose v2+（用于启动 Qdrant）
 
-确保 MySQL 已启动。应用启动时会创建 `.env` 中指定的数据库及缺失的表。
+确保 MySQL 已启动。应用启动时会创建 `.env` 中指定的数据库及缺失的表；启动过程只创建缺失关系表，不重建知识库。
 
 ### 2. 配置环境变量
 
@@ -97,7 +103,7 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 
 docker compose up -d qdrant
-# 首次运行或 data/ 更新后执行；该命令会重建 fitagent_knowledge 集合
+# 首次运行或 data/ 更新后执行；该命令会**重建** `fitagent_knowledge` 集合
 python -m app.services.knowledge_indexer
 
 uvicorn app.main:app --reload --port 8000

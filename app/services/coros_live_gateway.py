@@ -399,7 +399,8 @@ class CorosLiveGateway:
         return (
             "no data" in normalized
             or "no records" in normalized
-            or "no " in normalized and " found" in normalized
+            or "no " in normalized
+            and " found" in normalized
         )
 
     @classmethod

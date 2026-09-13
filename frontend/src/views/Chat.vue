@@ -11,9 +11,25 @@
       v-for="(msg, index) in messages"
       :key="index"
       class="message-row"
-      :class="msg.role"
+      :class="[msg.role, { 'has-tool-chain': msg.role === 'assistant' && msg.toolChain?.length }]"
     >
-      <div class="message-bubble" :class="msg.role">
+      <div v-if="msg.role === 'assistant' && msg.toolChain?.length" class="thinking-wrapper">
+        <div class="thinking-panel">
+          <div
+            v-for="(tool, toolIndex) in msg.toolChain"
+            :key="toolIndex"
+            class="tool-line"
+            :class="{ active: tool.status === 'active' }"
+          >
+            <span class="tool-dot">
+              <span v-if="tool.status === 'done'" class="tool-check">✓</span>
+              <span v-else class="tool-spinner"></span>
+            </span>
+            <span class="tool-name">{{ tool.name }}</span>
+          </div>
+        </div>
+      </div>
+      <div v-if="msg.role !== 'assistant' || msg.content" class="message-bubble" :class="msg.role">
         <div v-html="renderMarkdown(msg.content)" />
         <section v-if="msg.role === 'assistant' && msg.evidence?.length" class="evidence-panel">
           <button class="evidence-toggle" type="button" @click="toggleEvidence(index)">
@@ -241,6 +257,38 @@ async function scrollToBottom() {
   }
 }
 
+/** 复制当前工具状态，避免后续流式更新改写已绑定消息的调用记录。 */
+function snapshotToolChain() {
+  return toolChain.value.map((tool) => ({ ...tool }))
+}
+
+/** 将所有仍在执行的工具标为完成，并同步到已绑定的助手消息。 */
+function completePendingTools() {
+  const hasActiveTool = toolChain.value.some((tool) => tool.status === 'active')
+  if (!hasActiveTool) return
+  toolChain.value.forEach((tool) => {
+    if (tool.status === 'active') tool.status = 'done'
+  })
+  chatStore.setLastAssistantToolChain(snapshotToolChain())
+}
+
+/** 根据工具调用标识更新完成状态，支持并行工具分别结束。 */
+function completeTool(toolId) {
+  const tool = toolChain.value.find((item) => item.id === toolId)
+  if (!tool || tool.status === 'done') return
+  tool.status = 'done'
+  chatStore.setLastAssistantToolChain(snapshotToolChain())
+}
+
+/** 合并不同工具返回的证据，避免多轮工具调用覆盖已展示的来源。 */
+function mergeEvidenceCards(currentCards, incomingCards) {
+  const knownIds = new Set(currentCards.map((item) => item?.evidence_id).filter(Boolean))
+  return [
+    ...currentCards,
+    ...incomingCards.filter((item) => !item?.evidence_id || !knownIds.has(item.evidence_id)),
+  ]
+}
+
 /** 处理发送按钮和回车事件，忽略换行、空内容及忙碌状态。 */
 function handleSend(e) {
   if (e?.shiftKey) return
@@ -261,6 +309,9 @@ function sendMessage(text) {
 
   const token = authStore.token
   const sessionId = chatStore.currentSessionId || ''
+  let assistantMsg = ''
+  let evidenceCards = []
+  let msgAdded = false
 
   fetch('/api/chat', {
     method: 'POST',
@@ -296,15 +347,13 @@ function sendMessage(text) {
       const sid = response.headers.get('X-Session-Id')
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
-      let assistantMsg = ''
-      let evidenceCards = []
-      let msgAdded = false
       let sseBuffer = ''
 
       /** 递归读取 SSE 数据块，按事件类型同步聊天、证据和工具链状态。 */
       function read() {
         return reader.read().then(({ done, value }) => {
           if (done) {
+            completePendingTools()
             streaming.value = false
             if (sid && !chatStore.currentSessionId) {
               chatStore.currentSessionId = sid
@@ -325,6 +374,7 @@ function sendMessage(text) {
               if (!line.startsWith('data: ')) continue
               const raw = line.slice(6)
               if (raw === '[DONE]') {
+                completePendingTools()
                 thinking.value = false
                 toolChain.value = []
                 streaming.value = false
@@ -338,15 +388,42 @@ function sendMessage(text) {
               }
 
               if (event.type === 'tool') {
-                if (toolChain.value.length > 0) {
-                  toolChain.value[toolChain.value.length - 1].status = 'done'
+                thinking.value = false
+                toolChain.value.push({ id: event.id || '', name: event.name || '', status: 'active' })
+                if (!msgAdded) {
+                  chatStore.addMessage({
+                    role: 'assistant',
+                    content: '',
+                    evidence: evidenceCards,
+                    toolChain: snapshotToolChain(),
+                  })
+                  msgAdded = true
+                } else {
+                  chatStore.setLastAssistantToolChain(snapshotToolChain())
                 }
-                toolChain.value.push({ name: event.name || '', status: 'active' })
+                scrollToBottom()
+                continue
+              }
+
+              if (event.type === 'tool_completed') {
+                completeTool(event.id || '')
+                continue
+              }
+
+              if (event.type === 'text_reset') {
+                const preservedToolChain = msgAdded && chatStore.resetLastAssistantMessageForToolCall()
+                assistantMsg = ''
+                if (!preservedToolChain) evidenceCards = []
+                msgAdded = Boolean(preservedToolChain)
+                thinking.value = !preservedToolChain
+                if (!preservedToolChain) toolChain.value = []
+                scrollToBottom()
                 continue
               }
 
               if (event.type === 'evidence') {
-                evidenceCards = Array.isArray(event.items) ? event.items : []
+                const incomingCards = Array.isArray(event.items) ? event.items : []
+                evidenceCards = mergeEvidenceCards(evidenceCards, incomingCards)
                 if (msgAdded) {
                   const lastMessage = chatStore.messages.at(-1)
                   if (lastMessage?.role === 'assistant') lastMessage.evidence = evidenceCards
@@ -355,21 +432,31 @@ function sendMessage(text) {
               }
 
               if (event.type === 'error') {
+                completePendingTools()
                 thinking.value = false
                 toolChain.value = []
                 streaming.value = false
                 const errMsg = event.content || '服务异常，请稍后重试'
-                chatStore.addMessage({ role: 'assistant', content: errMsg })
+                if (msgAdded) {
+                  chatStore.updateLastAssistantMessage(errMsg)
+                } else {
+                  chatStore.addMessage({ role: 'assistant', content: errMsg })
+                }
                 message.error(errMsg)
                 continue
               }
 
               if (event.type === 'text') {
+                completePendingTools()
                 thinking.value = false
-                toolChain.value = []
                 assistantMsg += event.content || ''
                 if (!msgAdded) {
-                  chatStore.addMessage({ role: 'assistant', content: assistantMsg, evidence: evidenceCards })
+                  chatStore.addMessage({
+                    role: 'assistant',
+                    content: assistantMsg,
+                    evidence: evidenceCards,
+                    toolChain: snapshotToolChain(),
+                  })
                   msgAdded = true
                 } else {
                   chatStore.updateLastAssistantMessage(event.content || '')
@@ -385,9 +472,16 @@ function sendMessage(text) {
       return read()
     })
     .catch((err) => {
+      completePendingTools()
       streaming.value = false
       thinking.value = false
-      chatStore.addMessage({ role: 'assistant', content: '网络连接失败，请检查网络后重试' })
+      toolChain.value = []
+      const errMsg = '网络连接失败，请检查网络后重试'
+      if (msgAdded) {
+        chatStore.updateLastAssistantMessage(errMsg)
+      } else {
+        chatStore.addMessage({ role: 'assistant', content: errMsg })
+      }
     })
 }
 
@@ -497,6 +591,15 @@ watch(toolChain, () => {
 
 .message-row.user {
   justify-content: flex-end;
+}
+
+.message-row.has-tool-chain {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.message-row.has-tool-chain .thinking-wrapper {
+  margin-bottom: 8px;
 }
 
 .message-bubble {

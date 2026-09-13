@@ -27,6 +27,26 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  /** 用最新工具调用快照更新末条助手消息，供回答上方的思维链展示。 */
+  function setLastAssistantToolChain(tools) {
+    const lastMessage = messages.value.at(-1)
+    if (lastMessage?.role === 'assistant') {
+      lastMessage.toolChain = tools.map((tool) => ({ ...tool }))
+    }
+  }
+
+  /** 撤回工具调用前的临时文本；已有工具链时保留该助手消息和调用记录。 */
+  function resetLastAssistantMessageForToolCall() {
+    const lastMessage = messages.value.at(-1)
+    if (lastMessage?.role !== 'assistant') return false
+    if (lastMessage.toolChain?.length) {
+      lastMessage.content = ''
+      return true
+    }
+    messages.value.pop()
+    return false
+  }
+
   /** 清空当前会话在界面中展示的消息。 */
   function clearMessages() {
     messages.value = []
@@ -39,6 +59,8 @@ export const useChatStore = defineStore('chat', () => {
     setMessages,
     addMessage,
     updateLastAssistantMessage,
+    setLastAssistantToolChain,
+    resetLastAssistantMessageForToolCall,
     clearMessages,
   }
 })

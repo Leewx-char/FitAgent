@@ -123,9 +123,22 @@ async def sse_generator(
                 raise ValueError("Agent 输出了无效的内部事件")
             if event.get("type") == "tool":
                 # 工具调用通知：把英文名翻译成中文显示给用户
-                payload = {"type": "tool", "name": event.get("name", "")}
+                payload = {
+                    "type": "tool",
+                    "name": event.get("name", ""),
+                }
+                if event.get("id"):
+                    payload["id"] = event["id"]
                 timing.mark_once("sse_first_event", "sse.first_event", event_type="tool")
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            elif event.get("type") == "tool_completed":
+                # 工具完成事件用于准确更新并行工具的思维链状态。
+                payload = {"type": "tool_completed", "id": event.get("id", "")}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            elif event.get("type") == "text_reset":
+                # 工具调用前的文本只是执行说明，不能成为最终回答或历史记录。
+                full_response = ""
+                yield f"data: {json.dumps({'type': 'text_reset'}, ensure_ascii=False)}\n\n"
             elif event.get("type") == "evidence":
                 # 证据卡片属于检索结果的一部分，原样转发给前端与回答中的 [证据:N] 对应。
                 payload = {
@@ -160,6 +173,7 @@ async def sse_generator(
             error_msg = "AI 服务响应超时，请稍后重试"
         else:
             error_msg = "服务暂时不可用，请稍后重试"
+        full_response += error_msg
         yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
     try:
         with timing.span("trace.save"):

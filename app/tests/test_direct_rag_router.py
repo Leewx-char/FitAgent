@@ -160,8 +160,8 @@ def test_chat_sse_contract_is_unchanged_for_direct_rag_route():
     ]
 
 
-def test_chat_sse_contract_is_unchanged_for_personalized_route():
-    """个性化图路径仍应输出既有工具和文本事件。"""
+def test_personalized_route_emits_tool_lifecycle_and_final_text():
+    """个性化图路径必须输出工具生命周期事件和最终文本。"""
 
     class PersonalizedInnerAgent:
         """模拟内层 Agent 的工具调用和最终文本。"""
@@ -212,7 +212,8 @@ def test_chat_sse_contract_is_unchanged_for_personalized_route():
     )
 
     assert events == [
-        {"type": "tool", "name": "获取用户画像"},
+        {"type": "tool", "id": "call-1", "name": "获取用户画像"},
+        {"type": "tool_completed", "id": "call-1"},
         {"type": "text", "content": "为你安排每周三练。"},
     ]
 
@@ -352,6 +353,7 @@ def test_personalized_custom_stream_emits_tool_before_executor_error():
 
     assert asyncio.run(collect_until_error()) == {
         "type": "tool",
+        "id": "call-1",
         "name": "获取用户画像",
     }
 

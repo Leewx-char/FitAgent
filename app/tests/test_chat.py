@@ -19,6 +19,71 @@ async def _stream_events(events):
 
 
 class TestChat:
+    def test_sse_resets_preamble_before_persisting_tool_answer(self, monkeypatch):
+        """撤回事件必须穿过 SSE，并让持久化答案只保留工具后的正式回复。"""
+
+        class FakeAgent:
+            @staticmethod
+            async def execute_stream(_messages, **_kwargs):
+                yield {"type": "text", "content": "I'll check the weather first."}
+                yield {"type": "text_reset"}
+                yield {"type": "tool", "id": "weather-call", "name": "查询天气"}
+                yield {"type": "tool_completed", "id": "weather-call"}
+                yield {"type": "text", "content": "建议傍晚慢跑 30 分钟。"}
+
+        class FakeDb:
+            @staticmethod
+            def add(_message):
+                """忽略测试中的待保存消息。"""
+
+            @staticmethod
+            def query(_model):
+                """返回不会命中会话的查询对象。"""
+                return SimpleNamespace(filter=lambda *_args: SimpleNamespace(first=lambda: None))
+
+            @staticmethod
+            def commit():
+                """避免测试访问真实数据库。"""
+
+        @contextmanager
+        def fake_trace_db():
+            """提供仓储保存所需的独立会话。"""
+            yield object()
+
+        saved = {}
+        monkeypatch.setattr(chat_router, "get_db_session", fake_trace_db)
+        monkeypatch.setattr(
+            chat_router.AgentTraceRepository,
+            "save",
+            lambda _db, _collector, **kwargs: saved.update(kwargs),
+        )
+
+        async def collect_sse():
+            """收集真实 sse_generator 的全部响应块。"""
+            return [
+                chunk
+                async for chunk in chat_router.sse_generator(
+                    FakeAgent(),
+                    [{"role": "user", "content": "广州怎么训练？"}],
+                    FakeDb(),
+                    "session-reset",
+                    "广州怎么训练？",
+                    SimpleNamespace(id=7),
+                )
+            ]
+
+        chunks = asyncio.run(collect_sse())
+
+        assert [json.loads(chunk[6:]) for chunk in chunks[:-1]] == [
+            {"type": "text", "content": "I'll check the weather first."},
+            {"type": "text_reset"},
+            {"type": "tool", "id": "weather-call", "name": "查询天气"},
+            {"type": "tool_completed", "id": "weather-call"},
+            {"type": "text", "content": "建议傍晚慢跑 30 分钟。"},
+        ]
+        assert chunks[-1] == "data: [DONE]\n\n"
+        assert saved["assistant_answer"] == "建议傍晚慢跑 30 分钟。"
+
     def test_sse_saves_collected_question_answer_and_status(self, monkeypatch):
         """成功流结束后应将问题、回答和 Collector 交给仓储。"""
 
@@ -253,6 +318,8 @@ class TestChat:
             @staticmethod
             async def astream(**_kwargs):
                 """生成可消费的首个事件后抛出异常。"""
+                yield {"type": "text", "content": "我先查询资料。"}
+                yield {"type": "text_reset"}
                 yield {"type": "tool", "name": "检索知识库"}
                 raise RuntimeError("retrieval failed")
 
@@ -307,12 +374,14 @@ class TestChat:
 
         chunks = asyncio.run(collect_sse())
 
-        assert json.loads(chunks[0][6:]) == {"type": "tool", "name": "检索知识库"}
-        assert json.loads(chunks[1][6:])["type"] == "error"
-        assert chunks[2] == "data: [DONE]\n\n"
+        assert json.loads(chunks[0][6:]) == {"type": "text", "content": "我先查询资料。"}
+        assert json.loads(chunks[1][6:]) == {"type": "text_reset"}
+        assert json.loads(chunks[2][6:]) == {"type": "tool", "name": "检索知识库"}
+        assert json.loads(chunks[3][6:])["type"] == "error"
+        assert chunks[4] == "data: [DONE]\n\n"
         assert saved["status"] == "failed"
         assert saved["user_question"] == "深蹲怎么做？"
-        assert saved["assistant_answer"] == ""
+        assert saved["assistant_answer"] == "服务暂时不可用，请稍后重试"
         assert isinstance(saved["collector"], RunCollectorCallbackHandler)
 
     def test_chat_forwards_rag_evidence_cards(self, auth_client, agent_mock):
