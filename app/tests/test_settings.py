@@ -1,6 +1,45 @@
 """运行配置的 .env 读取测试。"""
 
+from pathlib import Path
+
 from app.core.settings import Settings
+
+
+def _env_example_keys() -> set[str]:
+    """读取模板中声明的环境变量名，不接触本地私有 .env。"""
+    template = Path(__file__).resolve().parents[2] / ".env.example"
+    return {
+        line.split("=", 1)[0]
+        for line in template.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    }
+
+
+def test_env_example_covers_active_runtime_settings_only():
+    """模板必须涵盖所有运行配置，且不保留已废弃的 Agent 身份字段。"""
+    template_keys = _env_example_keys()
+    settings_keys = {field.upper() for field in Settings.model_fields}
+    direct_env_keys = {
+        "ALLOWED_ORIGINS",
+        "DEBUG_MODE",
+        "JWT_ALGORITHM",
+        "JWT_EXPIRE_MINUTES",
+        "JWT_SECRET_KEY",
+        "LOG_LEVEL",
+    }
+
+    obsolete_keys = {
+        "AGENT_USER_CITY",
+        "AGENT_USER_ID",
+        "COROS_MCP_CACHE_HOME",
+        "COROS_MCP_COMMAND",
+        "COROS_MCP_HIDE_AUTH_TOOLS",
+        "COROS_MCP_SYNC_COMMAND",
+        "COROS_MCP_TOOLSET",
+    }
+
+    assert settings_keys | direct_env_keys <= template_keys
+    assert obsolete_keys.isdisjoint(template_keys)
 
 
 def test_settings_reads_dashscope_api_key_from_env_file(monkeypatch, tmp_path):

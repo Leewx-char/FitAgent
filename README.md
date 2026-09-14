@@ -86,6 +86,12 @@ DASHSCOPE_API_KEY=your_dashscope_api_key
 QDRANT_API_KEY=your_qdrant_api_key
 ```
 
+启用实时天气工具时，还需配置 Weatherstack 密钥：
+
+```dotenv
+WEATHERSTACK_ACCESS_KEY=your_weatherstack_access_key
+```
+
 COROS 为可选功能。使用前还需配置公网 HTTPS 回调地址与 Fernet 加密密钥：
 
 ```dotenv
