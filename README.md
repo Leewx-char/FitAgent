@@ -203,6 +203,12 @@ sequenceDiagram
     F-->>U: 实时渲染回答
 ```
 
+## RAG 检索流程
+
+<p align="center">
+  <img src="docs/assets/rag-retrieval-flow.svg" alt="FitAgent RAG 检索流程" width="92%">
+</p>
+
 ## 开发与验证
 
 ```bash

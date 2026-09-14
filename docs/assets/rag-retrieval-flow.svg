@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1468" height="1088" viewBox="0 0 1468 1088" font-family="'Hiragino Sans GB','PingFang SC','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC',sans-serif">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<rect fill="#e5dbff" fill-opacity="0.30" stroke="#b197fc" stroke-width="1" x="24.0" y="114.0" width="570" height="950" rx="8"/>
+<text x="49.0" y="145.3" font-size="18" text-anchor="start" fill="#6741d9">离线索引 · 一次性重建</text>
+<text x="49.0" y="167.9" font-size="14" text-anchor="start" fill="#6741d9">python -m app.services.knowledge_indexer</text>
+<rect fill="#dbe4ff" fill-opacity="0.30" stroke="#91a7ff" stroke-width="1" x="654.0" y="114.0" width="790" height="950" rx="8"/>
+<text x="679.0" y="145.3" font-size="18" text-anchor="start" fill="#1e40af">在线检索 · 请求链路</text>
+<text x="679.0" y="167.9" font-size="14" text-anchor="start" fill="#1e40af">检索 → 重排 → 生成，全程流式返回</text>
+<line x1="309.0" y1="266.0" x2="309.0" y2="292.0" stroke="#374151" stroke-width="2"/><polygon points="309.0,292.0 304.0,280.0 314.0,280.0" fill="#374151"/>
+<line x1="309.0" y1="376.0" x2="309.0" y2="402.0" stroke="#374151" stroke-width="2"/><polygon points="309.0,402.0 304.0,390.0 314.0,390.0" fill="#374151"/>
+<line x1="309.0" y1="474.0" x2="309.0" y2="500.0" stroke="#374151" stroke-width="2"/><polygon points="309.0,500.0 304.0,488.0 314.0,488.0" fill="#374151"/>
+<line x1="309.0" y1="584.0" x2="309.0" y2="610.0" stroke="#374151" stroke-width="2"/><polygon points="309.0,610.0 304.0,598.0 314.0,598.0" fill="#374151"/>
+<line x1="1049.0" y1="266.0" x2="1049.0" y2="292.0" stroke="#374151" stroke-width="2"/><polygon points="1049.0,292.0 1044.0,280.0 1054.0,280.0" fill="#374151"/>
+<line x1="1049.0" y1="364.0" x2="1049.0" y2="390.0" stroke="#374151" stroke-width="2"/><polygon points="1049.0,390.0 1044.0,378.0 1054.0,378.0" fill="#374151"/>
+<line x1="1049.0" y1="686.0" x2="1049.0" y2="712.0" stroke="#374151" stroke-width="2"/><polygon points="1049.0,712.0 1044.0,700.0 1054.0,700.0" fill="#374151"/>
+<line x1="1049.0" y1="796.0" x2="1049.0" y2="822.0" stroke="#374151" stroke-width="2"/><polygon points="1049.0,822.0 1044.0,810.0 1054.0,810.0" fill="#374151"/>
+<line x1="1049.0" y1="906.0" x2="1049.0" y2="932.0" stroke="#374151" stroke-width="2"/><polygon points="1049.0,932.0 1044.0,920.0 1054.0,920.0" fill="#374151"/>
+<line x1="1049.0" y1="490.0" x2="844.0" y2="516.0" stroke="#374151" stroke-width="2"/><polygon points="844.0,516.0 855.3,509.5 856.5,519.5" fill="#374151"/>
+<line x1="1049.0" y1="490.0" x2="1254.0" y2="516.0" stroke="#374151" stroke-width="2"/><polygon points="1254.0,516.0 1241.5,519.5 1242.7,509.5" fill="#374151"/>
+<line x1="844.0" y1="588.0" x2="984.0" y2="614.0" stroke="#374151" stroke-width="2"/><polygon points="984.0,614.0 971.3,616.7 973.1,606.9" fill="#374151"/>
+<line x1="1254.0" y1="588.0" x2="1114.0" y2="614.0" stroke="#374151" stroke-width="2"/><polygon points="1114.0,614.0 1124.9,606.9 1126.7,616.7" fill="#374151"/>
+<line x1="554.0" y1="650.0" x2="804.0" y2="754.0" stroke="#0c8599" stroke-width="2" stroke-dasharray="8 6"/><polygon points="804.0,754.0 791.0,754.0 794.8,744.8" fill="#0c8599"/>
+<rect fill="#a5d8ff" stroke="#1971c2" stroke-width="2" x="64.0" y="194.0" width="490" height="72" rx="8"/>
+<text x="309.0" y="214.3" font-size="17" text-anchor="middle" fill="#1e40af">读取并预检</text>
+<text x="309.0" y="237.0" font-size="14" text-anchor="middle" fill="#374151">data/ 的 txt · md · pdf</text><text x="309.0" y="254.5" font-size="14" text-anchor="middle" fill="#374151">校验最小来源数与切片数</text>
+<rect fill="#a5d8ff" stroke="#1971c2" stroke-width="2" x="64.0" y="292.0" width="490" height="84" rx="8"/>
+<text x="309.0" y="318.3" font-size="17" text-anchor="middle" fill="#1e40af">分块与去重</text>
+<text x="309.0" y="341.0" font-size="14" text-anchor="middle" fill="#374151">Markdown 标题切分 → 递归切片 500/80</text><text x="309.0" y="358.5" font-size="14" text-anchor="middle" fill="#374151">按切片正文 SHA-256 去重</text>
+<rect fill="#d0bfff" stroke="#6741d9" stroke-width="2" x="64.0" y="402.0" width="490" height="72" rx="8"/>
+<text x="309.0" y="431.1" font-size="17" text-anchor="middle" fill="#1e40af">批量向量化</text>
+<text x="309.0" y="453.8" font-size="14" text-anchor="middle" fill="#374151">DashScope text-embedding-v1</text>
+<rect fill="#c3fae8" stroke="#0c8599" stroke-width="2" x="64.0" y="500.0" width="490" height="84" rx="8"/>
+<text x="309.0" y="526.3" font-size="17" text-anchor="middle" fill="#1e40af">重建 Qdrant 集合</text>
+<text x="309.0" y="549.0" font-size="14" text-anchor="middle" fill="#374151">dense + sparse「Qdrant/bm25」</text><text x="309.0" y="566.5" font-size="14" text-anchor="middle" fill="#374151">写入后即可被在线检索读取</text>
+<ellipse fill="#c3fae8" stroke="#0c8599" stroke-width="2" cx="309.0" cy="650.0" rx="245.0" ry="40.0"/>
+<text x="309.0" y="643.1" font-size="17" text-anchor="middle" fill="#1e40af">fitagent_knowledge</text>
+<text x="309.0" y="665.8" font-size="14" text-anchor="middle" fill="#374151">只读集合，points 可健康检查</text>
+<rect fill="#fff3bf" stroke="#f08c00" stroke-width="2" x="64.0" y="744.0" width="490" height="270" rx="8"/>
+<text x="94.0" y="780.5" font-size="17" text-anchor="start" fill="#e8590c">关键参数与契约</text>
+<text x="94.0" y="821.9" font-size="14" text-anchor="start" fill="#374151">candidate_k / rerank_candidate_k = 30</text>
+<text x="94.0" y="851.9" font-size="14" text-anchor="start" fill="#374151">最终 k = 6，单次请求只嵌入查询一次</text>
+<text x="94.0" y="881.9" font-size="14" text-anchor="start" fill="#374151">max_context_chars = 6000「单条 1200」</text>
+<text x="94.0" y="911.9" font-size="14" text-anchor="start" fill="#374151">evidence_id = source_id#chunk_id</text>
+<text x="94.0" y="941.9" font-size="14" text-anchor="start" fill="#374151">重排失败统一降级为『知识库检索暂不可用』</text>
+<rect fill="#a5d8ff" stroke="#1971c2" stroke-width="2" x="899.0" y="194.0" width="300" height="72" rx="8"/>
+<rect fill="#fff3bf" stroke="#f08c00" stroke-width="2" x="899.0" y="292.0" width="300" height="72" rx="8"/>
+<polygon fill="#ffd8a8" stroke="#e8590c" stroke-width="2" points="1049.0,390.0 1149.0,440.0 1049.0,490.0 949.0,440.0"/>
+<rect fill="#b2f2bb" stroke="#2f9e44" stroke-width="2" x="694.0" y="516.0" width="300" height="72" rx="8"/>
+<rect fill="#ffd8a8" stroke="#e8590c" stroke-width="2" x="1104.0" y="516.0" width="300" height="72" rx="8"/>
+<rect fill="#d0bfff" stroke="#6741d9" stroke-width="2" x="899.0" y="614.0" width="300" height="72" rx="8"/>
+<rect fill="#c3fae8" stroke="#0c8599" stroke-width="2" x="804.0" y="712.0" width="490" height="84" rx="8"/>
+<rect fill="#eebefa" stroke="#9c36b5" stroke-width="2" x="804.0" y="822.0" width="490" height="84" rx="8"/>
+<rect fill="#b2f2bb" stroke="#2f9e44" stroke-width="2" x="804.0" y="932.0" width="490" height="84" rx="8"/>
+<text x="1049.0" y="223.1" font-size="17" text-anchor="middle" fill="#1e40af">用户问题</text>
+<text x="1049.0" y="245.8" font-size="14" text-anchor="middle" fill="#374151">附带最近三轮对话</text>
+<text x="1049.0" y="321.1" font-size="17" text-anchor="middle" fill="#1e40af">意图分类</text>
+<text x="1049.0" y="343.8" font-size="14" text-anchor="middle" fill="#374151">deepseek-flash 结构化 route</text>
+<text x="1049.0" y="443.8" font-size="17" text-anchor="middle" fill="#1e40af">通用知识问题?</text>
+<text x="844.0" y="545.1" font-size="17" text-anchor="middle" fill="#1e40af">direct_rag 直连检索</text>
+<text x="844.0" y="567.8" font-size="14" text-anchor="middle" fill="#374151">不经工具循环直接生成</text>
+<text x="1254.0" y="545.1" font-size="17" text-anchor="middle" fill="#1e40af">personalized_agent</text>
+<text x="1254.0" y="567.8" font-size="14" text-anchor="middle" fill="#374151">Agent 调用 rag_summarize 工具</text>
+<text x="1049.0" y="643.1" font-size="17" text-anchor="middle" fill="#1e40af">查询嵌入一次</text>
+<text x="1049.0" y="665.8" font-size="14" text-anchor="middle" fill="#374151">embed_query 只执行一次</text>
+<text x="1049.0" y="738.3" font-size="17" text-anchor="middle" fill="#1e40af">Qdrant 单次混合检索</text>
+<text x="1049.0" y="761.0" font-size="14" text-anchor="middle" fill="#374151">dense top30 + BM25 top30</text><text x="1049.0" y="778.5" font-size="14" text-anchor="middle" fill="#374151">RRF 融合为候选 30 条</text>
+<text x="1049.0" y="848.3" font-size="17" text-anchor="middle" fill="#1e40af">DashScope 二阶段重排</text>
+<text x="1049.0" y="871.0" font-size="14" text-anchor="middle" fill="#374151">gte-rerank-v2 精排</text><text x="1049.0" y="888.5" font-size="14" text-anchor="middle" fill="#374151">取最终 top 6 条证据</text>
+<text x="1049.0" y="958.3" font-size="17" text-anchor="middle" fill="#1e40af">上下文裁剪与流式生成</text>
+<text x="1049.0" y="981.0" font-size="14" text-anchor="middle" fill="#374151">预算 6000 / 单条 1200 字</text><text x="1049.0" y="998.5" font-size="14" text-anchor="middle" fill="#374151">回答保留 [证据:N] 并推送证据卡片</text>
+<text x="934.0" y="493.9" font-size="14" text-anchor="middle" fill="#e8590c">是</text>
+<text x="1174.0" y="493.9" font-size="14" text-anchor="middle" fill="#e8590c">否</text>
+<text x="679.0" y="685.9" font-size="14" text-anchor="middle" fill="#0c8599">只读读取</text>
+<text x="734.0" y="47.8" font-size="28" text-anchor="middle" fill="#1e40af">FitAgent RAG 检索流程</text>
+<text x="734.0" y="81.3" font-size="18" text-anchor="middle" fill="#3b82f6">两阶段检索：Qdrant 原生混合召回 + DashScope 重排</text>
+</svg>
