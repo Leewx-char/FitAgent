@@ -2,6 +2,56 @@
 
 面向健身场景的 AI 智能教练全栈项目。系统结合 RAG、受控 Agent、长期记忆与运动数据，提供流式健身问答、个性化训练计划、健康报告解析和 COROS 实时数据看板等能力。
 
+## 界面预览
+
+### 1. 天气感知训练建议
+
+<p align="center">
+  <img src="docs/images/showcase/chat-weather.png" alt="基于天气工具的训练建议对话" width="92%">
+</p>
+
+Agent 会调用实时天气工具，结合温度、湿度和风力，为用户给出户外或室内训练建议，以及对应的补水与防晒提醒。
+
+### 2. RAG 与用户画像驱动的个性化对话
+
+<p align="center">
+  <img src="docs/images/showcase/chat-personalized-rag.png" alt="结合知识库与用户画像的个性化建议" width="92%">
+</p>
+
+对话会按需检索训练知识库并读取用户画像，综合训练水平、目标、器械条件和身体状况，给出适合个人的动作选择与训练建议。
+
+### 3. 可追溯的 RAG 证据卡片
+
+<p align="center">
+  <img src="docs/images/showcase/chat-rag-evidence.png" alt="RAG 检索证据卡片" width="92%">
+</p>
+
+回答中的引用可展开为证据卡片，展示命中的知识库文档和相关片段，帮助用户核对训练结论的来源。
+
+### 4. COROS 训练数据看板
+
+<p align="center">
+  <img src="docs/images/showcase/dashboard-coros.png" alt="COROS 训练数据看板" width="92%">
+</p>
+
+连接 COROS 后，可同步近 7 天的步数、运动时长、消耗和训练负荷，以日视图汇总近期训练节奏。
+
+### 5. 基于数据生成的本周计划
+
+<p align="center">
+  <img src="docs/images/showcase/weekly-plan.png" alt="本周训练计划" width="92%">
+</p>
+
+系统基于训练档案、近期运动数据与已确认反馈生成周计划，并将安全上限、每日训练内容和完成反馈集中呈现。
+
+### 6. 用户可控的长期记忆
+
+<p align="center">
+  <img src="docs/images/showcase/memory-confirmation.png" alt="用户可控的长期记忆" width="92%">
+</p>
+
+只有经用户确认的信息才会进入长期记忆；用户可随时查看、生效或撤销记忆，确保个性化建议始终由用户掌控。
+
 ## 项目模块
 
 ```text
