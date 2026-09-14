@@ -1,12 +1,13 @@
 import asyncio
 import json
+from collections.abc import Mapping
 from operator import add, or_
 from types import SimpleNamespace
 from typing import Annotated, Any, AsyncIterator, Callable, Iterable, cast
 from langchain.agents import AgentState, create_agent
 from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.runnables.config import merge_configs
 
@@ -52,62 +53,177 @@ TOOL_DISPLAY = {
 }
 
 
-def _log_agent_stream_message(
-    message: AIMessage | AIMessageChunk, metadata: object, tool_calls: list[object]
-) -> None:
-    """记录消息流边界的脱敏摘要，便于定位工具后的空回答。"""
-    content = getattr(message, "content", "")
-    chunk_position = getattr(message, "chunk_position", None)
-    is_terminal_chunk = chunk_position in {"last", "end"}
-    if isinstance(message, AIMessageChunk) and not is_terminal_chunk:
+def _event_content_to_text(content: object) -> str:
+    """将 LangChain 事件中的模型内容规范成可发送的文本。"""
+    if isinstance(content, list):
+        return "".join(
+            item.get("text", "") if isinstance(item, dict) else str(item) for item in content
+        )
+    return str(content or "")
+
+
+def _log_agent_stream_event(event: Mapping[str, object]) -> None:
+    """记录原始事件的脱敏摘要，不写入提示词、回答或工具参数。"""
+    event_name = event.get("event")
+    if event_name not in {"on_chat_model_end", "on_tool_start", "on_tool_end"}:
         return
-    stream_step = metadata.get("langgraph_step") if isinstance(metadata, dict) else None
+    data = event.get("data")
+    output = data.get("output") if isinstance(data, Mapping) else None
+    content = getattr(output, "content", "")
     logger.info(
-        "AGENT_STREAM_MESSAGE %s",
+        "AGENT_STREAM_EVENT %s",
         json.dumps(
             {
                 "request_id": request_id_var.get(),
-                "message_type": type(message).__name__,
-                "content_chars": len(str(content)),
-                "tool_call_count": len(tool_calls),
-                "stream_step": stream_step,
-                "chunk_position": chunk_position,
+                "event": event_name,
+                "name": event.get("name"),
+                "run_id": str(event.get("run_id", "")),
+                "content_chars": len(_event_content_to_text(content)),
             },
             ensure_ascii=False,
         ),
     )
 
 
-def _log_agent_stream_state(state: object) -> None:
-    """记录状态快照的末条消息摘要，不写入用户文本或模型回答。"""
-    messages = state.get("messages") if isinstance(state, dict) else None
-    last_message = messages[-1] if isinstance(messages, list) and messages else None
-    if last_message is None:
-        return
-    content = getattr(last_message, "content", "")
-    tool_calls = getattr(last_message, "tool_calls", None) or []
-    logger.info(
-        "AGENT_STREAM_STATE %s",
-        json.dumps(
+def _rag_evidence_from_tool_output(output: object) -> list[dict[str, object]]:
+    """从 rag_summarize 的 Command 更新中取回本次新增证据。"""
+    update = getattr(output, "update", None)
+    if not isinstance(update, Mapping) and isinstance(output, Mapping):
+        update = output.get("update")
+    evidence = update.get("rag_evidence") if isinstance(update, Mapping) else None
+    if not isinstance(evidence, list):
+        return []
+    return [item for item in evidence if isinstance(item, dict)]
+
+
+class _PersonalizedEventAdapter:
+    """将内层 LangChain v2 原始事件适配为既有聊天 SSE 事件。"""
+
+    def __init__(
+        self,
+        *,
+        initial_evidence: list[dict[str, object]],
+        stream_writer: Callable[[dict], None] | None,
+        timing: ChatLatencyTracker | None,
+    ) -> None:
+        """初始化本次请求独占的事件、工具和证据状态。"""
+        self.events: list[dict[str, object]] = []
+        self.rag_evidence = list(initial_evidence)
+        self._stream_writer = stream_writer
+        self._timing = timing
+        self._model_runs_with_text: set[str] = set()
+        self._started_tool_runs: set[str] = set()
+        self._pending_tool_runs: set[str] = set()
+        self._completed_tool_runs: set[str] = set()
+        self._emitted_text_since_last_tool = False
+
+    def consume(self, event: object) -> None:
+        """按原始事件类型转发模型文本、工具状态和检索证据。"""
+        if not isinstance(event, Mapping):
+            return
+        _log_agent_stream_event(event)
+        event_name = event.get("event")
+        if event_name == "on_chat_model_stream":
+            self._consume_model_chunk(event)
+        elif event_name == "on_chat_model_end":
+            self._consume_model_end(event)
+        elif event_name == "on_tool_start":
+            self._start_tool(event)
+        elif event_name == "on_tool_end":
+            self._complete_tool(event)
+        elif event_name == "on_tool_error":
+            self._complete_tool(event, include_rag_evidence=False)
+
+    def _emit(self, event: dict[str, object]) -> None:
+        """校验事件可序列化后转发给外层图和 SSE 生成器。"""
+        if not is_json_value(event):
+            raise ValueError("个性化 Agent 事件包含不可序列化值")
+        if self._stream_writer:
+            self._stream_writer(event)
+        self.events.append(event)
+
+    def _emit_text(self, content: str) -> None:
+        """发送正文并记录本次请求的首个可见文本耗时。"""
+        if self._timing is not None:
+            self._timing.mark_once(
+                "model_first_text",
+                "model.first_text",
+                branch="personalized_agent",
+                content_chars=len(content),
+            )
+        self._emit({"type": "text", "content": content})
+        self._emitted_text_since_last_tool = True
+
+    @staticmethod
+    def _event_data(event: Mapping[str, object]) -> Mapping[str, object]:
+        """返回事件数据字典，屏蔽缺失或异常格式。"""
+        data = event.get("data")
+        return data if isinstance(data, Mapping) else {}
+
+    def _consume_model_chunk(self, event: Mapping[str, object]) -> None:
+        """转发正式模型分块；工具执行期间忽略未完成的中间文本。"""
+        if self._pending_tool_runs:
+            return
+        chunk = self._event_data(event).get("chunk")
+        content = _event_content_to_text(getattr(chunk, "content", chunk))
+        if not content:
+            return
+        run_id = str(event.get("run_id", ""))
+        self._emit_text(content)
+        self._model_runs_with_text.add(run_id)
+
+    def _consume_model_end(self, event: Mapping[str, object]) -> None:
+        """在模型未产生有效分块时，使用最终 AIMessage 兜底正文。"""
+        if self._pending_tool_runs:
+            return
+        run_id = str(event.get("run_id", ""))
+        if run_id in self._model_runs_with_text:
+            return
+        message = self._event_data(event).get("output")
+        if not isinstance(message, AIMessage) or message.tool_calls:
+            return
+        content = _event_content_to_text(message.content)
+        if content:
+            self._emit_text(content)
+            self._model_runs_with_text.add(run_id)
+
+    def _start_tool(self, event: Mapping[str, object]) -> None:
+        """以工具运行 ID 建立独立前端工具链，兼容并行同名调用。"""
+        run_id = str(event.get("run_id", ""))
+        tool_name = event.get("name")
+        if not run_id or not isinstance(tool_name, str) or run_id in self._started_tool_runs:
+            return
+        self._started_tool_runs.add(run_id)
+        if self._emitted_text_since_last_tool:
+            self._emit({"type": "text_reset"})
+            self._emitted_text_since_last_tool = False
+        self._pending_tool_runs.add(run_id)
+        if self._timing is not None:
+            self._timing.mark("agent.tool_requested", tool=tool_name)
+        self._emit(
             {
-                "request_id": request_id_var.get(),
-                "message_count": len(messages),
-                "last_message_type": type(last_message).__name__,
-                "last_content_chars": len(str(content)),
-                "last_tool_call_count": len(tool_calls),
-            },
-            ensure_ascii=False,
-        ),
-    )
+                "type": "tool",
+                "id": run_id,
+                "name": TOOL_DISPLAY.get(tool_name, tool_name),
+            }
+        )
 
-
-def _final_state_answer(state: object) -> str:
-    """从最终 values 状态提取不含工具调用的助手正文。"""
-    messages = state.get("messages") if isinstance(state, dict) else None
-    last_message = messages[-1] if isinstance(messages, list) and messages else None
-    if not isinstance(last_message, AIMessage) or last_message.tool_calls:
-        return ""
-    return last_message.content if isinstance(last_message.content, str) else ""
+    def _complete_tool(
+        self, event: Mapping[str, object], *, include_rag_evidence: bool = True
+    ) -> None:
+        """完成工具链；正常结束的 RAG 工具才发送本次证据。"""
+        run_id = str(event.get("run_id", ""))
+        if run_id not in self._pending_tool_runs or run_id in self._completed_tool_runs:
+            return
+        self._pending_tool_runs.remove(run_id)
+        self._completed_tool_runs.add(run_id)
+        self._emit({"type": "tool_completed", "id": run_id})
+        if not include_rag_evidence or event.get("name") != "rag_summarize":
+            return
+        evidence = _rag_evidence_from_tool_output(self._event_data(event).get("output"))
+        if evidence:
+            self.rag_evidence.extend(evidence)
+            self._emit({"type": "evidence", "items": evidence})
 
 
 class PersonalizedAgentState(AgentState, total=False):
@@ -268,7 +384,7 @@ class ReactAgent:
         config: RunnableConfig | None = None,
         timing: ChatLatencyTracker | None = None,
     ) -> dict:
-        """转发内层事件，并让外层运行配置贯穿 Agent 调用。"""
+        """适配内层 v2 原始事件，并让外层运行配置贯穿 Agent 调用。"""
         latest_user_index = max(
             index for index, message in enumerate(state["messages"]) if message["role"] == "user"
         )
@@ -281,123 +397,24 @@ class ReactAgent:
             "rag_evidence": state["rag_evidence"],
             "report": False,
         }
-        events = []
-        latest_state = input_state
-        seen_tool_ids = set()
-        pending_tool_call_ids = set()
-        emitted_text_since_last_tool = False
-        evidence_pending = False
-        emitted_evidence_count = len(input_state["rag_evidence"])
-
-        def emit(event: dict) -> None:
-            """仅将可序列化事件转发到外层图和 SSE 适配器。"""
-            if not is_json_value(event):
-                raise ValueError("个性化 Agent 事件包含不可序列化值")
-            if stream_writer:
-                stream_writer(event)
-            events.append(event)
-
-        def register_tool_call(tool_call: object) -> None:
-            """登记工具请求；messages 与 values 两条流共用去重逻辑。"""
-            nonlocal emitted_text_since_last_tool
-            if not isinstance(tool_call, dict):
-                return
-            tool_id = tool_call.get("id")
-            tool_name = tool_call.get("name")
-            if (
-                not isinstance(tool_id, str)
-                or not isinstance(tool_name, str)
-                or tool_id in seen_tool_ids
-            ):
-                return
-            seen_tool_ids.add(tool_id)
-            if not pending_tool_call_ids and emitted_text_since_last_tool:
-                # 工具调用前的说明不是最终答案，通知客户端撤回该临时文本。
-                emit({"type": "text_reset"})
-                emitted_text_since_last_tool = False
-            pending_tool_call_ids.add(tool_id)
-            if timing is not None:
-                timing.mark("agent.tool_requested", tool=tool_name)
-            emit(
-                {
-                    "type": "tool",
-                    "id": tool_id,
-                    "name": TOOL_DISPLAY.get(tool_name, tool_name),
-                }
-            )
-
-        def complete_tool_call(tool_call_id: object) -> None:
-            """仅为已登记且未完成的工具转发一次完成事件。"""
-            nonlocal evidence_pending
-            if not isinstance(tool_call_id, str) or tool_call_id not in pending_tool_call_ids:
-                return
-            pending_tool_call_ids.discard(tool_call_id)
-            emit({"type": "tool_completed", "id": tool_call_id})
-            evidence_pending = True
-
-        def emit_text(content: object) -> None:
-            """发送最终文本，并记录首次可见正文的链路耗时。"""
-            nonlocal emitted_text_since_last_tool
-            if timing is not None:
-                timing.mark_once(
-                    "model_first_text",
-                    "model.first_text",
-                    branch="personalized_agent",
-                    content_chars=len(str(content)),
-                )
-            emit({"type": "text", "content": content})
-            emitted_text_since_last_tool = True
+        adapter = _PersonalizedEventAdapter(
+            initial_evidence=input_state["rag_evidence"],
+            stream_writer=stream_writer,
+            timing=timing,
+        )
 
         if timing is not None:
             timing.mark("agent.personalized_model_stream_started")
         stream_outcome = "succeeded"
         stream_error_type: str | None = None
         try:
-            async for stream_mode, payload in self.agent.astream(
+            async for event in self.agent.astream_events(
                 input_state,
-                stream_mode=["messages", "values"],
+                version="v2",
                 context=context,
                 config=merge_configs(config or {}, {"recursion_limit": self.max_steps}),
             ):
-                if stream_mode == "messages":
-                    message, metadata = payload
-                    if isinstance(message, (AIMessage, AIMessageChunk)):
-                        tool_calls = (
-                            getattr(message, "tool_call_chunks", None)
-                            or getattr(message, "tool_calls", None)
-                            or []
-                        )
-                        _log_agent_stream_message(message, metadata, tool_calls)
-                        for tool_call in tool_calls:
-                            register_tool_call(tool_call)
-                        if message.content and not pending_tool_call_ids:
-                            emit_text(message.content)
-                    elif isinstance(message, ToolMessage):
-                        complete_tool_call(message.tool_call_id)
-                elif stream_mode == "values":
-                    latest_state = payload
-                    for state_message in latest_state.get("messages", []):
-                        if isinstance(state_message, (AIMessage, AIMessageChunk)):
-                            tool_calls = (
-                                getattr(state_message, "tool_call_chunks", None)
-                                or getattr(state_message, "tool_calls", None)
-                                or []
-                            )
-                            for tool_call in tool_calls:
-                                register_tool_call(tool_call)
-                        elif isinstance(state_message, ToolMessage):
-                            complete_tool_call(state_message.tool_call_id)
-                    evidence = latest_state.get("rag_evidence", [])
-                    new_evidence = evidence[emitted_evidence_count:]
-                    if evidence_pending and new_evidence:
-                        event = {"type": "evidence", "items": new_evidence}
-                        emit(event)
-                    emitted_evidence_count = len(evidence)
-                    evidence_pending = False
-            if not emitted_text_since_last_tool and not pending_tool_call_ids:
-                final_answer = _final_state_answer(latest_state)
-                if final_answer:
-                    emit_text(final_answer)
+                adapter.consume(event)
         except Exception as error:
             stream_outcome = "failed"
             stream_error_type = type(error).__name__
@@ -408,8 +425,7 @@ class ReactAgent:
             if timing is not None:
                 timing.mark("agent.personalized_model_stream_completed")
         finally:
-            _log_agent_stream_state(latest_state)
-            text_events = [event for event in events if event.get("type") == "text"]
+            text_events = [event for event in adapter.events if event.get("type") == "text"]
             logger.info(
                 "AGENT_STREAM_SUMMARY %s",
                 json.dumps(
@@ -417,7 +433,7 @@ class ReactAgent:
                         "request_id": request_id_var.get(),
                         "outcome": stream_outcome,
                         "error_type": stream_error_type,
-                        "event_count": len(events),
+                        "event_count": len(adapter.events),
                         "text_event_count": len(text_events),
                         "text_chars": sum(
                             len(str(event.get("content", ""))) for event in text_events
@@ -427,9 +443,9 @@ class ReactAgent:
                 ),
             )
         output = {
-            "retrieval_history": latest_state.get("retrieval_history", state["retrieval_history"]),
-            "rag_evidence": latest_state.get("rag_evidence", state["rag_evidence"]),
-            "events": events,
+            "retrieval_history": retrieval_history,
+            "rag_evidence": adapter.rag_evidence,
+            "events": adapter.events,
         }
         if not is_json_value(output):
             raise ValueError("个性化 Agent 产物包含不可序列化值")

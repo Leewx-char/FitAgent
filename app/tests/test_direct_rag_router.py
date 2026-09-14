@@ -167,34 +167,28 @@ def test_personalized_route_emits_tool_lifecycle_and_final_text():
         """模拟内层 Agent 的工具调用和最终文本。"""
 
         @staticmethod
-        async def astream(input_state, **_kwargs):
+        async def astream_events(_input_state, **_kwargs):
             """返回工具通知后可消费的最终文本。"""
-            from langchain_core.messages import AIMessageChunk, ToolMessage
+            from langchain_core.messages import AIMessageChunk
 
-            yield (
-                "messages",
-                (
-                    AIMessageChunk(
-                        content="", tool_call_chunks=[{"id": "call-1", "name": "get_user_profile"}]
-                    ),
-                    {"langgraph_step": 1},
-                ),
-            )
-            yield (
-                "messages",
-                (
-                    ToolMessage(content="画像已读取", tool_call_id="call-1"),
-                    {"langgraph_step": 1},
-                ),
-            )
-            yield (
-                "messages",
-                (
-                    AIMessageChunk(content="为你安排每周三练。"),
-                    {"langgraph_step": 2},
-                ),
-            )
-            yield "values", {**input_state, "rag_evidence": []}
+            yield {
+                "event": "on_tool_start",
+                "run_id": "call-1",
+                "name": "get_user_profile",
+                "data": {"input": {}},
+            }
+            yield {
+                "event": "on_tool_end",
+                "run_id": "call-1",
+                "name": "get_user_profile",
+                "data": {"output": "画像已读取"},
+            }
+            yield {
+                "event": "on_chat_model_stream",
+                "run_id": "model-2",
+                "name": "test-model",
+                "data": {"chunk": AIMessageChunk(content="为你安排每周三练。")},
+            }
 
     agent = _public_agent(
         FakeIntentClassifier(IntentDecision(route="personalized_agent")),
@@ -225,12 +219,16 @@ def test_classifier_exception_returns_successful_personalized_sse_flow():
         """提供分类回退后使用的固定文本流。"""
 
         @staticmethod
-        async def astream(input_state, **_kwargs):
+        async def astream_events(_input_state, **_kwargs):
             """返回个性化分支的最终文本。"""
             from langchain_core.messages import AIMessageChunk
 
-            yield "messages", (AIMessageChunk(content="请补充你的训练频率。"), {})
-            yield "values", {**input_state, "rag_evidence": []}
+            yield {
+                "event": "on_chat_model_stream",
+                "run_id": "model-1",
+                "name": "test-model",
+                "data": {"chunk": AIMessageChunk(content="请补充你的训练频率。")},
+            }
 
     agent = _public_agent(
         FakeIntentClassifier(RuntimeError("classifier unavailable")),
@@ -319,20 +317,14 @@ def test_personalized_custom_stream_emits_tool_before_executor_error():
         """先产生工具调用，再模拟后续模型执行失败。"""
 
         @staticmethod
-        async def astream(_input_state, **_kwargs):
+        async def astream_events(_input_state, **_kwargs):
             """验证内层 Agent 事件可穿过图的 custom 流。"""
-            from langchain_core.messages import AIMessageChunk
-
-            yield (
-                "messages",
-                (
-                    AIMessageChunk(
-                        content="",
-                        tool_call_chunks=[{"id": "call-1", "name": "get_user_profile"}],
-                    ),
-                    {"langgraph_step": 1},
-                ),
-            )
+            yield {
+                "event": "on_tool_start",
+                "run_id": "call-1",
+                "name": "get_user_profile",
+                "data": {"input": {}},
+            }
             raise RuntimeError("personalized executor failed")
 
     agent = _public_agent(

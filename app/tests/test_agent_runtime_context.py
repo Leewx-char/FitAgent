@@ -25,6 +25,149 @@ from app.services.chat_routing_graph import (
 from app.services.react_agent import ReactAgent
 
 
+class _LegacyAstreamEventAdapter:
+    """仅在旧测试替身中，把双通道产物转换为 v2 事件。"""
+
+    def __init__(self, agent):
+        """保存仍实现旧 astream 的历史测试替身。"""
+        self._agent = agent
+
+    async def astream_events(self, input_state, *, version, **kwargs):
+        """让历史断言继续覆盖对外 SSE 语义，而非生产兼容分支。"""
+        assert version == "v2"
+        tool_names = {}
+        completed_tool_ids = set()
+        pending_tool_ids = []
+        emitted_evidence = list(input_state.get("rag_evidence", []))
+
+        def completed_events(evidence):
+            """将已观察到的工具结果转换为一次结束事件。"""
+            nonlocal emitted_evidence
+            new_evidence = evidence[len(emitted_evidence) :]
+            result = []
+            for tool_id in pending_tool_ids[:]:
+                tool_name = tool_names.get(tool_id, "unknown")
+                output = Command(update={"rag_evidence": new_evidence})
+                if not new_evidence:
+                    output = "tool-result"
+                result.append(
+                    {
+                        "event": "on_tool_end",
+                        "run_id": tool_id,
+                        "name": "rag_summarize" if new_evidence else tool_name,
+                        "data": {"output": output},
+                    }
+                )
+                pending_tool_ids.remove(tool_id)
+                completed_tool_ids.add(tool_id)
+            emitted_evidence = list(evidence)
+            return result
+
+        async for stream_mode, payload in self._agent.astream(
+            input_state,
+            stream_mode=["messages", "values"],
+            **kwargs,
+        ):
+            if stream_mode == "messages":
+                for event in completed_events(emitted_evidence):
+                    yield event
+                message, _metadata = payload
+                if isinstance(message, (AIMessage, AIMessageChunk)):
+                    tool_calls = (
+                        getattr(message, "tool_call_chunks", None)
+                        or getattr(message, "tool_calls", None)
+                        or []
+                    )
+                    for tool_call in tool_calls:
+                        tool_id = tool_call.get("id") if isinstance(tool_call, dict) else None
+                        tool_name = tool_call.get("name") if isinstance(tool_call, dict) else None
+                        if not isinstance(tool_id, str) or not isinstance(tool_name, str):
+                            continue
+                        tool_names[tool_id] = tool_name
+                        yield {
+                            "event": "on_tool_start",
+                            "run_id": tool_id,
+                            "name": tool_name,
+                            "data": {"input": {}},
+                        }
+                    if message.content:
+                        yield {
+                            "event": "on_chat_model_stream",
+                            "run_id": str(getattr(message, "id", "model")),
+                            "name": "legacy-model",
+                            "data": {"chunk": message},
+                        }
+                elif isinstance(message, ToolMessage):
+                    pending_tool_ids.append(message.tool_call_id)
+            elif stream_mode == "values":
+                messages = payload.get("messages", [])
+                for message in messages:
+                    if isinstance(message, (AIMessage, AIMessageChunk)):
+                        tool_calls = (
+                            getattr(message, "tool_call_chunks", None)
+                            or getattr(message, "tool_calls", None)
+                            or []
+                        )
+                        for tool_call in tool_calls:
+                            tool_id = tool_call.get("id") if isinstance(tool_call, dict) else None
+                            tool_name = (
+                                tool_call.get("name") if isinstance(tool_call, dict) else None
+                            )
+                            if (
+                                not isinstance(tool_id, str)
+                                or not isinstance(tool_name, str)
+                                or tool_id in tool_names
+                            ):
+                                continue
+                            tool_names[tool_id] = tool_name
+                            yield {
+                                "event": "on_tool_start",
+                                "run_id": tool_id,
+                                "name": tool_name,
+                                "data": {"input": {}},
+                            }
+                    elif (
+                        isinstance(message, ToolMessage)
+                        and message.tool_call_id not in completed_tool_ids
+                        and message.tool_call_id not in pending_tool_ids
+                    ):
+                        pending_tool_ids.append(message.tool_call_id)
+                for event in completed_events(payload.get("rag_evidence", [])):
+                    yield event
+                last_message = messages[-1] if messages else None
+                if isinstance(last_message, AIMessage) and not last_message.tool_calls:
+                    yield {
+                        "event": "on_chat_model_end",
+                        "run_id": str(last_message.id or "model"),
+                        "name": "legacy-model",
+                        "data": {"output": last_message},
+                    }
+        for event in completed_events(emitted_evidence):
+            yield event
+
+
+class _AgentDescriptor:
+    """为旧测试替身注入 v2 事件入口，不改变生产实现。"""
+
+    def __get__(self, instance, _owner):
+        """返回实例中保存的原始或转换后的 Agent。"""
+        if instance is None:
+            return self
+        return instance.__dict__["_test_agent"]
+
+    def __set__(self, instance, value):
+        """仅包裹缺少 astream_events 的历史测试替身。"""
+        instance.__dict__["_test_agent"] = (
+            value if hasattr(value, "astream_events") else _LegacyAstreamEventAdapter(value)
+        )
+
+
+@pytest.fixture(autouse=True)
+def _adapt_legacy_agent_test_doubles(monkeypatch):
+    """在本测试模块内隔离旧替身，生产代码始终只调用 v2 事件流。"""
+    monkeypatch.setattr(ReactAgent, "agent", _AgentDescriptor(), raising=False)
+
+
 class PersonalizedClassifier:
     """固定选择个性化分支。"""
 
@@ -575,8 +718,8 @@ def test_personalized_agent_logs_empty_final_message(caplog):
         {"type": "tool_completed", "id": "weather-call"},
     ]
     assert any(
-        "AGENT_STREAM_MESSAGE" in record.message
-        and '"message_type": "AIMessage"' in record.message
+        "AGENT_STREAM_EVENT" in record.message
+        and '"event": "on_chat_model_end"' in record.message
         and '"content_chars": 0' in record.message
         for record in caplog.records
     )
@@ -632,9 +775,9 @@ def test_personalized_agent_logs_only_terminal_stream_chunk(caplog):
         )
     )
 
-    stream_logs = [record for record in caplog.records if "AGENT_STREAM_MESSAGE" in record.message]
+    stream_logs = [record for record in caplog.records if "AGENT_STREAM_EVENT" in record.message]
     assert len(stream_logs) == 1
-    assert '"chunk_position": "last"' in stream_logs[0].message
+    assert '"event": "on_chat_model_end"' in stream_logs[0].message
 
 
 def test_personalized_agent_logs_summary_when_stream_fails(caplog):
@@ -998,15 +1141,26 @@ def test_personalized_graph_rejects_non_json_inner_state():
 
     class InvalidStateInnerAgent:
         @staticmethod
-        async def astream(input_state, **_kwargs):
-            yield "values", {**input_state, "rag_evidence": [{"unsafe": object()}]}
+        async def astream_events(_input_state, **_kwargs):
+            yield {
+                "event": "on_tool_start",
+                "run_id": "rag-run",
+                "name": "rag_summarize",
+                "data": {"input": {}},
+            }
+            yield {
+                "event": "on_tool_end",
+                "run_id": "rag-run",
+                "name": "rag_summarize",
+                "data": {"output": Command(update={"rag_evidence": [{"unsafe": object()}]})},
+            }
 
     executor = object.__new__(ReactAgent)
     executor.agent = InvalidStateInnerAgent()
     executor.max_steps = 5
     executor.max_tool_calls = 2
 
-    with pytest.raises(ValueError, match="个性化 Agent 产物包含不可序列化值"):
+    with pytest.raises(ValueError, match="个性化 Agent 事件包含不可序列化值"):
         asyncio.run(
             build_chat_routing_graph(classifier=PersonalizedClassifier()).ainvoke(
                 build_initial_chat_state(
