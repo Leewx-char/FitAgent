@@ -33,6 +33,10 @@ expect(chat.includes("'has-tool-chain'"), '工具调用记录必须纵向显示�
 expect(chat.includes("event.type === 'tool_completed'"), '并行工具完成时必须更新对应思维链状态')
 expect(chat.includes('resetLastAssistantMessageForToolCall'), '多轮工具调用时必须保留既有调用链')
 expect(chat.includes('mergeEvidenceCards'), '多轮工具调用时必须保留先前检索证据')
+expect(
+  /\.message-bubble\.assistant\s+:deep\(ol\)\s*\{[^}]*padding-left:\s*20px;[^}]*\}/.test(chat),
+  '助手 Markdown 有序列表必须在卡片内缩进',
+)
 expect(trainingPlan.includes('最近 7 天数据'), '计划页必须说明一周数据范围')
 expect(memory.includes('待确认'), '记忆页必须保留确认流程')
 expect(profile.includes('训练档案'), '档案页必须使用新的页面标题')

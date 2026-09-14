@@ -633,6 +633,7 @@ watch(toolChain, () => {
 .message-bubble :deep(pre) { padding: 12px; border-radius: 8px; background: #1a1a2e; color: #c6e4fc; overflow-x: auto; }
 .message-bubble :deep(pre code) { background: none; padding: 0; }
 .message-bubble :deep(ul) { padding-left: 20px; }
+.message-bubble.assistant :deep(ol) { padding-left: 20px; }
 .message-bubble :deep(li) { margin: 4px 0; }
 
 .evidence-panel {
